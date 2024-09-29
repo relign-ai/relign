@@ -1,5 +1,6 @@
 from typing import Type, Dict
 from environment.base import BaseEnvironment
+from utils.print import colorful_print
 
 
 class EnvironmentFactory:
@@ -18,6 +19,7 @@ class EnvironmentFactory:
             name (str): The name of the environment.
             env_class (Type[BaseEnvironment]): The environment class to register.
         """
+        colorful_print(f"Registering environment {env_class.__name__}", fg="green")
         cls._environments[name] = env_class
 
     @classmethod

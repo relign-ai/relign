@@ -100,4 +100,4 @@ class Archer(AgentBase):
             )
 
 
-AgentFactory.registerAgent(agent=Archer)
+AgentFactory.registerAgent(name="archer", agent=Archer)

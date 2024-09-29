@@ -5,15 +5,13 @@ import torch
 import accelerate
 
 from environment.base import Environment
-
-
 from agent.base import Agent
-
+from algorithms.archer.trainer import ArcherTrainer
 
 def train_loop(
     agent: Agent,
     agent_type: str,
-    env: Environment,
+    environment: Environment,
     accelerator: accelerate.Accelerator,
     tokenizer: AutoTokenizer,
     iterations: int,
@@ -29,21 +27,22 @@ def train_loop(
     max_grad_norm: float,
 ):
 
-    trainer = Trainer(
+    trainer = ArcherTrainer(
         agent=agent,
         accelerator=accelerator,
         tokenizer=tokenizer,
         critic_lr=critic_lr,
         lm_lr=lm_lr,
+        grad_accum_steps=grad_accum_steps,
         gamma=gamma,
         tau=tau,
         epochs=epochs,
         actor_epochs=actor_epochs,
-        grad_accum_steps=grad_accum_steps,
         max_grad_norm=max_grad_norm,
+        grad_accum_steps=grad_accum_steps,
     )
 
-    replay_buffer = ReplayBuffer()
+    # replay_buffer = ReplayBuffer()
     all_trajectories = []
 
     for i in tqdm(range(iterations)):
@@ -52,6 +51,11 @@ def train_loop(
 
             # do eval every eval_freq
             all_trajectories += trajectories
+
+            # environment rollout 
+            trajectories = environment.rollout()
+        
+
 
             print(">>> saving replay buffer & trajectories")
             torch.save(all_trajectories, os.path.join(save_path, "trajectories.pt"))

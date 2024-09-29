@@ -212,4 +212,4 @@ class BatchedGuessMyCityEnv:
         return results
 
 
-EnvironmentFactory.register_environment("guess_my_city", BatchedGuessMyCityEnv)
+EnvironmentFactory.register_environment("guess-my-city", BatchedGuessMyCityEnv)

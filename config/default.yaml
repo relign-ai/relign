@@ -1,5 +1,5 @@
 #cache directory of transformer
-cache_dir: '/home/algopapi/.cache'
+cache_dir: '/home/algopapiportable/cache/huggingface/hub'
 
 #token
 huggingface_token: ''
@@ -8,7 +8,7 @@ wandb_key: ""
 
 policy_lm: "gpt2"
 critic_lm: "roberta-base"
-agent: "Archer"
+agent: "archer"
 use_baseline: False
 use_lora: False
 max_new_tokens: 32

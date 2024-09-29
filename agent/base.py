@@ -4,18 +4,20 @@ import torch
 import torch.nn as nn
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import accelerate
+from critic.double_critic import DoubleCritic
 
 
 class AgentBase(nn.Module, ABC):
     def __init__(
         self,
-        model: AutoModelForCausalLM,
-        tokenizer: AutoTokenizer,
-        critic,
-        double_critic,
+        # model: AutoModelForCausalLM,
+        # tokenizer: AutoTokenizer,
+        # critic,
+        # double_critic,
         device: torch.device,
         accelerator: accelerate.Accelerator,
         policy_lm: str = "gpt2",
+        critic_lm: str = "roberta-base",
         cache_dir: str = "~/.cache",
         dropout: float = 0.5,
         TEMPLATE: Optional[str] = None,
@@ -30,6 +32,7 @@ class AgentBase(nn.Module, ABC):
         self.device = device
         self.accelerator = accelerator
         self.policy_lm = policy_lm
+        self.critic_lm = critic_lm
         self.cache_dir = cache_dir
         self.dropout = dropout
         self.template = TEMPLATE
@@ -41,8 +44,9 @@ class AgentBase(nn.Module, ABC):
         self.eos_str = eos_str
 
         self.model = self._load_model()
-        self._initialize_tokenizer()
-        self.critic, self.target_critic = self._initialize_critics()
+        self.tokenizer, self.truncation_side = self._load_tokenizer()
+        self.critic, self.target_critic = self._load_critics()
+        
         self.softmax = nn.Softmax(dim=-1)
         self.dropout_layer = nn.Dropout(p=self.dropout)
 
@@ -72,12 +76,23 @@ class AgentBase(nn.Module, ABC):
 
         return model
 
-    def _initialize_tokenizer(self) -> AutoTokenizer:
-        self.tokenizer.truncation_side = "left"
-        self.tokenizer.pad_token = self.tokenizer.eos_token
-        self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+    def _load_tokenizer(self) -> AutoTokenizer:
+        tokenizer= AutoTokenizer.from_pretrained(self.policy_lm, trust_remote_code=True, cache_dir=self.cache_dir)
+        truncation_side = "left"
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    @abstractmethod
+        return tokenizer, truncation_side
+
+    def _load_critics(self) -> Tuple[nn.Module, nn.Module]:
+        critic = DoubleCritic(device=self.device, accelerator=self.accelerator, 
+                                    critic_lm=self.critic_lm,cache_dir = self.cache_dir, 
+                                    in_dim = 768, out_dim = 1)  
+        target_critic = DoubleCritic(device=self.device, accelerator=self.accelerator, 
+                                    critic_lm=self.critic_lm,cache_dir = self.cache_dir, 
+                                    in_dim = 768, out_dim = 1) 
+        return critic, target_critic
+
     def prepare(self):
         """Prepare the model and critics for training/inference."""
         self.model, self.critic, self.target_critic = self.accelerator.prepare(
