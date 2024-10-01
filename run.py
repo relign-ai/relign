@@ -4,7 +4,7 @@ from omegaconf import OmegaConf
 from utils.print import colorful_print
 
 
-from agent.factory import AgentFactory
+from agent.agent_factory import AgentFactory
 from environment.factory import EnvironmentFactory
 
 from train_loop import train_loop

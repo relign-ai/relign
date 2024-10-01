@@ -5,9 +5,10 @@ from transformers import AutoTokenizer
 import hydra
 
 
-from environment.factory import EnvironmentFactory
-from agent.factory import AgentFactory
+from environment.environment_factory import EnvironmentFactory
+from agent.agent_factory import AgentFactory
 
+from environment.environment import 
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
 CONFIG_NAME = "archer_city.yaml"

@@ -55,4 +55,4 @@ class GuessCityPolicyEnvironment(Env[TextHistory]):
         )
 
 
-EnvironmentFactory.register_env("guess_city_policy_environment", GuessCityPolicyEnvironment)
+EnvironmentFactory.register_env("guess-city", GuessCityPolicyEnvironment)
