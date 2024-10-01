@@ -1,10 +1,11 @@
 import torch
 from typing import Tuple
-from agent.base import AgentBase
+from agent.agent_base import BaseAgent
 from agent.factory import AgentFactory
+from typing import List
 
 
-class Archer(AgentBase):
+class Archer(BaseAgent):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -17,7 +18,10 @@ class Archer(AgentBase):
     def get_target_q(self, observation, action, detach_model=False):
         return self.target_critic.get_q(observation, action, detach_modesl=detach_model)
 
-    def get_action(self, observation):
+    def get_action(self, observation: List[str]):
+        print("\n\getting action \n")
+        print("observation: ", observation, "\n")
+        print("\nobservations shape: ", len(observation))
         if self.template is not None:
             observation = [self.template.replace("{obs}, obs") for obs in observation]
 
@@ -31,6 +35,16 @@ class Archer(AgentBase):
 
         context_len = obs_ids["attention_mask"].size(1)
 
+        # Print the shape of obs_ids
+        print("obs_ids shape:")
+        for key, value in obs_ids.items():
+            if isinstance(value, torch.Tensor):
+                print(f"  {key}: {value.shape}")
+            else:
+                print(f"  {key}: {type(value)}")
+
+        # Print the dimensions of the input_ids tensor
+        print("input_ids dimensions:", obs_ids["input_ids"].dim())
         outputs = (
             self.accelerator.unwrap_model(self.model)
             .generate(
@@ -46,11 +60,15 @@ class Archer(AgentBase):
         outputs = outputs[:, :context_len:]
         raw_action = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
 
+        print("OUTPUT DIM: ", outputs)
+
         for _ in range(3):
             raw_action = [a[1:] if a.startswith("\n") else a for a in raw_action]
         if self.eos_str is not None:
+            print("\n raw_action: ", raw_action, "\n")
             return [raw_a.split(self.eos_str)[0] for raw_a in raw_action]
         else:
+            print("raw_action: ", raw_action)
             return raw_action
 
     def get_log_prob(self, observation, action):

@@ -1,5 +1,5 @@
 import torch
-from agent.base import Agent
+from agent.agent_base import BaseAgent
 import accelerate
 from transformers import AutoTokenizer
 import copy
@@ -8,10 +8,10 @@ import copy
 class ArcherTrainer:
     def __init__(
         self,
-        agent: Agent,
-        accelerator: accelerate.ccelerator,
+        agent: BaseAgent,
+        accelerator: accelerate.Accelerator,
         tokenizer: AutoTokenizer,
-        criterion: torch.nn.Module = torch.nn.MSELoss(), # loss function
+        criterion: torch.nn.Module = torch.nn.MSELoss(),  # loss function
         critic_lr: float = 1e-3,
         lm_lr: float = 1e-3,
         grad_accum_steps: int = 1,
@@ -45,23 +45,22 @@ class ArcherTrainer:
 
         self.step = 0
 
-
     def critic_loss(
-            self, 
-            observation,
-            action,
-            reward,
-            next_observation,
-            done,
-            mc_return,
-            **kwargs,
-    ): 
-        
+        self,
+        observation,
+        action,
+        reward,
+        next_observation,
+        done,
+        mc_return,
+        **kwargs,
+    ):
+
         reward = (
             torch.Tensor(reward)
             .to(
-                self.accelerator.unwrap_model(self.agent.model).device
-                dtyp=self.accelerator.unwrap_model(self.agent.model).dtype
+                self.accelerator.unwrap_model(self.agent.model).device,
+                dtyp=self.accelerator.unwrap_model(self.agent.model).dtype,
             )
             .flatten()
         )
@@ -83,7 +82,7 @@ class ArcherTrainer:
 
             #
             target_q1, target_q2, _, _ = self.agent.critic(
-                observation, pi_action, detach_model=True 
+                observation, pi_action, detach_model=True
             )
 
         q1 = q1.flatten()
@@ -100,16 +99,16 @@ class ArcherTrainer:
             )
             target_v1 = reward + (1 - done) * target_v1.flatten() * self.gamma
             target_v2 = reward + (1 - done) * target_v2.flatten() * self.gamma
-            
+
         q1_loss = self.criterion(q1, target_v1)
         q2_loss = self.criterion(q2, target_v2)
 
         v1_loss = self.criterion(v1, target_q1)
         v2_loss = self.criterion(v2, target_q2)
 
-        # Perform gradient descent on the losses. 
+        # Perform gradient descent on the losses.
         self.accelerator.backward((q1_loss + q2_loss + v1_loss + v2_loss))
-        
+
         q1_loss, q2_loss, v1_loss, v2_loss = (
             q1_loss.detach().cpu(),
             q2_loss.detach().cpu(),
@@ -124,7 +123,7 @@ class ArcherTrainer:
             target_q1.detach().cpu(),
             target_q2.detach().cpu(),
         )
-    
+
         return {
             "q1.loss": q1_loss,
             "q2.loss": q2_loss,
@@ -155,6 +154,3 @@ class ArcherTrainer:
             "target_q2.min": torch.min(target_q2),
             "target_q2.std": torch.std(target_q2),
         }
-
-
-            

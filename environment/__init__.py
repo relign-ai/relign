@@ -1,2 +1,2 @@
-from .factory import EnvironmentFactory
-from .guess_my_city import BatchedGuessMyCityEnv
+from .environment_factory import EnvironmentFactory
+from .guess_city.env import GuessCityPolicyEnvironment

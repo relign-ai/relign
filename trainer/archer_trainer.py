@@ -1,5 +1,5 @@
 import accelerate
-from agent.base import Agent
+from agent.agent_base import Agent
 from transformers import AutoTokenizer
 
 

@@ -1,6 +1,6 @@
 from typing import Type, Dict
 
-from agent.base import AgentBase
+from agent.agent_base import BaseAgent
 import torch
 import accelerate
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -8,10 +8,10 @@ from utils.print import colorful_print
 
 
 class AgentFactory:
-    _agents: Dict[str, Type[AgentBase]] = {}
+    _agents: Dict[str, Type[BaseAgent]] = {}
 
     @classmethod
-    def registerAgent(self, name: str, agent: Type[AgentBase]):
+    def registerAgent(self, name: str, agent: Type[BaseAgent]):
         """
         Register an agent class with the factory.
 
@@ -22,16 +22,16 @@ class AgentFactory:
         self._agents[name] = agent
 
     @classmethod
-    def create_agent(cls, name: str, config, *args, **kwargs) -> AgentBase:
+    def create_agent(cls, name: str, config, *args, **kwargs) -> BaseAgent:
         """
-            Create an instance of the agent with the given name.
+        Create an instance of the agent with the given name.
 
-            Args:
-                name (str): The name of the agent.
-                config: Configuration object containing agent parameters.
+        Args:
+            name (str): The name of the agent.
+            config: Configuration object containing agent parameters.
 
-            Returns:
-                Agent: An instance of the requested agent.
+        Returns:
+            Agent: An instance of the requested agent.
         """
         if name not in cls._agents:
             raise ValueError(f"Agent '{name}' not registered.")
@@ -60,8 +60,8 @@ class AgentFactory:
         agent = agent_class(
             # model=model,
             # tokenizer=tokenizer,
-            #critic=None,  # Initialize critic as needed
-            #double_critic=False,  # Update based on your needs
+            # critic=None,  # Initialize critic as needed
+            # double_critic=False,  # Update based on your needs
             device=device,
             accelerator=accelerator,
             policy_lm=policy_lm,

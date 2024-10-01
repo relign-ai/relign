@@ -1,5 +1,5 @@
 #cache directory of transformer
-cache_dir: '/home/algopapiportable/cache/huggingface/hub'
+cache_dir: '/home/algopapi/cache/huggingface/hub'
 
 #token
 huggingface_token: ''

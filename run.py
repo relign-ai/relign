@@ -19,7 +19,7 @@ def main(config):
     colorful_print(OmegaConf.to_yaml(config), fg="blue")
 
     cache_dir = config.cache_dir
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu") 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # load the appropriate agent
     try:
@@ -36,12 +36,14 @@ def main(config):
     env_load_path = config.env_load_path
 
     try:
-        env = EnvironmentFactory.create_environment(env_name, env_load_path, device, cache_dir)
+        env = EnvironmentFactory.create_environment(
+            env_name, env_load_path, device, cache_dir
+        )
         colorful_print(f"Successfully loaded environment '{env_name}'.", fg="green")
     except ValueError as e:
         colorful_print(str(e), fg="red")
         return
-    
+
     # call the training loop
 
 
