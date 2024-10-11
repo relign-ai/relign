@@ -1,6 +1,6 @@
 from typing import Type, Dict
 
-from policy.base_policy import BaseAgent
+from policies.base_policy import BaseAgent
 import torch
 import accelerate
 from utils.print import colorful_print

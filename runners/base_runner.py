@@ -7,7 +7,7 @@ from datetime import timedelta
 import torch
 
 from algorithms.base_algorithm import BaseAlgorithm
-from policy.base_policy import BasePolicy
+from policies.base_policy import BasePolicy
 from episode_generation.base_episode_generator import BaseEpisodeGenerator
 from algorithms.base_trainer import BaseTrainer
 

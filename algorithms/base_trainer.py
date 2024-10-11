@@ -5,7 +5,7 @@ from pathlib import Path
 
 from deepspeed import DeepspeedEngine
 
-from policy.base_policy import BasePolicy
+from policies.base_policy import BasePolicy
 from common.buffer import Buffer
 from common.dataset import EpisodeDataset
 

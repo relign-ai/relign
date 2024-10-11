@@ -2,7 +2,7 @@ from tqdm import tqdm
 
 from common.dataset import EpisodeDataset
 from algorithms.base_algorithm import BaseAlgorithm
-from policy.base_policy import BaseActorCritic
+from policies.base_policy import BaseActorCritic
 from episode_generation.base_episode_generator import OnPolicyEpisodeGenerator
 from algorithms.base_trainer import BaseTrainer
 

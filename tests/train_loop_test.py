@@ -1,6 +1,6 @@
 from algorithms.on_policy_algorithm import OnPolicyAlgorithm
 
-from policy.base_policy import BaseActorCritic
+from policies.actor_critic_policy import ActorCriticPolicy
 from algorithms.ppo.trainer import PPOTrainer
 from episode_generation.base_episode_generator import DebugEpisodeGenerator
 
@@ -10,7 +10,7 @@ def test_ppo_policy_algo():
     
 
     # The policy
-    actor_critic_policy = BaseActorCritic()
+    actor_critic_policy = ActorCriticPolicy()
 
 
     # Train algorithm ( a single update step, multiple epochs)

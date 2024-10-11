@@ -5,7 +5,7 @@ from logging import Logger
 
 from deepspeed import DeepSpeedEngine
 
-from policy.base_policy import BasePolicy 
+from policies.base_policy import BasePolicy 
 from episode_generation.base_episode_generator import BaseEpisodeGenerator
 from algorithms.base_trainer import BaseTrainer
 
@@ -46,11 +46,9 @@ class BaseAlgorithm(ABC):
     
     def set_root_dir(self, path: Path):
         self.experiment_root_dir = path
-
     
     def set_deepspeed(self, distirbuted_state: DeepSpeedEngine):
         self.distributed_state = distirbuted_state
-
 
     @abstractmethod
     def learn(self, *args, **kwargs) -> None:

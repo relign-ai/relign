@@ -3,7 +3,7 @@ from typing import Callable, Optional, List, Dict, Union, Tuple, Any, Iterator
 from tqdm import tqdm
 import numpy as np
 
-from policy.base_policy import BasePolicy, BatchedPolicy
+from policies.base_policy import BasePolicy, BatchedPolicy
 from environment.base_environment import Env, BatchedEnv, InteractionTransition, EnvToBatchedEnv
 from common.types import Trajectory, History
 

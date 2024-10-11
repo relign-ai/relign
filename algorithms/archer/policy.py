@@ -1,7 +1,7 @@
 import torch
 from typing import Tuple
-from policy.base_policy import BaseAgent
-from policy.policy_factory import AgentFactory
+from policies.base_policy import BaseAgent
+from policies.policy_factory import AgentFactory
 from typing import List
 
 

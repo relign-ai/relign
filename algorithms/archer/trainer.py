@@ -1,5 +1,5 @@
 import torch
-from policy.base_policy import BaseAgent
+from policies.base_policy import BaseAgent
 import accelerate
 from transformers import AutoTokenizer
 import copy

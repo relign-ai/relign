@@ -1,55 +1,22 @@
+Inspirations:
 https://github.com/abdulhaim/LMRL-Gym
+https://github.com/DLR-RM/stable-baselines3
+
+Implementation & credits:
 https://github.com/YifeiZhou02/ArCHer
+https://github.com/mcgill-nlp/vineppo
 
 
-pholosophical question? 
+why am i doing this?
+so that i can go learn RL/llm impelmentations
+how RL works with llms
+how we train these B+ scale model paramaters in the cloud
+do some training at a scale i have not done before
 
-do we do the epoch logic in the training loop
-
-
-What is a log prob?
-
-Q:how do we get the ratio?
-A: we do pi_new(a|s) / pi_old(a|s)
-
-Q:what is pi_old(a|s)/
-A: it is the probability distribution of actions taken of the recent observations under the old policy. 
+i want to know the feeling of hitting enter on a 1B plus model
+burn some money, do some research
 
 
-Make it such that the episode generator returns a Torch Dataset, which we apss to the trainer. 
-distributed episode generation? -> VinePPO
-
-
-crux: 
-
-In the LMRL gym we have a tokentrajectory which is 
-is:
-
-tokens   [abcd]
-isaction [0101]
-reward   [0206]
-done true/false
-
-input_ids = observations_ids + action_ids
-
-output = model(intput_ids)
-
-prediction_probs = self.softmax(output.logits)
-selected_prediction_probs = (prediction_probs, action_ids)
-logprob = torch.log(selected_prediction_prods) * action_ids['attention_mask']
-
-
-Q?
-how do we do initialization?
-A: Potentially inside the algorithm?
-Q: is this a conventional design pattern?
-A: LMRL gym has a ppo_train.py where he calls everything and passes it to the training loop
-Q: what about acutal good libraries? vinePpo? stable-base?
-A: We make runner... yes!
-
-
-Q? The environment? what is a distributed state?
-A? 
-
-Q?
-how do we do testing?
+#TODO's
+- set up classes for the trainer arguments and such
+- deal with logging neatly, create a logger in the base runner and pass it to the modules/ 

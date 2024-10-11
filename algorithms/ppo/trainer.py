@@ -15,6 +15,7 @@ from common.dataset import EpisodeDataset
 
 from algorithms.base_trainer import TrainerOnPolicy
 from algorithms.ppo.data_collator import PPODataCollator
+from policies.actor_critic_policy import ActorCriticPolicy
 
 class PPOTrainer(TrainerOnPolicy):
     """
@@ -45,8 +46,6 @@ class PPOTrainer(TrainerOnPolicy):
 
         # hydrate with logprobs values and advantages.
         episodes = self._get_curr_logs_and_values(episodes)
-
-        exit()
 
         dataloader = DataLoader(episodes, batch_size=self.batch_size, shuffle=True)
 
@@ -170,7 +169,7 @@ class PPOTrainer(TrainerOnPolicy):
         
         
 
-    def step(episodes: Dataset) -> None:
+    def _step(episodes: Dataset) -> None:
         """
             single epoch step
         """

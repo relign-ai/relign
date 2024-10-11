@@ -6,7 +6,7 @@ from episode_generation.base_episode_generator import BaseEpisodeGenerator
 from algorithms.base_algorithm import BaseAlgorithm
 
 from algorithms.base_trainer import TrainerOffPolicy
-from policy.base_policy import BasePolicy
+from policies.base_policy import BasePolicy
 
 class OffPolicyAlgorithm(BaseAlgorithm):
     def __init__(
