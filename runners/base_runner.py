@@ -1,6 +1,6 @@
 import os
 
-from abc import ABC
+from abc import ABC, abstractmethod
 from pathlib import Path  # Corrected import
 from datetime import timedelta
 
@@ -33,7 +33,6 @@ class BaseRunner(ABC):
         self.exp_root = self._initialize_experiment_directory()  # Corrected method name
         self.log_dir = self._initialize_log_directory()
         self._initialize_sub_dirs()
-
     
     def _initialize_experiment_directory(self) -> Path:
         """ 
@@ -45,7 +44,6 @@ class BaseRunner(ABC):
         exp_root.mkdir(parents=True, exist_ok=True)
         return exp_root
 
-
     def _initialize_log_directory(self) -> Path:
         """
         Creates a log directory in the experiment root directory.
@@ -55,26 +53,40 @@ class BaseRunner(ABC):
         log_dir.mkdir(parents=True, exist_ok=True)
         return log_dir
     
-
     def _initialize_sub_dirs(self):
         """
         Set the root directories and trigger the direcotry creation process. 
         """
-        self.episode_generator.set_root_dir(self.exp_root)
+
         self.algorithm.set_root_dir(self.exp_root)
         self.trainer.set_root_dir(self.exp_root)
         self.policy.set_root_dir(self.exp_root)
+        self.episode_generator.set_root_dir(self.exp_root)
     
+    @abstractmethod
+    def _construct_trainer(self):
+        pass
+                
+    @abstractmethod
+    def _construct_policy(self):
+        pass
+        
+    @abstractmethod
+    def _construct_episode_generator(self):
+        pass
+
+    @abstractmethod
+    def _construct_algorithm(self):
+        pass
+
     def run(self):
         """
-            Run the algorithm
+        Run the algorithm
         """
         # Run the learn method of the algorithm
         self.algorithm.learn()
 
-
-
-
+        
 class DistributedRunner(BaseRunner):
     def __init__(
         self,
@@ -124,3 +136,7 @@ class DistributedRunner(BaseRunner):
         self.policy.set_deepspeed(self.distributed_state)
         self.trainer.set_deepspeed(self.distributed_state)
         self.episode_generator.set_deepspeed(self.distributed_state)
+
+
+
+   

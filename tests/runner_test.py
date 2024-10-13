@@ -7,8 +7,6 @@ from episode_generation.base_episode_generator import DebugEpisodeGenerator
 from runners.base_runner import BaseRunner
 
 def test_ppo_policy_algo():
-    
-
     # The policy
     actor_critic_policy = ActorCriticPolicy()
 
@@ -22,7 +20,7 @@ def test_ppo_policy_algo():
 
     # Episode generator
     episode_generator = DebugEpisodeGenerator(
-        file_path="./data/gpt2_imdb_ppo_iter50_samples.json",
+        file_path="./test_data/gpt2_imdb_ppo_iter50_samples.json",
         policy_path="dummy_gpt2_path.th",
     )
     

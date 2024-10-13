@@ -7,7 +7,6 @@ import torch
 from torch.utils.data import DataLoader
 from datasets import Dataset
 from tqdm import tqdm
-from accelerate.utils import gather
 from deepspeed import comm as dist
 
 from common.deepspeed_utils import prepare_data_loader_for_training, prepare_data_loader_for_inference
@@ -15,7 +14,6 @@ from common.dataset import EpisodeDataset
 
 from algorithms.base_trainer import TrainerOnPolicy
 from algorithms.ppo.data_collator import PPODataCollator
-from policies.actor_critic_policy import ActorCriticPolicy
 
 class PPOTrainer(TrainerOnPolicy):
     """
@@ -77,18 +75,17 @@ class PPOTrainer(TrainerOnPolicy):
         for epoch in range(self.num_epochs):
             for step, inputs in enumerate(dataloader_iter):
                 # Prepare data in batches
-                dataloader = DataLoader(data, batch_size=self.batch_size)
+                dataloader = DataLoader(inputs, batch_size=self.batch_size)
                 for batch in tqdm(dataloader):
-                    self._step()
+                    
+                    self._step(batch, step)
                 
                 # # update parameters
                 # self.optimizer.step()
                 # self.optimizer.zero_grad()
-                    pass
-
+        
         # Clip the grad norm?
    
-
     def _collate_dataset(self, episodes: EpisodeDataset) -> Dataset:
         """
             Get the dataset in the right format before the training step
@@ -101,8 +98,6 @@ class PPOTrainer(TrainerOnPolicy):
         )
         return episodes
 
-
-
     def _get_curr_logs_and_values(self, episodes: Dataset) -> Dataset:
         """
             Takes the collated dataset and hydrates it with the
@@ -110,7 +105,6 @@ class PPOTrainer(TrainerOnPolicy):
             These will be the baseline logprobs and values i.e., pi_old(a|s)
         """
         episodes = self._update_log_probs(episodes)
-
 
     def _hydrate_log_probs(self, episodes: Dataset, column_name: str) -> Dataset:
         """ Compute the logprobs and add them to dataset"""
@@ -124,7 +118,6 @@ class PPOTrainer(TrainerOnPolicy):
             }
         )
 
-
         data_loader = prepare_data_loader_for_inference(
             episodes,
             per_device_batch_size=self.args.per_device_train_batch_size,
@@ -135,8 +128,8 @@ class PPOTrainer(TrainerOnPolicy):
             },
         )
 
-        # Set the policy in inference mode
-        self.policy.set_inference()
+        # Set the actor in inference mode
+        self.policy.actor.eval()
         
         # iterate through the dataset. 
         list_of_log_probs = []
@@ -144,7 +137,7 @@ class PPOTrainer(TrainerOnPolicy):
             data_loader, desc="Computing log probs...", disable=not self._is_main_process()
         ):  
             with torch.no_grad():
-                output= self.policy.forward(
+                output= self.policy.actor.forward(
                     input_ids=inputs["input_ids"],
                     attention_mask=inputs["attention_mask"],
                     labels=inputs["labels"]
@@ -156,22 +149,18 @@ class PPOTrainer(TrainerOnPolicy):
             assert log_probs.shape[0] == inputs["input_ids"].shape[0] * dist.get_world_size()
             list_of_log_probs.append(log_probs)
 
-
         # Add to dataset, convince yourself thi shas to be in .main_process_first?
         with self.distributed_state.main_process_first():
             episodes = episodes.add_column(name=column_name, column=list_of_log_probs)
         
         return episodes
     
-
     def _hydrate_values(self, episodes: Dataset) -> Dataset:
         """ Compute the values and add them to the dataset"""
         
-        
-
-    def _step(episodes: Dataset) -> None:
+    def _step(batch: Dataset) -> None:
         """
-            single epoch step
+            Process a batch.
         """
 
         # 1. compute rewards
@@ -189,10 +178,8 @@ class PPOTrainer(TrainerOnPolicy):
 
         #5. Compute critic loss
         
-
     def _compute_actor_loss(self) -> Any:
         pass
-
 
     def _compute_critic_loss(self) -> Any:
         pass

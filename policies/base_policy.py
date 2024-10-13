@@ -1,26 +1,25 @@
-from abc import ABC, abstractmethod
-from typing import List, Tuple, Optional, Self, JsonDict
+from abc import abstractmethod
+from typing import Optional, Dict, Any
 
 from pathlib import Path
 
 import torch
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
-from transformers import PreTrainedModel
+from transformers import PreTrainedModel, PretrainedConfig
 from accelerate import PartialState
-from transformers.integrations import HFTrainerDeepSpeedConfig
+from transformers.integrations import HfTrainerDeepSpeedConfig
 import deepspeed
 from deepspeed import DeepSpeedEngine
-
 from wandb.sdk.wandb_run import Run as WandbRun
-from common.deepspeed_utils import get_optimizer_grouped_parameters 
 
-from episode_generation.environment.base_environment import History
+from common.deepspeed_utils import get_optimizer_grouped_parameters 
+from common.dataset import EpisodeDataset
 
 
 class BaseModel():
     """
-    Make predictions in response to opservations. 
+    Make predictions in response to observations. 
 
     In case of Policies, the prediction is an action. 
     In case of Critics, the prediction is the estimated value of the observation.
@@ -34,7 +33,7 @@ class BaseModel():
         """ Save the model to a file"""
         raise NotImplementedError( "Not implemented yet" )
 
-    def load(self, path: str, device: torch.device) -> Self:
+    def load(self, path: str, device: torch.device) -> ["BaseModel"]:
         """ Load the policy from a file"""
         raise NotImplementedError( "Not implemented yet" )
     
@@ -44,12 +43,12 @@ class BaseModel():
         pass
 
 
-class BasePolicy(BaseModel):
+class BasePolicy():
     """
     A policy takes an observation and returns an action. 
     """
     @abstractmethod
-    def predict(self, observation: History) -> History:
+    def predict(self, episodes: EpisodeDataset): #TODO Define response type
         """
         Predict an action from an observation.
         """
@@ -67,25 +66,9 @@ class BasePolicy(BaseModel):
         """
         pass
 
-    @abstractmethod
-    def set_train(
-        self, 
-        train: bool,
-    ):
-        """ Set model in train or inference mode. """
-
-    def get_train(
-            self, 
-    ) -> bool:
-        """ Get the mode of the model"""
-        return self.train
-
     def set_root_dir(self, path: Path):
         self.project_root_dir = path
         self._init_checkpoint_dir()
-
-    def set_distributed_state(self, distributed_state: PartialState):
-        self.set_distributed_state = distributed_state
 
     def set_cloud_log(self, cloud_logger: WandbRun):
         self.cloud_logger = cloud_logger
@@ -108,30 +91,33 @@ class BasePolicy(BaseModel):
         return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
 
 
-class DeepSpeedPolicy(BaseModel):
+class DeepSpeedPolicy(BasePolicy):
     """
     solely uses DeepSpeed for training and ditched the Accelerate library. The accelerate library does not support two models in a single
     training loop, which becomes problematic in policies that use multiple models (actor-critic)
     """
     def __init__(
         self,
+        distributed_state: PartialState,
         cache_ds_engines: bool = False,
         **kwargs
     ):      
         super().__init__(**kwargs) 
+
+        self.distributed_state = distributed_state
         self.cache_ds_engines = cache_ds_engines
         # define default x-axis (for latest wandb versions)
-        if self._is_main_process():
-            if getattr(self.cloud_logger, "define_metric", None):
-                self.cloud_logger.define_metric("train/global_step")
-                self.cloud_logger.define_metric(
-                    "*", step_metric="train/global_step", step_sync=True
-                )
+        # if self._is_main_process():
+        #     if getattr(self.cloud_logger, "define_metric", None):
+        #         self.cloud_logger.define_metric("train/global_step")
+        #         self.cloud_logger.define_metric(
+        #             "*", step_metric="train/global_step", step_sync=True
+        #         )
     
     def _initialize_deepspeed_engine_for_inference(
         self,
         model: PreTrainedModel,
-        deepspeed_config: JsonDict,
+        deepspeed_config: Dict[str, Any],
     ) -> DeepSpeedEngine:
         engine, *_ = deepspeed.initialize(
             model=model,
@@ -142,7 +128,7 @@ class DeepSpeedPolicy(BaseModel):
     def _init_deepspeed_model_for_training(
         self,
         model: PreTrainedModel,
-        deepspeed_config: JsonDict,
+        deepspeed_config: Dict[str, Any],
         optimizer: Optional[Optimizer] = None,
         lr_scheduler: Optional[LRScheduler] = None,
     ) -> DeepSpeedEngine:
@@ -187,7 +173,7 @@ class DeepSpeedPolicy(BaseModel):
     def _patch_ds_config_for_optimizer(
         self,
         config: HfTrainerDeepSpeedConfig,
-        args: TrainingArguments,
+        args: Any, #TODO: TrainingArugments
     ):
         config.fill_only("optimizer.params.lr", args.learning_rate, "learning_rate")
         config.fill_only(
@@ -231,7 +217,7 @@ class DeepSpeedPolicy(BaseModel):
     def _patch_ds_config_for_batch_size(
         self,
         config: HfTrainerDeepSpeedConfig,
-        args: TrainingArguments,
+        args: Any, # TrainingARguments
         global_batch_size: int,
     ) -> None:
         config.fill_only(
@@ -250,7 +236,7 @@ class DeepSpeedPolicy(BaseModel):
         config.fill_only("gradient_clipping", args.max_grad_norm, "max_grad_norm")
 
     def _patch_ds_config_for_dtype(
-        self, config: HfTrainerDeepSpeedConfig, args: TrainingArguments
+        self, config: HfTrainerDeepSpeedConfig, args: Any #TODO: change to TrainingArugments
     ) -> None:
         assert not args.fp16, "FP16 is not supported for now"
         config.fill_only(
@@ -309,29 +295,6 @@ class DeepSpeedPolicy(BaseModel):
         """ Deal with the distributed state"""
         return self.distributed_state.is_main_process
     
-    
-class BaseCritic(BaseModel):
-    """
-    Main critic model. Takes an observation and returns a value estimate of the observation.
-    """
-    @abstractmethod
-    def predict(self, observation: History) -> float:
-        """
-        Predict an value from an observation.
-        """
-        pass
 
-
-    @abstractmethod 
-    def forward(
-            self,
-            input_ids: torch.Tensor,
-            attention_mask: torch.Tensor,
-            labels: torch.Tensor,
-        ) -> torch.Tensor:
-        """
-        Forward pass of the value function.
-        """
-        pass
 
 

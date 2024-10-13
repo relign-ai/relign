@@ -1,15 +1,19 @@
 from abc import abstractmethod
-from typing import  Tuple, JsonDict, Optional, Union
+from typing import  Tuple, Optional, Dict, Any
 from pathlib import Path
 
 import torch
 from deepspeed import DeepSpeedEngine
-from transformer import PreTrainedModel
-from transformers.integrations import HFTrainerDeepSpeedConfig
+from transformers import PreTrainedModel
+from transformers.integrations import HfTrainerDeepSpeedConfig
+from transformers.utils.logger import get_logger
 
-from common.types import History
+from common.dataset import EpisodeDataset
 from policies.base_policy import DeepSpeedPolicy
+from policies.base_critic import PretrainedModelValueHead
 
+
+get_logger(__name__)
 
 class ActorCriticPolicy(DeepSpeedPolicy):
     """
@@ -22,9 +26,9 @@ class ActorCriticPolicy(DeepSpeedPolicy):
     def __init__(
             self,
             actor_model: PreTrainedModel,
-            actor_ds_config: Optional[JsonDict],
-            critic_model: PreTrainedModel,
-            critic_ds_config: Optional[JsonDict],
+            actor_ds_config: Optional[Dict[str, Any]],
+            critic_model: PretrainedModelValueHead,
+            critic_ds_config: Optional[Dict[str, Any]],
             **kwargs
     ):
         super().__init__(**kwargs)
@@ -37,7 +41,7 @@ class ActorCriticPolicy(DeepSpeedPolicy):
         # initialize the models
         self.actor, self.critic = self._init_models()
     
-    def _init_actor_model(self) -> Union[DeepSpeedEngine, PreTrainedModel]:
+    def _init_actor_model(self) -> DeepSpeedEngine:
         if hasattr(self, "_actor_engine"):
             return self._actor_engine
 
@@ -113,7 +117,7 @@ class ActorCriticPolicy(DeepSpeedPolicy):
     def _init_critic_model(
         self,
         hf_checkpoint_path: Optional[Path] = None,
-    ) -> Union[DeepSpeedEngine, PreTrainedModel]:
+    ) -> DeepSpeedEngine:
         if hasattr(self, "_critic_engine"):
             return self._critic_engine
 
@@ -121,14 +125,13 @@ class ActorCriticPolicy(DeepSpeedPolicy):
 
         this_process_device = self.distributed_state.device
 
-        #metrics = {}
-        #t0 = time.time()
+        ds_config = HFTrainerDeepSpeedConfig(self.critic_config)
 
         # noinspection PyTypeChecker
         critic_model: PreTrainedModel = self.critic_lazy.construct(
             device=this_process_device,
         )
-        #metrics["timing/critic/construct"] = time.time() - t0
+
         if hf_checkpoint_path is not None:
             assert (hf_checkpoint_path / "pytorch_model.bin").exists()
             critic_model.load_state_dict(
@@ -136,13 +139,9 @@ class ActorCriticPolicy(DeepSpeedPolicy):
             )
             critic_model.to(this_process_device)
 
-
         # noinspection DuplicatedCode
         if self.args.gradient_checkpointing:
             critic_model.gradient_checkpointing_enable()
-
-        #t0 = time.time()
-        #ds_config = HfTrainerDeepSpeedConfig(self.critic_deepspeed_config)
 
         # Create the optimizer
         has_optimizer = ds_config.get_value("optimizer", None) is not None
@@ -192,14 +191,12 @@ class ActorCriticPolicy(DeepSpeedPolicy):
             lr_scheduler=lr_scheduler,
         )
 
-        #metrics["timing/critic/deepspeed_init"] = time.time() - t0
-
         if self.cache_deepspeed_engines:
             self._critic_engine = engine
 
         return engine
     
-    def init_models(self) -> Tuple[DeepSpeedEngine, DeepSpeedEngine]:
+    def _init_models(self) -> Tuple[DeepSpeedEngine, DeepSpeedEngine]:
         """ Loads the models onto the gpu"""
         self.actor = self._init_critic_model()
         self.critic = self.init_actor_model()
@@ -213,21 +210,20 @@ class ActorCriticPolicy(DeepSpeedPolicy):
         #release_memory()
 
     @abstractmethod
-    def predict_actor(self, episodes: History) -> History:
+    def predict_actor(self, episodes: EpisodeDataset):
         """
-        Predict an action from an observation.
+        Response from actor model
         """
         raise NotImplementedError
 
     @abstractmethod
-    def predict_critic(self, episodes: History) -> float:
+    def predict_critic(self, episodes: EpisodeDataset) -> float:
         """
         Predict the value of an observation.
         """
         raise NotImplementedError
 
-    @abstractmethod
-    def forward_actor(
+    def forward(
             self,
             input_ids: torch.Tensor,
             attention_mask: torch.Tensor,
@@ -262,8 +258,7 @@ class ActorCriticPolicy(DeepSpeedPolicy):
 
         # Multiply the log probs by the label mask to ignore the padding labels
         per_token_log_probs = per_token_log_probs * shift_label_mask
-        
-    @abstractmethod
+
     def forward_critic(
             self,
             input_ids: torch.Tensor,
