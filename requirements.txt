@@ -7,4 +7,4 @@ accelerate
 deepspeed
 datasets
 nltk
-jsonnet
+hydra-core

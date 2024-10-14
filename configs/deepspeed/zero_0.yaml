@@ -1,0 +1,11 @@
+defaults:
+  - base
+
+zero_0:
+  stage: 0
+  allgather_partitions: true
+  allgather_bucket_size: 500000000
+  overlap_comm: false
+  reduce_scatter: true
+  reduce_bucket_size: ${reduce_bucket_size}
+  contiguous_gradients: true

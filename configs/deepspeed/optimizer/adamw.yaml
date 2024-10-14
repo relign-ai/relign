@@ -1,0 +1,8 @@
+# configs/deepspeed/optimizer/adamw.yaml
+
+type: AdamW
+params:
+  lr: ${lr}
+  betas: ${betas}
+  eps: ${eps}
+  weight_decay: ${weight_decay}
