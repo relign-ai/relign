@@ -36,8 +36,6 @@ class PretrainedModelValueHead(BaseCritic):
         self.value_head = nn.Linear(hidden_size, 1, bias=True)
         self._init_value_head()
 
-        # self.dropout = nn.Identity
-
     def _init_value_head(self):
         hidden_size = self.pretrained_model.config.hidden_size
         nn.init.normal_(self.value_head.weight, std=1 / np.sqrt(hidden_size + 1))
@@ -58,8 +56,6 @@ class PretrainedModelValueHead(BaseCritic):
         base_model_output = self.pretrained_model(*args, **kwargs)
 
         output = base_model_output.hidden_states[-1]
-
-        # output = self.dropout(last_hidden_state)
 
         if output.dtype != self.value_head.weight.dtype:
             output = output.to(self.value_head.weight.dtype)

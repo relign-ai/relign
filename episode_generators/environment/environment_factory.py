@@ -1,6 +1,6 @@
 from typing import Type, Dict
 
-from episode_generation.environment.base_environment import Env
+from episode_generators.environment.base_environment import Env
 from utils.print import colorful_print
 
 

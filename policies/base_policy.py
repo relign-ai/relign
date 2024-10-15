@@ -9,7 +9,7 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from transformers import PreTrainedModel, SchedulerType, get_scheduler, PretrainedConfig
 from accelerate import PartialState
-from accelerate.utils import DummyOptim, DummyScheduler
+from accelerate.utils import DummyOptim
 from transformers.integrations import HfTrainerDeepSpeedConfig
 import deepspeed
 from deepspeed import DeepSpeedEngine
@@ -28,6 +28,7 @@ class BasePolicy:
     """
     def __init__(
         self,
+        project_root_dir: Path = None,
         gradient_checkpointing: bool = False,
         temperature: float = 0.7,
         weight_decay: float = 0.0,
@@ -47,6 +48,9 @@ class BasePolicy:
         total_num_training_steps: int = 10, #TODO: Get this from the trainer? 
         global_batch_size: int = 1, 
     ):
+        self.project_root_dir = project_root_dir
+        self._init_checkpoint_dir()
+
         self.gradient_checkpointing = gradient_checkpointing
         self.temperature = temperature
         self.weight_decay = weight_decay
@@ -67,8 +71,7 @@ class BasePolicy:
         # I have a feeling we should get these from the trainer somehow
         self.total_num_training_steps = total_num_training_steps 
         self.global_batch_size = global_batch_size
-
-
+    
     def get_warmup_steps(self, num_training_steps: int):
         """
         Get number of steps used for a linear warmup.
@@ -98,10 +101,6 @@ class BasePolicy:
         Forward pass of the policy.
         """
         pass
-
-    def set_root_dir(self, path: Path):
-        self.project_root_dir = path
-        self._init_checkpoint_dir()
 
     def set_cloud_log(self, cloud_logger: WandbRun):
         self.cloud_logger = cloud_logger

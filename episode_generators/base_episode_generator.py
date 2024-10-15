@@ -7,7 +7,7 @@ from pathlib import Path
 from deepspeed import DeepSpeedEngine
 
 from common.dataset import EpisodeDataset
-from episode_generation.environment.base_environment import Env
+from episode_generators.environment.base_environment import Env
 
 
 """
@@ -36,28 +36,20 @@ class Episode:
 class BaseEpisodeGenerator(ABC):
     def __init__(
             self,
+            project_root_dir: Path
         ):
-        self.project_root_dir = None # Gets initialized by triggering set root direcotry in the runner 
+        self.project_root_dir = project_root_dir # Gets initialized by triggering set root direcotry in the runner 
         self.episodes_checkpoint_dir = None
+        self._init_episode_dir()
 
     @abstractmethod
     def generate_episodes(self, num_episodes_per_iteration) -> EpisodeDataset:
         pass
 
-
-    def set_root_dir(self, path: Path):
-        """
-        Set the root directory path of the project
-        """
-        print("setting episode gen root direcoty to", path)
-        self.project_root_dir = path
-        self._episode_directory()
-
     def set_deepspeed(self, distributed_state: DeepSpeedEngine):
         self.distributed_state = distributed_state
 
-
-    def _episode_directory(self):
+    def _init_episode_dir(self):
         """
         Makes the working direcotry for the checkpoint episodes
         """

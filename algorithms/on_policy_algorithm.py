@@ -2,15 +2,15 @@ from tqdm import tqdm
 
 from common.dataset import EpisodeDataset
 from algorithms.base_algorithm import BaseAlgorithm
-from policies.base_policy import BaseActorCritic
-from episode_generation.base_episode_generator import OnPolicyEpisodeGenerator
-from algorithms.base_trainer import BaseTrainer
+from policies.base_policy import BasePolicy
+from episode_generators.base_episode_generator import OnPolicyEpisodeGenerator
+from algorithms.base_trainer import OnPolicyTrainer
 
 class OnPolicyAlgorithm(BaseAlgorithm):
     def __init__(
             self, 
-            policy: BaseActorCritic, 
-            trainer: BaseTrainer,
+            policy: BasePolicy,  # Reinforce, Actor Critic, Policy Gradient...(so base for now)
+            trainer: OnPolicyTrainer, 
             episode_generator: OnPolicyEpisodeGenerator, 
             verbose: int = 0,
             num_iterations: int = 100,
@@ -43,8 +43,7 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             checkpoint_freq=checkpoint_freq,
             **kwargs,
         )
-        
-
+    
     def learn(self):
         """
             Main training loop. Trains the policy for 'num rounds' rounds.
@@ -72,7 +71,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         if iteration % self.checkpoint_freq == 0:
             self._checkpoint()
 
-
     def _generate_episodes(
             self, 
             iteration: int,
@@ -98,9 +96,8 @@ class OnPolicyAlgorithm(BaseAlgorithm):
         if self.distributed_state.is_main_process:
             episode_dataset = self.episode_generator.generate_episodes(self.num_episodes_per_iteration, iteration)
 
-        return episode_dataset
-
-
+        return episode_dataset  
+    
     def _evaluate(self):
         raise NotImplementedError
 

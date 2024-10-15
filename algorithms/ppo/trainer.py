@@ -1,7 +1,5 @@
 
-from pathlib import Path
-from typing import List, Dict, Any
-from dataclasses import dataclass
+from typing import Any
 
 import torch
 from torch.utils.data import DataLoader
@@ -12,10 +10,10 @@ from deepspeed import comm as dist
 from common.deepspeed_utils import prepare_data_loader_for_training, prepare_data_loader_for_inference
 from common.dataset import EpisodeDataset
 
-from algorithms.base_trainer import TrainerOnPolicy
+from algorithms.base_trainer import OnPolicyTrainer
 from algorithms.ppo.data_collator import PPODataCollator
 
-class PPOTrainer(TrainerOnPolicy):
+class PPOTrainer(OnPolicyTrainer):
     """
         PPO Trainer. 
 
@@ -32,13 +30,6 @@ class PPOTrainer(TrainerOnPolicy):
             Performs a single update step using the dataset rollout under the current policy. 
             Each updatestep can rum multiple epochs of optimization. 
         """         
-        #TODO:
-        # 1. Get data in the right format for the train step
-        # 2. Get actions from the policy
-        # 3. Compute log probs, values, advantages 
-        # 4. Compute actor loss, critic loss
-        # 5. Backward and update
-
         # change to appropriate input structure
         episodes = self._collate_dataset(episodes)
 
@@ -79,11 +70,7 @@ class PPOTrainer(TrainerOnPolicy):
                 for batch in tqdm(dataloader):
                     
                     self._step(batch, step)
-                
-                # # update parameters
-                # self.optimizer.step()
-                # self.optimizer.zero_grad()
-        
+             
         # Clip the grad norm?
    
     def _collate_dataset(self, episodes: EpisodeDataset) -> Dataset:
@@ -162,20 +149,11 @@ class PPOTrainer(TrainerOnPolicy):
         """
             Process a batch.
         """
-
         # 1. compute rewards
         #  rewards = self._compute_rewards(inputs)
-        
         #2. compute advantages
-
-
         #3. compute returns
-
-
         #4. Compute actor loss
-
-
-
         #5. Compute critic loss
         
     def _compute_actor_loss(self) -> Any:

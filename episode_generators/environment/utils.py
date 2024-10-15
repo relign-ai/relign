@@ -4,7 +4,7 @@ from tqdm import tqdm
 import numpy as np
 
 from policies.base_policy import BasePolicy, BatchedPolicy
-from environment.base_environment import Env, BatchedEnv, InteractionTransition, EnvToBatchedEnv
+from episode_generators.environment.base_environment import Env, BatchedEnv, InteractionTransition, EnvToBatchedEnv
 from common.types import Trajectory, History
 
 

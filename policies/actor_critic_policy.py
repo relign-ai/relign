@@ -34,7 +34,7 @@ class ActorCriticPolicy(DeepSpeedPolicy):
     ):
         super().__init__(**kwargs)
 
-        self.actor_model_fn= actor_model_fn
+        self.actor_model_fn = actor_model_fn
         self.actor_config = actor_ds_config
         self.critic_model_fn = critic_model_fn
         self.critic_config = critic_ds_config
@@ -248,8 +248,6 @@ class ActorCriticPolicy(DeepSpeedPolicy):
         """
 
         model_device = next(self.actor.parameters()).device
-        print("input ids device", input_ids.device)
-        print("self.actor", self.actor)
         assert input_ids.device == model_device
         assert labels.device == model_device
         assert attention_mask.device == model_device
@@ -285,14 +283,6 @@ class ActorCriticPolicy(DeepSpeedPolicy):
         per_token_log_probs = per_token_log_probs * shift_label_mask
 
         output = {}
-
-        # if return_mean_entropy:
-        #     mean_entropy = masked_mean(
-        #         entropy_from_logits(shift_logits.detach()), shift_label_mask
-        #     )
-        #     mean_entropy = mean_entropy.detach().clone()
-        #     output["entropy"] = mean_entropy
-
         if return_logits:
             output["logits"] = logits
 

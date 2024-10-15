@@ -3,7 +3,7 @@ import torch.nn as nn
 from transformers import AutoTokenizer, AutoModel
 import accelerate
 
-
+#TODO: How will this fit into the AC frameowrk?
 class DoubleCritic(torch.nn.Module):
     def __init__(
         self,

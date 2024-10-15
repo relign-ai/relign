@@ -1,10 +1,9 @@
 from abc import ABC, abstractmethod
 from typing import (
     Optional,
-    List,
     Tuple,
     Dict,
-    Self,
+    List,
 )
 
 from copy import deepcopy
@@ -25,7 +24,7 @@ class Env(ABC):
     def close(self) -> None:
         pass
 
-    def copy(self) -> Self:
+    def copy(self) -> ["Env"]:
         return deepcopy(self)
     
 
@@ -35,6 +34,8 @@ class TextEnv(Env):
         pass
 
 
+# Pre delete this...
+# We might not need it. 
 class BatchedEnv(ABC):
     @abstractmethod
     def step(
@@ -55,7 +56,7 @@ class BatchedEnv(ABC):
     def close(self) -> None:
         pass
 
-    def copy(self) -> Self:
+    def copy(self) -> ['BatchedEnv']:
         return deepcopy(self)
 
 

@@ -3,18 +3,17 @@ from pathlib import Path
 
 from logging import Logger
 
-from deepspeed import DeepSpeedEngine
+from accelerate import PartialState
 
 from policies.base_policy import BasePolicy 
-from episode_generation.base_episode_generator import BaseEpisodeGenerator
+from episode_generators.base_episode_generator import BaseEpisodeGenerator
 from algorithms.base_trainer import BaseTrainer
 
-
-
 class BaseAlgorithm(ABC):
-    _logger: Logger 
     def __init__(
             self, 
+            project_root_dir: Path,
+            distributed_state: PartialState,
             policy: BasePolicy, 
             trainer: BaseTrainer,
             episode_generator: BaseEpisodeGenerator, 
@@ -34,6 +33,8 @@ class BaseAlgorithm(ABC):
             :param device: The device to use.
             :param verbose: The verbosity level.
         """
+        self.project_root_dir = project_root_dir,
+        self.distributed_state = distributed_state
 
         self.policy = policy
         self.trainer = trainer
@@ -44,12 +45,6 @@ class BaseAlgorithm(ABC):
         self.evaluation_freq = evaluation_freq
         self.checkpoint_freq = checkpoint_freq
     
-    def set_root_dir(self, path: Path):
-        self.experiment_root_dir = path
-    
-    def set_deepspeed(self, distirbuted_state: DeepSpeedEngine):
-        self.distributed_state = distirbuted_state
-
     @abstractmethod
     def learn(self, *args, **kwargs) -> None:
         raise NotImplementedError("learn method is not implemented yet.")

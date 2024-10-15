@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
-from deepspeed import DeepspeedEngine
+from accelerate import PartialState
 
 from policies.base_policy import BasePolicy
 from common.buffer import Buffer
@@ -49,10 +49,10 @@ class TrainerState:
 class BaseTrainer(ABC):
     def __init__(
         self,
+        project_root_dir: Path,
+        distributed_state: PartialState,
         policy: BasePolicy,
         per_device_batch_size: int,
-        seed: int,
-        path: str = "./trainer_state.pth"
     ):
         """
         Main Trainer object. 
@@ -68,26 +68,16 @@ class BaseTrainer(ABC):
             Path to save and load the trainer state.
         
         """
+        self.project_root_dir = project_root_dir
+        self._init_trainer_dir()
+    
+        self.distributed_state = distributed_state
+
         self.policy = policy
         self.per_device_batch_size = per_device_batch_size
-        self.seed = seed
-        self.path = path
         self.state = TrainerState()
 
-    
-    def set_root_dir(self, path: Path):
-        self.project_root_dir = path
-        self._intialize_trainer_dir()
-
-    
-    def set_deepspeed(self, distributed_state: DeepspeedEngine):
-        """
-            Get the distirbuted state from the runner object. 
-        """
-        self.distributed_state = distributed_state
-    
-
-    def _intialize_trainer_dir(self):
+    def _init_trainer_dir(self):
         self.trainer_dir = (self.project_root_dir / "trainer")
         self.trainer_dir.mkdir(exist_ok=True, parents=True)
 
@@ -101,8 +91,7 @@ class BaseTrainer(ABC):
     def load_trainer_state(self, path: str) -> None:
         raise NotImplementedError("load_trainer_state method is not implemented yet.")
 
-
-class TrainerOnPolicy(BaseTrainer):
+class OnPolicyTrainer(BaseTrainer):
     @abstractmethod
     def update(self, episodes: EpisodeDataset) -> None:
         """
@@ -111,8 +100,7 @@ class TrainerOnPolicy(BaseTrainer):
         """
         pass
 
-
-class TrainerOffPolicy(BaseTrainer):
+class OffPolicyTrainer(BaseTrainer):
     """
         For Off policy algorithms. 
     """
