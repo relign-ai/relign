@@ -1,5 +1,5 @@
 import os
-from typing import Type, TypeVar, Generic, Dict, Any 
+from typing import Type, TypeVar, Generic, Dict, Any, Optional 
 from abc import ABC, abstractmethod
 from pathlib import Path  # Corrected import
 from datetime import timedelta
@@ -31,8 +31,20 @@ class BaseRunner(ABC, Generic[P, T, E, A]):
             trainer_kwargs: Dict[str, Any],
             episode_generator_kwargs: Dict[str, Any],
             algorithm_kwargs: Dict[str, Any],
+            seed: Optional[int] = None
     ):
-        # Classes        
+        # Initialize the seed 
+        if seed is None:
+            import time
+            import hashlib
+            seed_str = f"{time.time()}_{os.getpid()}"
+            # Ensure the seed is within the valid range for NumPy
+            self.seed = int(hashlib.sha256(seed_str.encode('utf-8')).hexdigest(), 16) % (2**32 - 1)
+        else:
+            self.seed = seed
+        self._init_random_seed()
+
+        # classes        
         self.algorithm_cls = algorithm_cls
         self.policy_cls = policy_cls
         self.trainer_cls = trainer_cls
@@ -49,7 +61,7 @@ class BaseRunner(ABC, Generic[P, T, E, A]):
 
         self.exp_root = self._init_experiment_dir() 
         self.log_dir = self._init_log_dir()
-    
+
     def _init_experiment_dir(self) -> Path:
         """ 
         Initialize a directory at directory/experiment_name.
@@ -68,7 +80,17 @@ class BaseRunner(ABC, Generic[P, T, E, A]):
         log_dir = self.exp_root / 'logs'
         log_dir.mkdir(parents=True, exist_ok=True)
         return log_dir
-    
+
+    def _init_random_seed(self):
+        import random
+        import numpy as np
+        import torch
+        random.seed(self.seed)
+        np.random.seed(self.seed)
+        torch.manual_seed(self.seed)
+        #if self.ditributed_state.num_processes > 0:
+        #    torch.cuda.manual_seed_all(self.seed)
+
     @abstractmethod
     def _init_policy(self):
         pass
@@ -161,6 +183,7 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
 
     def _init_policy(self):
         self.policy: Pds = self.policy_cls(
+            seed=self.seed,
             project_root_dir=self.exp_root,
             distributed_state=self.distributed_state,
             **self.policy_kwargs
@@ -168,6 +191,7 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
 
     def _init_trainer(self):
         self.trainer : T = self.trainer_cls(
+            seed=self.seed,
             project_root_dir=self.exp_root,
             distributed_state=self.distributed_state,
             policy=self.policy,
@@ -176,6 +200,7 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
 
     def _init_episode_generator(self):
         self.episode_generator : E = self.episode_generator_cls(
+            seed=self.seed,
             project_root_dir=self.exp_root,
             distributed_state=self.distributed_state,
             **self.episode_generator_kwargs
@@ -183,6 +208,7 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
 
     def _init_algorithm(self):
         self.algorithm : A = self.algorithm_cls(
+            seed=self.seed,
             project_root_dir=self.exp_root,
             distributed_state=self.distributed_state,
             policy=self.policy,
@@ -190,4 +216,3 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
             episode_generator=self.episode_generator,
             **self.algorithm_kwargs
         )
-

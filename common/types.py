@@ -97,7 +97,6 @@ class TokenTrajectory():
 
         assert not np.any(((1 - self.is_action.astype(np.float32)) * self.reward) != 0.0), 'reward must be 0.0 if not an action'
 
-    
     @classmethod
     def from_text_trajectory(cls, trajectory: Trajectory, tokenizer: PreTrainedTokenizer) -> 'TokenTrajectory':
         """
@@ -123,26 +122,22 @@ class TokenTrajectory():
 
         return cls(tokens, actions, rewards, done)
 
-
 class TextEpisode:
     query: TextHistory  # History of text observations and actions
     response: Text # Text observation 
     score: float = None # score after the action
     advantage: float = None # advantagges 
 
-
 @dataclass  
 class Episode:
     query_token_ids: List[int]
     response_token_ids: List[int]
-    scores: float = None
+    reward: float = None
     advantages: Optional[List[float]] = None
 
     def __post_init__(self):
         if self.advantages is not None:
             assert len(self.advantages) == len(self.response_token_ids)
-
-
 
 # interact
 class InteractionTransition(NamedTuple):

@@ -1,13 +1,11 @@
 from abc import abstractmethod
-from typing import Optional, Dict, Any, Union
-import math
-
+from typing import Any, Optional, Union, NamedTuple, Dict
 from pathlib import Path
-
 import torch
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from transformers import PreTrainedModel, SchedulerType, get_scheduler, PretrainedConfig
+from transformers.modeling_outputs import CausalLMOutput
 from accelerate import PartialState
 from accelerate.utils import DummyOptim
 from transformers.integrations import HfTrainerDeepSpeedConfig
@@ -15,12 +13,15 @@ import deepspeed
 from deepspeed import DeepSpeedEngine
 from wandb.sdk.wandb_run import Run as WandbRun
 
-from common.deepspeed_utils import get_optimizer_grouped_parameters 
 from common.dataset import EpisodeDataset
 from common.logging import get_logger
 
-
 logger = get_logger(__name__)
+
+class ForwardOutput(NamedTuple):
+    initial_poilicy_raw_output: CausalLMOutput 
+    policy_raw_output: CausalLMOutput
+    values: torch.Tensor 
 
 class BasePolicy:
     """
@@ -28,6 +29,7 @@ class BasePolicy:
     """
     def __init__(
         self,
+        seed: int,
         project_root_dir: Path = None,
         gradient_checkpointing: bool = False,
         temperature: float = 0.7,
@@ -43,11 +45,10 @@ class BasePolicy:
         fp16: bool = False,
         bf16: bool = False,
         bf16_full_eval: bool = False,
-        warmup_ratio: float = 0.0,
-        warmup_steps: int = 0,
         total_num_training_steps: int = 10, #TODO: Get this from the trainer? 
         global_batch_size: int = 1, 
     ):
+        self.seed = seed
         self.project_root_dir = project_root_dir
         self._init_checkpoint_dir()
 
@@ -65,23 +66,10 @@ class BasePolicy:
         self.fp16 = fp16
         self.bf16 = bf16
         self.bf16_full_eval = bf16_full_eval
-        self.warmup_ratio = warmup_ratio
-        self.warmup_steps = warmup_steps
 
         # I have a feeling we should get these from the trainer somehow
         self.total_num_training_steps = total_num_training_steps 
         self.global_batch_size = global_batch_size
-    
-    def get_warmup_steps(self, num_training_steps: int):
-        """
-        Get number of steps used for a linear warmup.
-        """
-        warmup_steps = (
-            self.warmup_steps
-            if self.warmup_steps > 0
-            else math.ceil(num_training_steps * self.warmup_ratio)
-        )
-        return warmup_steps
 
     @abstractmethod
     def predict(self, episodes: EpisodeDataset): #TODO Define response type
@@ -96,11 +84,15 @@ class BasePolicy:
             input_ids: torch.Tensor,
             attention_masks: torch.Tensor,
             labels: torch.Tensor,
-        ) -> torch.Tensor:
+        ) -> ForwardOutput:
         """
         Forward pass of the policy.
         """
         pass
+
+    @abstractmethod
+    def set_params(self, policy_params):
+        self.inference = self.inference.replace(params=policy_params)
 
     def set_cloud_log(self, cloud_logger: WandbRun):
         self.cloud_logger = cloud_logger
@@ -145,7 +137,6 @@ class DeepSpeedPolicy(BasePolicy):
         weight_decay: float = 0.0,
     ) -> Union[Optimizer, DummyOptim]:
         from accelerate.utils import DummyOptim
-
         optim_params = get_optimizer_grouped_parameters(model, weight_decay)
         optim = DummyOptim(optim_params)
         return optim

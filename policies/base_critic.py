@@ -5,7 +5,6 @@ import torch
 import torch.nn as nn
 from transformers import PreTrainedModel
 
-
 class BaseCritic(nn.Module):
     """
     Main critic model. Takes an observation and returns a value estimate of the observation.
@@ -21,7 +20,6 @@ class BaseCritic(nn.Module):
         Forward pass of the value function.
         """
         pass
-
 
 class PretrainedModelValueHead(BaseCritic):
     def __init__(
@@ -40,7 +38,6 @@ class PretrainedModelValueHead(BaseCritic):
         hidden_size = self.pretrained_model.config.hidden_size
         nn.init.normal_(self.value_head.weight, std=1 / np.sqrt(hidden_size + 1))
         nn.init.constant_(self.value_head.bias, val=0.0)
-
 
     def forward(self, *args, **kwargs):
         """

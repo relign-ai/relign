@@ -1,10 +1,15 @@
 from tqdm import tqdm
+from datasets import Dataset
+import logging
 
 from common.dataset import EpisodeDataset
+from common.logging import get_logger
 from algorithms.base_algorithm import BaseAlgorithm
 from policies.base_policy import BasePolicy
 from episode_generators.base_episode_generator import OnPolicyEpisodeGenerator
 from algorithms.base_trainer import OnPolicyTrainer
+
+logger = get_logger(__name__)
 
 class OnPolicyAlgorithm(BaseAlgorithm):
     def __init__(
@@ -51,8 +56,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             Checkpoints every 'checkpoint_freq' rounds.
         """
         current_policy_path = None
-
-        # Model/State preperation stuff here....
         for iteration in tqdm(range(self.num_iterations)):
             # Collect rollouts under the current policy. 
             episodes = self._generate_episodes(
@@ -60,10 +63,11 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 current_policy_path=current_policy_path
             )
 
-            # Update policy
-            current_policy_path =self.trainer.update(episodes)
+            self.trainer.step(episodes=episodes)
+            # Onpolicy paramater update for next iteration
+            # self.policy.set_params(self.trainer.policy_train_state.params)
 
-            # Evalutate
+        # Evalutate
         if iteration % self.evaluation_freq == 0:
             self._evaluate()
 
@@ -84,7 +88,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 current_policy_path: path to the weights of the current policy. 
                 #TODO allow_from_cache: bool = True,
         """
-    
         # Generate epiosdes data set 
         #TODO: is this the cleanest way? do we pass a path, or do we simply pass the policy module? idk?
         # do we run into trouble when we use distributed learning?
@@ -93,9 +96,24 @@ class OnPolicyAlgorithm(BaseAlgorithm):
 
         #TODO: handle distributed environments differently
         # for now we just generate it in the main process
-        if self.distributed_state.is_main_process:
-            episode_dataset = self.episode_generator.generate_episodes(self.num_episodes_per_iteration, iteration)
 
+        # Feth the epiode path on all the devices
+        episode_path = self.episode_generator.get_episode_checkpoint_path(iteration) 
+
+        # compute the epiosdes on the main process in non-distirbuted envirnoments 
+        if not self.episode_generator.supports_distributed:
+            if self.distributed_state.is_main_process:
+                episode_path = self.episode_generator.generate_episodes(
+                    self.num_episodes_per_iteration, 
+                    iteration,
+                    return_path=True
+                )
+
+        #TODO: this doesnt wait for some reason?
+        self.distributed_state.wait_for_everyone()
+        logger.info(f"episode path = {episode_path}")
+        episode_dataset = Dataset.load_from_disk(episode_path)
+        logger.info(f"espiode data_length = {len(episode_dataset)}")
         return episode_dataset  
     
     def _evaluate(self):

@@ -1,20 +1,24 @@
 from abc import abstractmethod
-from typing import  Tuple, Optional, Dict, Any, Callable, Literal, Union
-from pathlib import Path
+from typing import  Tuple, Optional, Dict, Any, Callable, Literal, NamedTuple
+from functools import partial
 
-import torch
-from deepspeed import DeepSpeedEngine
+import torch 
 from transformers import PreTrainedModel
-from transformers.integrations import HfTrainerDeepSpeedConfig
-from transformers.modeling_outputs import CausalLMOutputWithPast, CausalLMOutputWithCrossAttentions
-
 
 from common.dataset import EpisodeDataset
 from common.logging import get_logger
-from policies.base_policy import DeepSpeedPolicy
+from policies.base_policy import DeepSpeedPolicy 
 from policies.base_critic import PretrainedModelValueHead
 
 logger = get_logger(__name__)
+
+class ActorForwardOutput(NamedTuple):
+    logits: Optional[torch.Tensor] = None
+    sequence_logp: Optional[torch.Tensor] = None
+    all_logp: Optional[torch.Tensor] = None
+
+class CriticForwardOutput(NamedTuple):
+    values: Optional[torch.Tensor] = None
 
 class ActorCriticPolicy(DeepSpeedPolicy):
     """
@@ -26,7 +30,7 @@ class ActorCriticPolicy(DeepSpeedPolicy):
     """
     def __init__(
             self,          
-            actor_model_fn: Callable[[], PreTrainedModel],
+            actor_model_fn: Callable[[],PreTrainedModel],
             actor_ds_config: Optional[Dict[str, Any]],
             critic_model_fn: Callable[[], PretrainedModelValueHead],
             critic_ds_config: Optional[Dict[str, Any]],
@@ -41,179 +45,29 @@ class ActorCriticPolicy(DeepSpeedPolicy):
 
         # initialize the models
         self.actor, self.critic = self._init_models()
-    
 
-    def _init_models(self) -> Tuple[DeepSpeedEngine, DeepSpeedEngine]:
+    def _init_models(self) -> Tuple[PreTrainedModel, PreTrainedModel]:
         """ Loads the models onto the gpu"""
-        actor_engine = self._init_actor_model()
-        critic_engine = self._init_critic_model()
-        return actor_engine, critic_engine
+        actor_model = self._init_actor_model()
+        critic_model = self._init_critic_model()
+        return actor_model, critic_model
 
-    def _init_actor_model(self) -> DeepSpeedEngine:
-        if hasattr(self, "actor"):
+    def _init_actor_model(self) -> PreTrainedModel:
+        if hasattr(self, "actor_model"):
             return self.actor
-
-        logger.info(f"Creating the actor deepspeed engine...")
-
-        this_process_device = self.distributed_state.device
-
-        # instantiate the actor model... 
-        actor_model: PreTrainedModel = self.actor_model_fn()
-        actor_model.to(this_process_device)
-
-        if self.gradient_checkpointing:
-            actor_model.gradient_checkpointing_enable()
-
-        ds_config = HfTrainerDeepSpeedConfig(self.actor_config)
-
-        # Create the optimizer
-        # has_optimizer = ds_config.get_value("optimizer", None) is not None
-        # if has_optimizer:
-        #     weight_decay = ds_config.get_value("optimizer.params.weight_decay", 0.0)
-        #     if weight_decay == "auto":
-        #         weight_decay = self.weight_decay
-
-        #     optimizer = self.create_optimizer(actor_model, weight_decay)
-        # else:
-        #     optimizer = None
-
-        # # Create the LR scheduler
-        # # noinspection DuplicatedCode
-        # has_deepspeed_scheduler = ds_config.get_value("scheduler", None) is not None
-        # self.warmup_steps = self.get_warmup_steps(10) #TODO Get the training steps from the trainer?
-    
-        # if has_deepspeed_scheduler:
-        #     lr_scheduler = None
-        #     self._patch_ds_config_for_lr_scheduler(
-        #         ds_config,
-        #         total_num_training_steps=self.total_num_training_steps,
-        #         warmup_steps=self.warmup_steps,
-        #         learning_rate=self.learning_rate,
-        #     )
-        # elif self.lr_scheduler_type is not None:
-        #     logger.info("Using non-DeepSpeed LR scheduler.")
-        #     lr_scheduler = self.create_lr_scheduler(
-        #         optimizer,
-        #         name=self.lr_scheduler_type,
-        #         warmup_steps=self.warmup_steps,
-        #         num_training_steps=self.total_num_training_steps,
-        #     )
-        # else:
-        #     lr_scheduler = None
-
-        optimizer=None
-        lr_scheduler=None
-
-        self._patch_ds_config_for_optimizer(ds_config)
-        self._patch_ds_config_for_batch_size(ds_config, self.global_batch_size)
-        self._patch_ds_config_for_dtype(ds_config)
-        self._patch_ds_config_for_bucket_size(ds_config, actor_model.config)
-
-        print("ds config", ds_config)
-
-        engine = self._init_deepspeed_engine_for_training(
-            actor_model,
-            deepspeed_config=ds_config.config,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
-        )
-
-        if self.cache_ds_engines:
-            self.actor = engine
-
-        return engine
+        actor_model = self.actor_model_fn()
+        return actor_model
   
     def _init_critic_model(
         self,
-        hf_checkpoint_path: Optional[Path] = None,
-    ) -> DeepSpeedEngine:
+    ) -> PreTrainedModel:
         # Check if the model is 'cached'
-        if hasattr(self, "critic"):
+        if hasattr(self, "critic_model"):
             return self.critic
-
-        logger.info(f"Creating the critic deepspeed engine...")
-
-        this_process_device = self.distributed_state.device
-
-        ds_config = HfTrainerDeepSpeedConfig(self.critic_config)
-
-        critic_model: PreTrainedModel = self.critic_model_fn()
-        critic_model.to(this_process_device)
-
-        if hf_checkpoint_path is not None:
-            assert (hf_checkpoint_path / "pytorch_model.bin").exists()
-            critic_model.load_state_dict(
-                torch.load(hf_checkpoint_path / "pytorch_model.bin")
-            )
-            critic_model.to(this_process_device)
-
-        # noinspection DuplicatedCode
-        if self.gradient_checkpointing:
-            critic_model.gradient_checkpointing_enable()
-
-        # Create the optimizer
-        # has_optimizer = ds_config.get_value("optimizer", None) is not None
-        # if has_optimizer:
-        #     weight_decay = ds_config.get_value("optimizer.params.weight_decay", 0.0)
-        #     if weight_decay == "auto":
-        #         weight_decay = self.weight_decay
-
-        #     optimizer = self.create_optimizer(critic_model, weight_decay)
-        # else:
-        #     optimizer = None
-
-        # # Create the LR scheduler
-        # # noinspection DuplicatedCode
-        # has_deepspeed_scheduler = ds_config.get_value("scheduler", None) is not None
-        # self.warmup_steps = self.get_warmup_steps(10) #TODO Get the training steps from the trainer?
-
-        # if has_deepspeed_scheduler:
-        #     lr_scheduler = None
-        #     self._patch_ds_config_for_lr_scheduler(
-        #         ds_config,
-        #         total_num_training_steps=self.total_num_training_steps,
-        #         warmup_steps=self.warmup_steps,
-        #         learning_rate=self.learning_rate,
-        #     )
-        # elif self.lr_scheduler_type is not None:
-        #     #logger.info("Using non-DeepSpeed LR scheduler.")
-        #     lr_scheduler = self.create_lr_scheduler(
-        #         optimizer,
-        #         name=self.lr_scheduler_type,
-        #         warmup_steps=self.warmup_steps,
-        #         num_training_steps=self.total_num_training_steps,
-        #     )
-        # else:
-        #     lr_scheduler = None
-
-        optimizer = None
-        lr_scheduler = None
-
-        self._patch_ds_config_for_optimizer(ds_config)
-        self._patch_ds_config_for_batch_size(ds_config, self.global_batch_size)
-        self._patch_ds_config_for_dtype(ds_config)
-        self._patch_ds_config_for_bucket_size(ds_config, critic_model.config)
-
-        engine = self._init_deepspeed_engine_for_training(
-            critic_model,
-            deepspeed_config=ds_config.config,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
-        )
-
-        if self.cache_ds_engines:
-            self.critic = engine
-
-        return engine
-
-    def destroy_models(self):
-        """ Deletes the models if not cashed"""
-        self._destroy_ds_engine(self.actor)
-        del self.actor
-        self._destroy_ds_engine(self.critic)
-        del self.critic
-        #release_memory()
-
+    
+        critic_model = self.critic_model_fn()
+        return critic_model 
+        
     @abstractmethod
     def predict_actor(self, episodes: EpisodeDataset):
         """
@@ -228,7 +82,7 @@ class ActorCriticPolicy(DeepSpeedPolicy):
         """
         raise NotImplementedError
 
-    def forward(
+    def forward_actor(
             self,
             input_ids: torch.Tensor,
             attention_mask: torch.Tensor,
@@ -238,7 +92,7 @@ class ActorCriticPolicy(DeepSpeedPolicy):
             return_sequence_logp: bool = False,
             return_all_logp : bool = False,
             sequence_logp_reduction: Optional[Literal["mean"]] = None
-        ) -> torch.Tensor:
+        ) -> ActorForwardOutput:
         """
         Forward pass of the policy.
 
@@ -247,20 +101,12 @@ class ActorCriticPolicy(DeepSpeedPolicy):
         Labels shape (batch, seq_length)
         """
 
-        model_device = next(self.actor.parameters()).device
-        assert input_ids.device == model_device
-        assert labels.device == model_device
-        assert attention_mask.device == model_device
-
-        outputs: Union[CausalLMOutputWithPast, CausalLMOutputWithCrossAttentions ]= self.actor.forward(
+        outputs = self.actor(
             input_ids=input_ids,
             attention_mask=attention_mask,
             return_dict=True,
             use_cache=False
         )
-
-        assert isinstance(outputs, (CausalLMOutputWithPast, CausalLMOutputWithCrossAttentions)), \
-            f"Expected output type to be CausalLMOutputWithPast or CausalLMOutputWithCrossAttentions, but got {type(outputs)}"
 
         logits = outputs.logits.float()
         logits /= self.temperature
@@ -300,7 +146,7 @@ class ActorCriticPolicy(DeepSpeedPolicy):
             input_ids: torch.Tensor,
             attention_mask: torch.Tensor,
             labels: torch.Tensor,
-        ) -> torch.Tensor:
+        ) -> CriticForwardOutput:
         """
         Forward pass of the critic.
         """
@@ -321,5 +167,3 @@ class ActorCriticPolicy(DeepSpeedPolicy):
             value_mask = attention_mask
 
         return {"values": predicted_values, "value_mask": value_mask}
-
-

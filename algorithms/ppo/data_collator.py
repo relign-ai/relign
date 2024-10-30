@@ -43,10 +43,6 @@ class PPODataCollator:
                         Shape: (batch_size, max_seq_len-1)
     """
     def __call__(self, instances: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        # Tokenize the query and response
-        query_token_ids = self.tokenizer.encode(instances["query"])
-        response_token_ids = self.tokenizer.encode(instances["response"])
-
         max_seq_length = max(
             len(instance["query_token_ids"]) + len(instance["response_token_ids"]) 
             for instance in instances
@@ -122,7 +118,6 @@ class PPODataCollator:
 
             if has_advantages:
                 advantages = instance["advantages"]
-
                 # Advantages are the same length as the reponse_token_ids 
                 advantages = [0.0] * len(query_token_ids) + advantages + [0.0] * num_pad_at_end
                 assert len(labels) == len(advantages)

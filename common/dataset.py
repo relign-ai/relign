@@ -5,29 +5,33 @@ from datasets import Dataset
 
 from common.types import Episode
 
-class EpisodeDataset(Dataset):
+class EpisodeDataset:
     """
-        It should have the following columns:
-        - "query_token_ids": The token ids of the query.
-        - "response_token_ids": The token ids of the response.
-        - "scores": The reward of the response (single scalar per response)
-        - "advantages": The advantages of the response. (Optional)
+    wrapper around Dataset for handling episodes
     """
-    
     def __init__(
             self,
             query_token_ids: np.ndarray,
             response_token_ids: np.ndarray,
-            scores: np.ndarray,
+            rewards: np.ndarray,
             advantages: Optional[np.ndarray] = None,
     ):
-        self.query_token_ids = query_token_ids
-        self.response_token_ids = response_token_ids
-        self.scores = scores
-        self.advantages = advantages
+        data = {
+            'query_token_ids': query_token_ids.tolist(),
+            'response_token_ids': response_token_ids.tolist(),
+            'rewards': rewards.tolist(),
+        }
+        if advantages is not None:
+            assert len(advantages) is len(response_token_ids),"advantage dim must match response_token_ids dim"
+            data['advantages'] = advantages.tolist()
+        self.dataset = Dataset.from_dict(data)
 
+    def __getitem__(self, index):
+        return self.dataset[index]
 
-        
+    def __len__(self):
+        return len(self.dataset)
+
     @staticmethod
     def from_episode_list(episodes: List[Episode]) -> 'EpisodeDataset':
         """
@@ -35,35 +39,27 @@ class EpisodeDataset(Dataset):
         """
         query_token_ids = []
         response_token_ids = []
-        scores = []
+        rewards = []
+        #has_advantage = episodes[0].advantages is not None 
+        has_advantage = any(episode.advantages is not None for episode in episodes)
         advantages = []
 
         for episode in episodes:
-            query_token_ids.append(np.array(episode.query_token_ids, dtype=np.int32))
-            response_token_ids.append(np.array(episode.response_token_ids, dtype=np.int32))
-            scores.append(episode.scores)
+            query_token_ids.append(episode.query_token_ids)
+            response_token_ids.append(episode.response_token_ids)
+            rewards.append(episode.reward)
             if episode.advantages is not None:
-                advantages.append(np.array(episode.advantages, dtype=np.float32))
-            else:
-                advantages.append(None)
-
-        # Convert lists to numpy arrays
-        query_token_ids = np.array(query_token_ids, dtype=object)  # Using dtype=object for variable-length sequences
-        response_token_ids = np.array(response_token_ids, dtype=object)
-        scores = np.array(scores, dtype=np.float32)
-        advantages = np.array(advantages, dtype=object) if any(advantages) else None
+                advantages.append(episode.advantages)
 
         return EpisodeDataset(
-            query_token_ids=query_token_ids,
-            response_token_ids=response_token_ids,
-            scores=scores,
-            advantages=advantages
+            query_token_ids=np.array(query_token_ids, dtype=object),
+            response_token_ids=np.array(response_token_ids, dtype=object),
+            rewards=np.array(rewards, dtype=np.float32),
+            advantages=np.array(advantages, dtype=object) if has_advantage else None
         )
 
-
-    def __len__(self):
-        return len(self.scores)
-    
+    def save_to_disk(self, path):
+        self.dataset.save_to_disk(path)
 
 class PPODataset(Dataset):
     """    
@@ -84,7 +80,6 @@ class PPODataset(Dataset):
                 Shape: (batch_size, max_seq_len-1)
         - "actor_shifted_log_probs": The actor log probabilities of the responses.
                 Shape: (batch_size, max_seq_len-1)
-
     """
     def __init__(self, dataset: Dataset):
         self.dataset = dataset

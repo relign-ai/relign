@@ -1,10 +1,6 @@
-from datetime import timedelta
-
-import torch
 import hydra
 from omegaconf import OmegaConf, dictconfig
 from transformers import AutoModelForCausalLM, AutoModel
-from accelerate import PartialState
 
 from algorithms.on_policy_algorithm import OnPolicyAlgorithm
 
@@ -15,13 +11,12 @@ from episode_generators.base_episode_generator import DebugEpisodeGenerator
 
 from runners.base_runner import DistributedRunner
 
-@hydra.main(config_path="../configs", config_name="config", version_base=None)
-def test_drunner_ppo_policy(cfg: dictconfig):
-    # The policy
+def test_drunner_ppo_policy(cfg: dictconfig, local_rank: int =-1):
     ds_config = cfg.deepspeed
     ds_config = OmegaConf.to_container(ds_config, resolve=True)
     # Wrap this inside a model dir with actor models and critic models definitions?
     # Most likely a good idea. 
+    # Define the models here 
     def actor_model_fn():
         ## load gp2 as actor
         return AutoModelForCausalLM.from_pretrained("gpt2")
@@ -43,11 +38,13 @@ def test_drunner_ppo_policy(cfg: dictconfig):
     ppo_trainer_class = PPOTrainer
     ppo_trainer_kwargs = {
         'per_device_batch_size': 10,
+        'dataloader_num_workers': 1,
+        'dataloader_pin_memory': False,
     }
 
     episode_generator_class = DebugEpisodeGenerator
     episode_generator_kwargs = {
-        'file_path': "./test_data/gpt2_imdb_ppo_iter50_samples.json",
+        'file_path': "./tests/data/gpt2_imdb_ppo_iter50_samples.json",
         'policy_path': "dummy_gpt2_path.th",
     }
     
@@ -77,9 +74,19 @@ def test_drunner_ppo_policy(cfg: dictconfig):
         episode_generator_kwargs=episode_generator_kwargs,
         algorithm_kwargs=algorithm_kwargs
     )
-
-    # Start the algorithm
+    # Star training 
     runner.run()
 
+import sys
+import argparse
+def main():
+    parser = argparse.ArgumentParser(description='Deepspeed training')
+    parser.add_argument('--local_rank', type=int, default=-1)
+    args, unknown = parser.parse_known_args()
+
+    hydra.initialize(config_path="../configs", version_base=None)
+    cfg = hydra.compose(config_name="config")
+    test_drunner_ppo_policy(cfg=cfg, local_rank=args.local_rank)
+
 if __name__ == "__main__":
-    test_drunner_ppo_policy()
+    main()

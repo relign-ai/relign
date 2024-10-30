@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
-
 from logging import Logger
 
 from accelerate import PartialState
@@ -12,11 +11,12 @@ from algorithms.base_trainer import BaseTrainer
 class BaseAlgorithm(ABC):
     def __init__(
             self, 
+            seed: int,
             project_root_dir: Path,
-            distributed_state: PartialState,
             policy: BasePolicy, 
             trainer: BaseTrainer,
             episode_generator: BaseEpisodeGenerator, 
+            distributed_state: PartialState,
             verbose: int = 0,
             num_iterations: int = 100,
             num_episodes_per_iteration: int = 100,
@@ -33,8 +33,8 @@ class BaseAlgorithm(ABC):
             :param device: The device to use.
             :param verbose: The verbosity level.
         """
+        self.seed = seed
         self.project_root_dir = project_root_dir,
-        self.distributed_state = distributed_state
 
         self.policy = policy
         self.trainer = trainer
@@ -44,6 +44,7 @@ class BaseAlgorithm(ABC):
         self.num_episodes_per_iteration = num_episodes_per_iteration
         self.evaluation_freq = evaluation_freq
         self.checkpoint_freq = checkpoint_freq
+        self.distributed_state = distributed_state
     
     @abstractmethod
     def learn(self, *args, **kwargs) -> None:
