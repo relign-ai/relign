@@ -1,0 +1,14 @@
+# configs/deepspeed/base.yaml
+defaults:
+  - optimizer: adamw
+  - scheduler: warmup_decay_lr
+
+gradient_accumulation_steps: ${gradient_accumulation_steps}
+gradient_clipping: ${gradient_clipping}
+train_batch_size: ${train_batch_size}
+train_micro_batch_size_per_gpu: ${train_micro_batch_size_per_gpu}
+
+zero_allow_untested_optimizer: true
+
+bf16:
+  enabled: ${bf16_enabled}

@@ -1,0 +1,39 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# Dependency directories
+node_modules/
+.venv/
+target/
+build/
+dist/
+out/
+outputs/
+
+# IDE & Tooling
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Packages
+*.dll
+*.jar
+*.war
+*.ear
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Misc
+coverage/
+.env
+*/cache
+*.egg-info

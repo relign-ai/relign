@@ -1,0 +1,8 @@
+# configs/deepspeed/scheduler/warmup_decay_lr.yaml
+type: WarmupDecayLR
+params:
+  last_batch_iteration: -1
+  total_num_steps: ${total_num_steps}
+  warmup_min_lr: ${warmup_min_lr}
+  warmup_max_lr: ${warmup_max_lr}
+  warmup_num_steps: ${warmup_num_steps}
