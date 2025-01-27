@@ -13,7 +13,7 @@
   </a>
 </p>
 
-relign is a fully open-sourced RL library tailored specifically for the research and development of reasoning engines. It currently supports state-of-the-art reinforcement learning algorithms like **PPO** (and soon **GRPO**!), alongside useful abstractions for Chain of Thought (CoT) and MCTS inference strategies. All these can be evaluataed on popular reasoning benchmarks. 
+relign is a fully open-sourced RL library tailored specifically for the research and development of reasoning engines. It currently supports state-of-the-art reinforcement learning algorithms like **PPO** (and soon **GRPO**!), alongside useful abstractions for Chain of Thought (CoT) and MCTS inference strategies. All these can be evaluated on popular reasoning benchmarks. 
 
 > **Note:** relign is alpha software—it may be buggy.
 
