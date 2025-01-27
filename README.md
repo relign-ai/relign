@@ -20,8 +20,7 @@ relign is a fully open-sourced RL library tailored specifically for the research
 > **Note:** relign is alpha software—it may be buggy.
 
 ---
-https://x.com/relignai  
-https://discord.com/invite/9mrHbusc  
+
 
 ## Table of Contents
 - [Installation](#installation)
