@@ -20,7 +20,7 @@
 1. **Create and activate a conda environment**:
 
     ```bash
-    conda create -n relign python=3.9 -y
+    conda create -n relign python=3.10 -y
     conda activate relign
     ```
 
@@ -34,10 +34,9 @@
 
 ## Example
 
-In the `example` folder, we provide code to fine-tune a 1B SFT model via PPO on a math benchmark using a Chain of Thought approach. This example demonstrates the different abstraction layers that RELIGN offers. A blog post detailing exactly what’s happening under the hood will follow soon.
+In the `example` folder, we provide code to fine-tune a 1B SFT model via PPO on a gsm8k-math benchmark using a Chain of Thought inference strategy. This example demonstrates the different abstraction layers that relign offers. A blog post detailing exactly what’s happening here, why it is important and where we see this going will follow soon.
 
 > The example runs on two A6000 GPUs (96GB VRAM total).
-
 ---
 
 ## What's Next
@@ -48,13 +47,14 @@ In the `example` folder, we provide code to fine-tune a 1B SFT model via PPO on 
 - **Unit Tests**  
   A codebase without tests is hard to maintain and improve.
 
-- **Model Evaluations**
+- **Trainig run Tooling**
+  Evaluations, Checkpointing, Metric monitoring(wandb/tensorflow) and Reasoning trace analysis are not yet supported but will be supported soon!
 
 - **New Algorithms (e.g., GRPO)**  
-  Deepseek introduced a new RL algorithm, GRPO, which will soon be available in RELIGN (we plan to evaluate it as well).
+  [Deepseek-r1](https://github.com/deepseek-ai/DeepSeek-R1) introduced a new RL algorithm, GRPO, which will soon be available in RELIGN (we plan to evaluate it as well).
 
 - **More Memory-Efficient Algorithm Runners**  
-  Some runs require a lot of memory; we aim to support significant training runs on large but more affordable GPUs.
+  Some runs require a lot of memory; we aim to support significant training runs on large but more affordable GPUs. (Including efficient single gpu training)
 
 ---
 
@@ -64,21 +64,20 @@ In the `example` folder, we provide code to fine-tune a 1B SFT model via PPO on 
    - Poor memory scheduling (vllM server shutdowns when switching between episode generation and policy training)
 
 2. **Refactors**  
-   - Some files exceed 1000 lines, especially in episode generation and inference strategies.
+   - Some files exceed 1000 lines, especially in episode generation and inference strategies. Any obvious 
+   and simple refractors are always welcome
 
 3. **Episode Generators / Tasks**  
-   - CodeInterpreter  
+   - We would encourge everyone to add new (novel) tasks and environments to the library on which we can test post training methods. Some inspiration below: 
+   - Coding 
    - MLE-bench  
    - Trading  
-   - General Q&A  
+   - General/Scientific Q&A  
 
 4. **Solving Bounties**  
    - We will soon introduce bounties for new algorithms, environments, inference strategies, and other stack layers. Please follow our Discord for updates.  
    - Because RELIGN is a crypto token project and financial markets offer a verifiable reward signal (returns on trades), our first task/environment objective is to implement a sentiment trading bot for crypto markets.  
    - We also plan to tackle other challenging reasoning benchmarks.
-
-5. **Ongoing Refactors**  
-   - We will continue to refactor and simplify CoT and MCTS episode generators, as these are crucial for the long-term future of reasoning research.
 
 ---
 
