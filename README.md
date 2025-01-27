@@ -1,86 +1,94 @@
+# RELIGN
 
-# Overview
-relign is a fully opensourced RL-library tailored specifically towards 
-the research and development of reasoning engines. As of this moment it supports 
-state of the art reinfrocemnet learning algortihms like (PPO) (soon(GRPO))!
-along side useful abstractions for chain of thought(CoT) and MCTS inference strategies. 
-we also provide a collection of popular and reasoning benchmarks.
+**RELIGN** is a fully open-sourced RL library tailored specifically for the research and development of reasoning engines. It currently supports state-of-the-art reinforcement learning algorithms like **PPO** (and soon **GRPO**!), alongside useful abstractions for Chain of Thought (CoT) and MCTS inference strategies. We also provide a collection of popular reasoning benchmarks.
 
-relign is alpha software!!, and buggy!!... but 
+> **Note:** RELIGN is alpha software—it may be buggy.
 
+---
+
+## Table of Contents
+- [Installation](#installation)
+- [Example](#example)
+- [What's Next](#whats-next)
+- [Contributing (Ranked by Urgency)](#contributing-ranked-by-urgency)
+- [Acknowledgements](#acknowledgements)
+
+---
 
 ## Installation
-To get started, we recommend creating a new conda environment and installing Relign in editable mode:
-1. Create and activate a conda environment:  
-   ```bash
-   conda create -n relign python=3.9 -y
-   conda activate relign
-   ```
-2. Install Relign in editable mode:  
-   ```bash
-   pip install -e .
-   ```
+
+1. **Create and activate a conda environment**:
+
+    ```bash
+    conda create -n relign python=3.9 -y
+    conda activate relign
+    ```
+
+2. **Install RELIGN in editable mode**:
+
+    ```bash
+    pip install -e .
+    ```
+
+---
 
 ## Example
-In the example, we provide code to posttrain a 1b sft model in the via PPO on a math bench via chain of thought. It provides a clear overview of the different layers of abstraction relign provides
-A blog on what exactly is happning here will soon follow
-The example runs on 2X A6000 Gpu's (96 VRAM total)
 
+In the `example` folder, we provide code to fine-tune a 1B SFT model via PPO on a math benchmark using a Chain of Thought approach. This example demonstrates the different abstraction layers that RELIGN offers. A blog post detailing exactly what’s happening under the hood will follow soon.
 
-# Whats Next: 
-- Docs Page, project layout:
-  - Comprehensive documentation about the features and classes 
-- Unit tests
-  - A code base without tests is impossible to progress in. 
-- Better Checkpointing/Evaluating, Training Monitoring/Analysis
-- New algorithms (like GRPO):
-  - Deepseek introduced a new RL algorithm, GRPO, which will soon be available in relign. (and evald) 
-- More memory efficient algorithm runners
-  - These runs take up alot of memory. I want significant runs on large retail gpu's  
+> The example runs on two A6000 GPUs (96GB VRAM total).
 
+---
 
-# Contributing (ranked on urgency):
-- Bug fixes! 
-  Relign has a bunch of bugs that need fixing
-  - Poor memory scheduling (vllM server shutdowns when switching between Episode Generation and Policy Training)
-- Refactors
-  - Lots of low hanging fruits here to be picked
-  - Some files are 1000 lines long, especially in the epiosde genration and inference strategies. 
-  
-- Episode Generators / Tasks!
-  - CodeInterpreter
-  - MLE-bench 
-  - Trading 
-  - General Q/A
+## What's Next
 
-- Solving Bounties!
-  - Bounties for new algorithms, environments, inference strategies
-    and other layers of the stack will soon be made available 
-    - please follow the discord for updates
+- **Docs Page & Project Layout**  
+  Comprehensive documentation about the features and classes.
 
-- Because we are a crypto token, and because the financial markets offer a beautiful fully veriviable reward feedback signal, (i.e., returns on trades), our first task/environment objective will be to implement a sentiment trading bot for crypto markets.
+- **Unit Tests**  
+  A codebase without tests is hard to maintain and improve.
 
-- Other challenging reasoning benchmarks
-- Along side these, we will also continue the refractor and simplify COT and MSTC episode generatos as these will play a crucial role in the long term future of reasoning.
+- **Model Evaluations**
 
-# Acknoledgements
-Our framwork and builds upon the following works: 
-- This code uses code pieces of: [guidance], [deepseekmath]
- https://github.com/guidance-ai/guidance
- https://github.com/deepseek-ai/DeepSeek-Math
-- framework structure inspired by [Stable Baseline 3]
-- Special acknlowdegement to [VinePPO], of whom we used the code for MTCS method COT among Deepspeed policy abstractions. 
-  Their paper ultimatly inspired me to build this
-https://arxiv.org/abs/2410.01679
+- **New Algorithms (e.g., GRPO)**  
+  Deepseek introduced a new RL algorithm, GRPO, which will soon be available in RELIGN (we plan to evaluate it as well).
 
-To all above, thank u for ur opensource contributions. 
-And took inspiration from 
-- [StableBaseline 3] in the structuring of its RL classes 
+- **More Memory-Efficient Algorithm Runners**  
+  Some runs require a lot of memory; we aim to support significant training runs on large but more affordable GPUs.
 
+---
 
-# References
-- Vineppo: https://arxiv.org/abs/2409.12917
-    - A special thanks to vinePPO for laying out an excellent base on which we can continue our work
-      do check out their paper & results
+## Contributing (Ranked by Urgency)
 
+1. **Bug Fixes**  
+   - Poor memory scheduling (vllM server shutdowns when switching between episode generation and policy training)
 
+2. **Refactors**  
+   - Some files exceed 1000 lines, especially in episode generation and inference strategies.
+
+3. **Episode Generators / Tasks**  
+   - CodeInterpreter  
+   - MLE-bench  
+   - Trading  
+   - General Q&A  
+
+4. **Solving Bounties**  
+   - We will soon introduce bounties for new algorithms, environments, inference strategies, and other stack layers. Please follow our Discord for updates.  
+   - Because RELIGN is a crypto token project and financial markets offer a verifiable reward signal (returns on trades), our first task/environment objective is to implement a sentiment trading bot for crypto markets.  
+   - We also plan to tackle other challenging reasoning benchmarks.
+
+5. **Ongoing Refactors**  
+   - We will continue to refactor and simplify CoT and MCTS episode generators, as these are crucial for the long-term future of reasoning research.
+
+---
+
+## Acknowledgements
+
+RELIGN builds upon and is inspired by the following works:
+
+- [**Guidance**](https://github.com/guidance-ai/guidance)
+- [**DeepSeek-Math**](https://github.com/deepseek-ai/DeepSeek-Math)
+- **Framework structure inspired by [Stable Baselines 3]**
+- **Special acknowledgement to [VinePPO](https://arxiv.org/abs/2410.01679)** for the MCTS + CoT approach and Deepspeed policy abstractions.
+
+> Thank you to all contributors for your open-source efforts!
