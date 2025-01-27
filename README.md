@@ -6,8 +6,8 @@
 
 <!-- Center the Discord and Twitter badges -->
 <p align="center">
-  <a href="https://discord.com/invite/9mrHbusc">
-    <img src="https://img.shields.io/discord/9mrHbusc?label=Chat%20on%20Discord" alt="Discord" />
+  <a href="https://discord.gg/DFnrzFc7pg">
+    <img src="https://img.shields.io/discord/DFnrzFc7pg?label=Chat%20on%20Discord" alt="Discord" />
   </a>
   <a href="https://x.com/relignai">
     <img src="https://img.shields.io/twitter/follow/relignai?style=social" alt="Twitter" />
