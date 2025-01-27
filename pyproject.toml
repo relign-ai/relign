@@ -1,0 +1,41 @@
+[project]
+name = "relign"
+version = "0.1.0"
+description = "post-training library for reasoning models"
+authors = [{ name = "algopapi" }]
+requires-python = ">=3.10"
+dependencies = [
+    "vllm",
+    "tqdm",
+    "numpy",
+    "openai",
+    "matplotlib",
+    "pygtrie",
+    "transformers",
+    "tokenizers",
+    "torch",
+    "accelerate",
+    "deepspeed",
+    "datasets",
+    "nltk",
+    "hydra-core",
+    "setuptools",
+    "uvloop",
+    "nest-asyncio",
+    "wandb",
+    "diskcache",
+    "evaluate",
+    "base58",
+    "pylatexenc",
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["relign"]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
