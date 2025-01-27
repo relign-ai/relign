@@ -10,11 +10,14 @@ yarn-error.log*
 # Dependency directories
 node_modules/
 .venv/
+
 target/
 build/
 dist/
 out/
 outputs/
+experiment/
+data/
 
 # IDE & Tooling
 .vscode/
@@ -22,11 +25,15 @@ outputs/
 *.swp
 *.swo
 
+
 # Packages
 *.dll
 *.jar
 *.war
 *.ear
+uv.lock
+
+
 
 # Python
 __pycache__/
@@ -37,3 +44,7 @@ coverage/
 .env
 */cache
 *.egg-info
+runner_test/
+
+#experiments/ testts
+*.arrow
