@@ -1,3 +1,4 @@
+# RELIGN
 <!-- Center the banner at the top -->
 <p align="center">
   <img src="assets/banner.jpg" alt="RELIGN Banner" />
@@ -13,7 +14,6 @@
   </a>
 </p>
 
-# RELIGN
 
 **RELIGN** is a fully open-sourced RL library tailored specifically for the research and development of reasoning engines. It currently supports state-of-the-art reinforcement learning algorithms like **PPO** (and soon **GRPO**!), alongside useful abstractions for Chain of Thought (CoT) and MCTS inference strategies. We also provide a collection of popular reasoning benchmarks.
 
