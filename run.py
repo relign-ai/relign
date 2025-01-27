@@ -3,12 +3,9 @@ import torch
 from omegaconf import OmegaConf
 from utils.print import colorful_print
 
-
 from policies.policy_factory import AgentFactory
 from environment.factory import EnvironmentFactory
-
 from train_loop import train_loop
-
 
 CONFIG_NAME = "archer_city.yaml"
 
@@ -29,8 +26,6 @@ def main(config):
         colorful_print(str(e), fg="red")
         return
 
-    # Load the appropriate trainer (based on the agent)
-
     # Load the appropriate environment
     env_name = config.env_name
     env_load_path = config.env_load_path
@@ -43,8 +38,6 @@ def main(config):
     except ValueError as e:
         colorful_print(str(e), fg="red")
         return
-
-    # call the training loop
 
 
 if __name__ == "__main__":
