@@ -68,8 +68,9 @@ In the `example` folder, we provide code to fine-tune a 1B SFT model via PPO on 
   [Deepseek-r1](https://github.com/deepseek-ai/DeepSeek-R1) introduced a new RL algorithm, GRPO, which will soon be available in RELIGN (we plan to evaluate it as well).
 
 - **More Memory-Efficient Algorithm Runners**  
-  Some runs require a lot of memory; we aim to support significant training runs on large but more affordable GPUs. (Including efficient single GPU training)
-
+  Some runs require a lot of VRAM. We aim to setup smaller  
+  scale experiments such that developers can run and train 
+  models on single-gpu machines
 ---
 
 ## Contributing (Ranked by Urgency)
