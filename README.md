@@ -51,10 +51,17 @@ In the `example` folder, we provide code to fine-tune a 1B SFT model via PPO on 
 
 > The example runs on two A6000 GPUs (96GB VRAM total).
 
+### How to run
+
+```bash
+deepspeed --num_gpus=2 examples/ppo_gsm.py
+```
+
+If you have a custom DeepSpeed config file (e.g., ds_config.json), you can also specify it:
+
 ---
 
 ## What's Next
-
 - **Docs Page & Project Layout**  
   Comprehensive documentation about the features and classes.
 
