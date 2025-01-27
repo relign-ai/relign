@@ -1,3 +1,6 @@
+[![Discord](https://img.shields.io/discord/9mrHbusc?label=Chat%20on%20Discord)](https://discord.com/invite/9mrHbusc)
+[![Twitter](https://img.shields.io/twitter/follow/relignai?style=social)](https://x.com/relignai)
+
 # RELIGN
 
 **RELIGN** is a fully open-sourced RL library tailored specifically for the research and development of reasoning engines. It currently supports state-of-the-art reinforcement learning algorithms like **PPO** (and soon **GRPO**!), alongside useful abstractions for Chain of Thought (CoT) and MCTS inference strategies. We also provide a collection of popular reasoning benchmarks.
@@ -5,6 +8,9 @@
 > **Note:** RELIGN is alpha software—it may be buggy.
 
 ---
+https://x.com/relignai
+https://discord.com/invite/9mrHbusc
+
 
 ## Table of Contents
 - [Installation](#installation)
@@ -34,7 +40,7 @@
 
 ## Example
 
-In the `example` folder, we provide code to fine-tune a 1B SFT model via PPO on a gsm8k-math benchmark using a Chain of Thought inference strategy. This example demonstrates the different abstraction layers that relign offers. A blog post detailing exactly what’s happening here, why it is important and where we see this going will follow soon.
+In the `example` folder, we provide code to fine-tune a 1B SFT model via PPO on a gsm8k-math benchmark using a Chain of Thought inference strategy. This example demonstrates the different abstraction layers that relign offers. A blog post detailing exactly what's happening here, why it is important and where we see this going will follow soon.
 
 > The example runs on two A6000 GPUs (96GB VRAM total).
 ---
