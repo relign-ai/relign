@@ -1,5 +1,17 @@
-[![Discord](https://img.shields.io/discord/9mrHbusc?label=Chat%20on%20Discord)](https://discord.com/invite/9mrHbusc)
-[![Twitter](https://img.shields.io/twitter/follow/relignai?style=social)](https://x.com/relignai)
+<!-- Center the banner at the top -->
+<p align="center">
+  <img src="banner.jpg" alt="RELIGN Banner" />
+</p>
+
+<!-- Center the Discord and Twitter badges -->
+<p align="center">
+  <a href="https://discord.com/invite/9mrHbusc">
+    <img src="https://img.shields.io/discord/9mrHbusc?label=Chat%20on%20Discord" alt="Discord" />
+  </a>
+  <a href="https://x.com/relignai">
+    <img src="https://img.shields.io/twitter/follow/relignai?style=social" alt="Twitter" />
+  </a>
+</p>
 
 # RELIGN
 
