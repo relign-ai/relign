@@ -1,4 +1,3 @@
-# RELIGN
 <!-- Center the banner at the top -->
 <p align="center">
   <img src="assets/banner.jpg" alt="RELIGN Banner" />
