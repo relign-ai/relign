@@ -1,6 +1,6 @@
 <!-- Center the banner at the top -->
 <p align="center">
-  <img src="banner.jpg" alt="RELIGN Banner" />
+  <img src="assets/banner.jpg" alt="RELIGN Banner" />
 </p>
 
 <!-- Center the Discord and Twitter badges -->
