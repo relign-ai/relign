@@ -4,23 +4,21 @@
   <img src="assets/banner.jpg" alt="RELIGN Banner" />
 </p>
 
-<!-- Center the Discord and Twitter badges -->
+<!-- Center the Discord (server invite) and Twitter badges -->
 <p align="center">
-  <a href="https://discord.gg/DFnrzFc7pg">
-    <img src="https://img.shields.io/discord/DFnrzFc7pg?label=Chat%20on%20Discord" alt="Discord" />
+  <a href="https://discord.com/invite/9mrHbusc">
+    <img src="https://img.shields.io/discord/1333056593880682508?label=Join%20our%20Discord" alt="Discord Server Invite" />
   </a>
   <a href="https://x.com/relignai">
     <img src="https://img.shields.io/twitter/follow/relignai?style=social" alt="Twitter" />
   </a>
 </p>
 
-
 relign is a fully open-sourced RL library tailored specifically for the research and development of reasoning engines. It currently supports state-of-the-art reinforcement learning algorithms like **PPO** (and soon **GRPO**!), alongside useful abstractions for Chain of Thought (CoT) and MCTS inference strategies. We also provide a collection of popular reasoning benchmarks.
 
 > **Note:** relign is alpha software—it may be buggy.
 
 ---
-
 
 ## Table of Contents
 - [Installation](#installation)
