@@ -64,11 +64,11 @@ If you have a custom DeepSpeed config file (e.g., ds_config.json), you can also 
 
 ## Bounties
 
-Below is the current bounty task with its reward in RELIGN:
+Not just the models will be rewarded for their work, but more importently, our contributers. Implement bounties and we will send you relign
 
 | Description                                                                                                   | Reward in RELIGN  |
 |---------------------------------------------------------------------------------------------------------------|-------------------|
-| Bounty 1. GRPO: implement DeepSeek's GRPO in RELIGN and train it with standard CoT inference on gsm8k math    | 250k RELIGN       |
+| Bounty 1. GRPO: implement DeepSeek's GRPO in RELIGN and train it with standard CoT inference on gsm8k math    | 250k |
 
 ### Submit My Own Bounty
 If you'd like to propose a new challenge or feature and set your own reward, go to: 
