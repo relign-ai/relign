@@ -178,7 +178,6 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
                     response_token_ids=response_token_ids,
                     reward=float(reward),
                 )
-                logger.info(f'episode {episode}')
 
                 episodes.append(episode)
                 all_rewards.append(float(reward))

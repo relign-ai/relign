@@ -10,7 +10,7 @@ from relign.policies.actor_critic_policy import ActorCriticPolicy
 from relign.policies.base_critic import PretrainedModelValueHead
 from relign.algorithms.on_policy_algorithm import OnPolicyAlgorithm
 from relign.algorithms.ppo.trainer import PPOTrainer
-from relign.episode_generators.math_episode_generator import (
+from relign.episode_generators.math_episode_generator import(
     MathEpisodeGenerator,
     MATHRewardFunction,
 )
@@ -121,6 +121,7 @@ def ppo_gsm(cfg,  local_rank: int = -1):
         "tokenizer": tokenizer,
         "num_episodes_per_iteration": n_episodes_per_iteration,
         "reasoning_step_delimiter": '',
+        "wait_until_memory_release": True,
         "answer_prefix": "\n\n # Answer\n",
         "max_sequence_length": 2048,
         "max_question_length": 1512,

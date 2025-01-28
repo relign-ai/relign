@@ -136,6 +136,8 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
             f"Rank {self.distributed_state.process_index} using vLLM port {self._vllm_port}"
         )
 
+    
+
     def _log_on_main(self, msg, level="info"):
         if self.is_main_process() and self._logger is not None:
             getattr(self._logger, level)(msg)
@@ -322,23 +324,13 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
 
         metrics = {}
         t0 = time.time()
-
-        def vllm_cleanup_fn():
-            if self.wait_until_memory_release:
-                threshold_mb = (
-                    gpu_memory_usage_before_mb * 1.1
-                )  # Allow for 10% tolerance
-                wait_for_memory_release(
-                    this_process_device.index,
-                    threshold_mb=threshold_mb,
-                )
-
+        
         infer_results = self._run_inference(
             dataset_shard=dataset,
             vllm_init_fn=vllm_init_fn,
-            vllm_cleanup_fn=vllm_cleanup_fn,
             results_root_dir=results_dir,
-            iteration=iteration
+            iteration=iteration,
+            gpu_memory_usage_before_mb=gpu_memory_usage_before_mb,
         )
 
         for result in infer_results:
@@ -436,9 +428,9 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         self,
         dataset_shard: Dataset,
         vllm_init_fn: Callable[[], Tuple[VLLMServer, Dict[str, Any]]],
-        vllm_cleanup_fn: Callable[[], None],
         results_root_dir: Path,
         iteration: int,
+        gpu_memory_usage_before_mb: int,
     ):
         """
         Potentially start a vLLM server and run inference to generate results needed for episode generation.
@@ -455,29 +447,29 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         """
         infer_result_path = results_root_dir / "results_ds"
         vllm_server, guidance_llm_kwargs = vllm_init_fn()
+        target_device_index = self.distributed_state.device.index
 
         results = self.inference_strategy.generate(dataset_shard)
          
-        # check row count
-        logger.info(f"Iteration {iteration}: Received {len(results)} inference rows.")
-
+        # Convert the results to a list before saving 
         episodes = []
         for row in results:
             episode = dict(row)  # copy all fields from row
-            # Optionally, add iteration or any other metadata you want
             episode["iteration"] = iteration
             episodes.append(episode)
 
         episode_ds = Dataset.from_list(episodes)
         episode_ds.save_to_disk(str(infer_result_path))
-            
-        results.save_to_disk(str(infer_result_path))
+
         vllm_server.stop_server()
         del results
         del vllm_server
         release_memory()
 
-        vllm_cleanup_fn()
+        self.vllm_cleanup(
+            target_gpu_index=target_device_index, # or can i just use self.distributed_state.device.index here? even if there are multiple ?
+            gpu_memory_usage_before_mb=gpu_memory_usage_before_mb,
+        )
         release_memory()
 
         results = Dataset.load_from_disk(str(results_root_dir / "results_ds"))
@@ -525,11 +517,6 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
                 f"model={hf_ckpt_path_or_model}   port={vllm_port}   seed={seed}"
             )
             t0 = time.time()
-            # vllm_server = vllm_server_lazy.construct(
-            #     seed=seed,
-            #     port=vllm_port,
-            #     gpu_memory_utilization=vllm_gpu_memory_utilization,
-            # )
             server_url = self.vllm_server.start_server(
                 hf_ckpt_path_or_model=hf_ckpt_path_or_model,
                 gpu_idx=process_index,
@@ -549,6 +536,18 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
             }
 
         return _init
+
+    def vllm_cleanup(
+        self,
+        gpu_memory_usage_before_mb: int,
+        target_gpu_index: int,
+    ):
+        if self.wait_until_memory_release:
+            threshold_mb = ( gpu_memory_usage_before_mb * 1.1)  # Allow for 10% tolerance
+            wait_for_memory_release(
+                target_gpu_index=target_gpu_index,
+                threshold_mb=threshold_mb,
+            )
 
     def _save_generations_to_cloud(self, generations_dir: Path, iteration: int):
         if self.cloud_logger is None or not self.is_main_process():
