@@ -1,6 +1,50 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# Dependency directories
+node_modules/
+.venv/
+
+target/
+build/
+dist/
+out/
+outputs/
+experiment/
+data/
+
+# IDE & Tooling
+.vscode/
+.idea/
+*.swp
+*.swo
+
+
+# Packages
+*.dll
+*.jar
+*.war
+*.ear
+uv.lock
+
+
+
+# Python
 __pycache__/
+*.py[cod]
+
+# Misc
+coverage/
 .env
-outputs/**
-experiment/**
-notes.txt
-relign.egg-info/
+*/cache
+*.egg-info
+runner_test/
+
+#experiments/ testts
+*.arrow
