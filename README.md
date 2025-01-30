@@ -3,13 +3,16 @@
   <img src="assets/banner.jpg" alt="RELIGN Banner" />
 </p>
 
-<!-- Center the Discord (server invite) and Twitter badges -->
+<!-- Center the Discord (server invite), Twitter badges, and Hugging Face link -->
 <p align="center">
   <a href="https://discord.com/invite/9mrHbusc">
     <img src="https://img.shields.io/discord/1333056593880682508?label=Join%20our%20Discord" alt="Discord Server Invite" />
   </a>
   <a href="https://x.com/relignai">
     <img src="https://img.shields.io/twitter/follow/relignai?style=social" alt="Twitter" />
+  </a>
+  <a href="https://huggingface.co/relign">
+    <img src="https://img.shields.io/badge/Hugging%20Face-Join%20us-yellow" alt="Hugging Face" />
   </a>
 </p>
 
