@@ -8,15 +8,16 @@ from relign.episode_generators.on_policy_episode_generator import OnPolicyEpisod
 def vllm_server():
     return VLLMServer()
 
+
 @pytest.fixture
 def epiosde_generator():
     return OnPolicyEpisodeGenerator()
+
 
 class TestVLLMServer:
     def test_start_and_stop_vllm(
         self, 
         vllm_server: VLLMServer, 
-        episode_generator: OnPolicyEpisodeGenerator, 
         tolarace=1.1
     ):
         pre_gpu_mem_usage = get_gpu_memory()
@@ -27,5 +28,6 @@ class TestVLLMServer:
         vllm_server.stop_server()
 
         post_gpu_mem_usage = get_gpu_memory()
+
         # Assert that memory usage is released and processec are killd
         assert post_gpu_mem_usage < pre_gpu_mem_usage * tolarace 
