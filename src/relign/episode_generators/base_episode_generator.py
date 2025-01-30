@@ -43,6 +43,7 @@ class EpisodeGeneratorStrategy(ABC):
     def __call__(self, paths):
         raise NotImplementedError
 
+
 class BaseEpisodeGenerator():
     can_precompute_episodes: bool = False
     supports_distributed: bool = False
@@ -62,7 +63,9 @@ class BaseEpisodeGenerator():
         self.tokenizer = tokenizer
         self.project_root_dir = project_root_dir
         self.policy_path = None
-        self._init_episode_dir()
+        
+        if project_root_dir is not None:
+            self._init_episode_dir()
 
     
     def _init_episode_dir(self):
@@ -77,6 +80,9 @@ class BaseEpisodeGenerator():
         """
         Sets the checkpoint directory based on the iteration 
         """
+        if self.episodes_checkpoint_dir is None:
+            raise ValueError("episodes_checkpoint_dir is not set")
+
         return (self.episodes_checkpoint_dir / f"episodes_{str(iteration).zfill(4)}.json")
     
     def checkpoint_episodes(self, episodes: EpisodeDataset, iteration: int) -> Path:

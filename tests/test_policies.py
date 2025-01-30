@@ -1,14 +1,14 @@
 import pytest
 from transformers import AutoModelForCausalLM, AutoModel
 
-from relign.policies.base_policy import BasePolicy
+from relign.policies.base_policy import BasePolicy, ForwardOutput
 from relign.policies.base_critic import BaseCritic, PretrainedModelValueHead
 from relign.policies.actor_critic_policy import ActorCriticPolicy
 from relign.episode_generators.base_episode_generator import DebugEpisodeGenerator 
 
 @pytest.fixture
 def debug_episode_generator():
-    return DebugEpisodeGenerator(file_path="tests/data/debug_data.json")
+    return DebugEpisodeGenerator(file_path="tests/mock_data/debug_data.json")
 
 @pytest.fixture
 def actor_model_fn():
@@ -37,10 +37,16 @@ class TestPolicies:
     def test_policy_forward(
         self, 
         policy: BasePolicy, 
-        episode_generator: DebugEpisodeGenerator
+        debug_episode_generator: DebugEpisodeGenerator,
     ):
-        episodes = episode_generator.generate(5, 1) 
-        policy.forward(episodes)
+        episodes = debug_episode_generator.generate(5, 1) 
+        results = policy.forward(episodes)
+
+        assert isinstance(results, ForwardOutput)
+        assert results.initial_poilicy_raw_output is not None
+        assert results.policy_raw_output is not None
+        assert results.values is not None 
+
         
     def test_policy_backward(self, pollicy: BasePolicy):
         pass
