@@ -26,7 +26,6 @@ from relign.common import Lazy
 from relign.episode_generators.base_episode_generator import (EpisodeGenerator, Episode)
 from relign.episode_generators.on_policy_episode_generator import (OnPolicyEpisodeGenerator)
 from relign.episode_generators.tree_episode_generator import TreeEpisodeUtils
-from relign.models import Model
 from relign.tokenization import Tokenizer
 
 
@@ -81,7 +80,7 @@ def wait_for_memory_release(target_gpu_index, threshold_mb=1024):
 class EpisodeGeneratorWithRewardModel(OnPolicyEpisodeGenerator, TreeEpisodeUtils):
     def __init__(
         self,
-        reward_model: Optional[Lazy[Model]] = None,
+        reward_model: Optional[Model] = None,
         reward_model_tokenizer: Optional[Tokenizer] = None,
         reward_model_padding_side: str = "right",
         reward_pipline_model_name: Optional[str] = None,

@@ -1,6 +1,6 @@
 import json
 
-from relign.inference.tree_inference.branch_factor_strategy import (ListBranchFactor)
+from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor
 from relign.inference.tree_inference.expansion import NodeExpander
 from relign.inference.tree_inference_strategy import TreeInferenceStrategy
 

@@ -1,13 +1,11 @@
 import hydra
 import argparse
-import torch
 from pathlib import Path
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModel
+from transformers import AutoModelForCausalLM, AutoTokenizer 
 from omegaconf import OmegaConf
 
 from relign.tasks import GSM8K
-from relign.policies.actor_critic_policy import ActorCriticPolicy
-from relign.policies.base_critic import PretrainedModelValueHead
+from relign.policies.actor_policy import ActorPolicy
 from relign.algorithms.on_policy_algorithm import OnPolicyAlgorithm
 from relign.algorithms.ppo.trainer import PPOTrainer
 from relign.episode_generators.math_episode_generator import (
@@ -20,10 +18,10 @@ from relign.runners.distributed_runner import DistributedRunner
 from relign.common.vllm_server import VLLMServer
 
 
-def ppo_gsm(cfg,  local_rank: int = -1):
+def grpo_gsm(cfg,  local_rank: int = -1):
     ds_config = cfg.deepspeed
     ds_config = OmegaConf.to_container(ds_config, resolve=True)
-    experiment_name = "ppo-cot-rho1b-gsm"
+    experiment_name = "grpo-cot-rho1b-gsm"
     experiment_dir  = "experiment"
     
     # --------- Tokenizer --------------- #
@@ -34,12 +32,6 @@ def ppo_gsm(cfg,  local_rank: int = -1):
         ## load gp2 as actor
         return AutoModelForCausalLM.from_pretrained("realtreetune/rho-1b-sft-GSM8K")
 
-    def critic_model_fn():
-        # Wrap the critic with the value head model.
-        critic_backbone = AutoModel.from_pretrained("realtreetune/rho-1b-sft-GSM8K")
-        return PretrainedModelValueHead(
-            pretrained_model=critic_backbone
-        )  # critics need to be wrapped in a pretrained value head
 
     # --------- Task Definition ----------#
     task = GSM8K(
@@ -133,13 +125,12 @@ def ppo_gsm(cfg,  local_rank: int = -1):
     }
 
     # ----------- Policy ---------------#
-    actor_critic_policy = ActorCriticPolicy
-    actor_critic_kwargs = {
-        "actor_model_fn": actor_model_fn,
-        "critic_model_fn": critic_model_fn,
-        "actor_config": ds_config,
-        "critic_config": ds_config,
+    actor_policy = ActorPolicy
+    actor_kwargs = {
+        "actor_model_fn": actor_model_fn,   
+        "actor_config": ds_config,  
     }
+
 
     # ----------- Trainer ---------------#
     ppo_trainer_class = PPOTrainer
@@ -185,7 +176,7 @@ def main():
      
     hydra.initialize(config_path="../configs", version_base=None)
     cfg = hydra.compose(config_name="config")
-    ppo_gsm(cfg=cfg, local_rank=args.local_rank)
+    grpo_gsm(cfg=cfg, local_rank=args.local_rank)
 
 if __name__ == "__main__":
     main()
