@@ -3,13 +3,16 @@
   <img src="assets/banner.jpg" alt="RELIGN Banner" />
 </p>
 
-<!-- Center the Discord (server invite) and Twitter badges -->
+<!-- Center the Discord (server invite), Twitter badges, and Hugging Face link -->
 <p align="center">
   <a href="https://discord.com/invite/9mrHbusc">
     <img src="https://img.shields.io/discord/1333056593880682508?label=Join%20our%20Discord" alt="Discord Server Invite" />
   </a>
   <a href="https://x.com/relignai">
     <img src="https://img.shields.io/twitter/follow/relignai?style=social" alt="Twitter" />
+  </a>
+  <a href="https://huggingface.co/relign">
+    <img src="https://img.shields.io/badge/Hugging%20Face-Join%20us-yellow" alt="Hugging Face" />
   </a>
 </p>
 
@@ -22,6 +25,7 @@ relign is a fully open-sourced RL library tailored specifically for the research
 ## Table of Contents
 - [Installation](#installation)
 - [Example](#example)
+- [Bounties](#bounties)
 - [What's Next](#whats-next)
 - [Contributing (Ranked by Urgency)](#contributing-ranked-by-urgency)
 - [Acknowledgements](#acknowledgements)
@@ -61,6 +65,26 @@ If you have a custom DeepSpeed config file (e.g., ds_config.json), you can also 
 
 ---
 
+## Bounties
+
+Not just the models will be rewarded for their work, but more importently, our contributers. Implement bounties and we will send you relign
+
+| Description                                                                                                   | Reward in RELIGN  |
+|---------------------------------------------------------------------------------------------------------------|-------------------|
+| Bounty 1. GRPO: implement DeepSeek's GRPO in RELIGN and train it with standard CoT inference on gsm8k math    | 250k |
+
+### Submit My Own Bounty
+If you'd like to propose a new challenge or feature and set your own reward, go to: 
+[www.relign.ai/bounties](https://www.relign.ai/bounties).
+
+Bounty Instructions (common GitHub approach):
+1. Fork the repository.  
+2. Make your changes in a new branch.  
+3. Submit a Pull Request referencing the bounty issue.  
+4.  We will review your PR and, if merged, send the funds to your wallet.
+
+---
+
 ## What's Next
 - **Docs Page & Project Layout**  
   Comprehensive documentation about the features and classes.
@@ -78,6 +102,7 @@ If you have a custom DeepSpeed config file (e.g., ds_config.json), you can also 
   Some runs require a lot of VRAM. We aim to setup smaller  
   scale experiments such that developers can run and train 
   models on single-gpu machines
+
 ---
 
 ## Contributing (Ranked by Urgency)
@@ -95,10 +120,6 @@ If you have a custom DeepSpeed config file (e.g., ds_config.json), you can also 
      - Trading  
      - General/Scientific Q&A  
 
-4. **Solving Bounties**  
-   - We will soon introduce bounties for new algorithms, environments, inference strategies, and other stack layers. Please follow our Discord for updates.  
-   - Because relign is a crypto token project and financial markets offer a verifiable reward signal (returns on trades), our first task/environment objective is to implement a sentiment trading bot for crypto markets.  
-   - We also plan to tackle other challenging reasoning benchmarks.
 
 ---
 

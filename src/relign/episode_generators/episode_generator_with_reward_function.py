@@ -48,7 +48,9 @@ class EpisodeGeneratorWithRewardFunction(OnPolicyEpisodeGenerator, TreeEpisodeUt
         )
 
     def _generate_episodes(
-        self, inference_results: Dataset, iteration: int
+        self, 
+        inference_results: Dataset, 
+        iteration: int
     ) -> List[Union[Dict[str, Any], Episode]]:
         episodes = []
         for instance in inference_results:
@@ -168,34 +170,6 @@ class EpisodeGeneratorWithRewardFunction(OnPolicyEpisodeGenerator, TreeEpisodeUt
         decoded_instance = self.tokenizer.decode(
             query_token_ids + response_token_ids, **decoding_kwargs
         )
-
-        #TODO: this does not work with mock
-        # logger.info(f"decoded_instance: {decoded_instance}, episode_text: {episode_text}")
-        # assert decoded_instance == episode_text, (
-        #     f"Decoded instance does not match original instance.\n"
-        #     f"Original instance: {episode_text}\n"
-        #     f"Decoded instance: {decoded_instance}"
-        # )
-
-        # check_query_reconstruction &= self.tokenization_check_query_reconst
-        # if check_query_reconstruction:
-        #     decoded_query = self.tokenizer.decode(query_token_ids, **decoding_kwargs)
-        #     assert decoded_query == query, (
-        #         f"Decoded query does not match original query.\n"
-        #         f"Original query: {query}\n"
-        #         f"Decoded query: {decoded_query}"
-        #     )
-
-        # check_response_reconstruction &= self.tokenization_check_response_reconst
-        # if check_response_reconstruction:
-        #     decoded_response = self.tokenizer.decode(
-        #         response_token_ids, **decoding_kwargs
-        #     )
-        #     assert decoded_response == response, (
-        #         f"Decoded response does not match original response.\n"
-        #         f"Original response: {response}\n"
-        #         f"Decoded response: {decoded_response}"
-        #     )
 
     def _should_append_bos_to_query(self) -> bool:
         """
