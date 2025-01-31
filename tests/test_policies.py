@@ -10,11 +10,13 @@ from relign.episode_generators.base_episode_generator import DebugEpisodeGenerat
 def debug_episode_generator():
     return DebugEpisodeGenerator(file_path="tests/mock_data/debug_data.json")
 
+
 @pytest.fixture
 def actor_model_fn():
     def _actor_model_fn():
         return AutoModelForCausalLM.from_pretrained("gpt-2")
     return _actor_model_fn
+
 
 @pytest.fixture
 def critic_model_fn():
@@ -22,6 +24,7 @@ def critic_model_fn():
         critic_backbone = AutoModel.from_pretrained("gpt-2")
         return PretrainedModelValueHead(pretrained_model=critic_backbone)
     return _critic_model_fn
+
 
 @pytest.fixture
 def actor_critic_policy(actor_model_fn, critic_model_fn):
@@ -50,3 +53,5 @@ class TestPolicies:
         
     def test_policy_backward(self, pollicy: BasePolicy):
         pass
+
+
