@@ -5,10 +5,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from omegaconf import OmegaConf
 
 from relign.tasks import GSM8K
-from relign.policies.actor_policy import ActorPolicy
+from relign.policies.base_actor import ActorPolicy
 from relign.algorithms.on_policy_algorithm import OnPolicyAlgorithm
 from relign.algorithms.ppo.trainer import PPOTrainer
-from relign.episode_generators.math_episode_generator import (
+from relign.episode_generators.envs.math_episode_generator import (
     MathEpisodeGenerator,
     MATHRewardFunction,
 )

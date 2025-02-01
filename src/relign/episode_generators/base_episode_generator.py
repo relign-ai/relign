@@ -67,7 +67,6 @@ class BaseEpisodeGenerator():
         if project_root_dir is not None:
             self._init_episode_dir()
 
-    
     def _init_episode_dir(self):
         """
         Instantiate the working directory for the episodes checkpoints

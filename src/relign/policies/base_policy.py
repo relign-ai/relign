@@ -96,6 +96,9 @@ class BasePolicy:
     @abstractmethod
     def set_params(self, policy_params):
         self.inference = self.inference.replace(params=policy_params)
+    
+    @abstractmethod
+    def init_model_
 
     def set_cloud_log(self, cloud_logger: WandbRun):
         self.cloud_logger = cloud_logger
@@ -132,7 +135,6 @@ class DeepSpeedPolicy(BasePolicy):
         super().__init__(**kwargs) 
         self.distributed_state = distributed_state
         self.cache_ds_engines = cache_ds_engines
-
     
     def create_optimizer(
         self,
@@ -145,7 +147,6 @@ class DeepSpeedPolicy(BasePolicy):
         optim.param_groups = {}
         return optim
     
-
     def create_lr_scheduler(
         self,
         optim: Optimizer,
@@ -159,7 +160,6 @@ class DeepSpeedPolicy(BasePolicy):
             num_warmup_steps=warmup_steps,
             num_training_steps=num_training_steps,
         )
-
 
     def _init_deepspeed_engine_for_inference(
         self,
@@ -219,7 +219,7 @@ class DeepSpeedPolicy(BasePolicy):
 
         ds_engine.empty_partition_cache()
         ds_engine.destroy()  # todo(milad): why deeospeed has these globals
-    
+
     def _patch_ds_config_for_optimizer(
         self,
         config: HfTrainerDeepSpeedConfig,

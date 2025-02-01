@@ -30,7 +30,7 @@ logger = get_logger(__name__)
 class PPOTrainer(OnPolicyTrainer):
     """
     PPO Trainer.
-    Impelmentation of the PPO update rule.
+    Implementation of the PPO update rule.
     """
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -38,7 +38,7 @@ class PPOTrainer(OnPolicyTrainer):
     def step(self, episodes: EpisodeDataset) -> None:
         """
         Performs a single update step using the dataset rollout under the current policy.
-        Each updatestep can rum multiple epochs of optimization.
+        Each update step can rum multiple epochs of optimization.
         """
         self.policy.init_actor_engine_if_needed()
         self.policy.init_critic_engine_if_needed()
@@ -267,6 +267,53 @@ class PPOTrainer(OnPolicyTrainer):
         self,
         inputs: Dict[str, torch.Tensor],
     ) -> Dict[str, Union[float, torch.Tensor]]:
+        # To better understand the alignment of inputs, logits, logps, and labels,
+        # we provide a detailed explanation below.
+        # -----------------------------------------------------------------------------------------------------------
+        # Consider the sequence: "<s> q1 q2 a b c </s>", where "<s> q1 q2" forms the prompt, and "a b c </s>"
+        # the response, with `prompt_len = 3` and `response_len = 4`. Additionally, we include a padding token at
+        # the end for the sake of generality.
+        #
+        # Here is the inputs dictionary setup:
+        # Inputs:
+        # [     <s>           q1           q2           a            b            c           </s>         <p>   ]
+        # Attn Mask:
+        # [       1            1            1           1            1            1              1           0   ]
+        # Labels:
+        # [    -100         -100         -100        ID_a         ID_b         ID_c        ID_</s>        -100   ]
+        # >>> seq_len = torch.sum(attn_mask) = 7
+        #
+        # Feeding the Inputs+Attn Mask, the model outputs logits for next tokens in the sequence:
+        # Logits:
+        # [  p(.|<s>)      p(.|q1)      p(.|q2)      p(.|a)       p(.|b)       p(.|c)      p(.|</s>)    p(.|<p>)]
+        #
+        # We exclude the nonsensical last logit (predicting beyond </s>). Also, to obtain the logprobs of next
+        # ground-truth token, we shift the labels by 1 to the left:
+        #
+        # Valid Logits:
+        # [  p(.|<s>)      p(.|q1)      p(.|q2)      p(.|a)       p(.|b)       p(.|c)      p(.|</s>)  ]
+        # Shifted Labels:
+        # [     -100         -100         ID_a        ID_b         ID_c        ID_</s>         -100   ]
+        # Shifted Labels Mask (aka Action Mask), i.e. shifted_labels != -100, highlighting valid token-preds/actions:
+        # [        0            0            1           1            1            1              0   ]
+        # Aligning them to obtain logprobs (lp) of predicting the next token (or lp of action):
+        # [    lp(q1)       lp(q2)        lp(a)       lp(b)        lp(c)      lp(</s>)       lp(<p>)  ]
+        #
+        #
+        # Applying the labels mask gives us logprobs of predicting the valid response tokens (aka actions):
+        # [     -inf          inf         lp(a)       lp(b)        lp(c)      lp(</s>)         -inf   ]
+        # Rewriting the original shifted inputs (for clarity). These are the states we care about:
+        # [      <s>           q1           q2           a            b            c           </s>   ]
+        # In this example, with S=[<s>;q1;q2] as the state and A=a, we compute lp(A|S) = log(p(a|<s>;q1;q2)) = lp(a)
+        #
+        # Note that the values are also computed for the entire sequence, but similar to inputs, we ignore
+        # the last one since it nonsensical (i.e. V(</s>) is not used).
+        # Valid Values:
+        # [    V(<s>)        V(q1)        V(q2)        V(a)         V(b)         V(c)        V(</s>)  ]
+        # Applying the action mask:
+        # [     -inf         -inf         V(q2)        V(a)         V(b)         V(c)          -inf   ]
+        #
+        # >>> logits_seq_len = logps_seq_len = valid_values_len = seq_len - 1 = 6
         # noinspection DuplicatedCode
         inputs = {k: v.to(self.policy.actor.device) for k, v in inputs.items()}
 

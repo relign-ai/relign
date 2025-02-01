@@ -77,9 +77,7 @@ class PPODataCollator:
             batch[COLUMN_VALUES] = []
 
         pad_token_id = 0  # It doesn't matter what the pad token id is, since we will mask it out anyway
-        pad_label = (
-            -100
-        )  # -100 is the default value for the padding token in the loss function
+        pad_label = (-100)  # -100 is the default value for the padding token in the loss function
         pad_logp = -float(1e9)  # Crazy value to show up it in case of a bug
         pad_value = -float(1e9)  # Crazy value to show up it in case of a bug
 

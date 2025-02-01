@@ -1,55 +1,55 @@
-from tqdm import tqdm
+import tqdm 
+import logging
+from pathlib import Path
+from logging import Logger
 from datasets import Dataset
 
-from relign.common.dataset import EpisodeDataset
-from relign.utils.logging import get_logger
-from relign.algorithms.base_algorithm import BaseAlgorithm
+from accelerate import PartialState
+from relign.algorithms.base_trainer import BaseTrainer
 from relign.policies.base_policy import BasePolicy
-from relign.episode_generators.on_policy_episode_generator import(
-    OnPolicyEpisodeGenerator,
-)
-from relign.algorithms.base_trainer import OnPolicyTrainer
+from relign.episode_generators.base_episode_generator import BaseEpisodeGenerator
+from relign.common.dataset import EpisodeDataset
 from relign.utils.dataset import remove_null_columns
 
-logger = get_logger(__name__)
 
-class OnPolicyAlgorithm(BaseAlgorithm):
+logger = logging.get_logger(__name__)
+
+class TrainLoop():
     def __init__(
         self,
-        policy: BasePolicy,  # Reinforce, Actor Critic, Policy Gradient...(so base for now)
-        trainer: OnPolicyTrainer,
-        episode_generator: OnPolicyEpisodeGenerator,
+        seed: int,
+        project_root_dir: Path,
+        policy: BasePolicy,
+        trainer: BaseTrainer,
+        episode_generator: BaseEpisodeGenerator,
+        distributed_state: PartialState,
         verbose: int = 0,
         num_iterations: int = 100,
         num_episodes_per_iteration: int = 100,
         evaluation_freq: int = 10,
         checkpoint_freq: int = 10,
-        **kwargs,
     ):
         """
-        On-Policy Algorithm Base Class.
+        Base of Reinforcement Learning Algorithms.
+        :param policy: The policy to use (PPO, ARCHER, etc)
+        :param trainer: The trainer to use. ( Here we write the update rule and such)
+        :param episode_generator: Returns episodes to train on.
 
-        :param policy: The policy to use (must be a BaseActorCritic instance)
-        :param trainer: The trainer to use.
-        :param episode_generator: Generates episodes to train on.
+        :param device: The device to use.
         :param verbose: The verbosity level.
-        :param num_iterations: Total number of iterations to train for.
-        :param num_episodes_per_iteration: Number of episodes per training iteration.
-        :param evaluation_freq: Frequency of evaluation.
-        :param checkpoint_freq: Frequency of checkpointing.
-        :param **kwargs: Additional algorithm-specific arguments.
         """
-        super().__init__(
-            policy=policy,
-            trainer=trainer,
-            episode_generator=episode_generator,
-            verbose=verbose,
-            num_iterations=num_iterations,
-            num_episodes_per_iteration=num_episodes_per_iteration,
-            evaluation_freq=evaluation_freq,
-            checkpoint_freq=checkpoint_freq,
-            **kwargs,
-        )
+        self.seed = seed
+        self.project_root_dir = (project_root_dir,)
+
+        self.policy = policy
+        self.trainer = trainer
+        self.episode_generator = episode_generator
+        self.verbose = verbose
+        self.num_iterations = num_iterations
+        self.num_episodes_per_iteration = num_episodes_per_iteration
+        self.evaluation_freq = evaluation_freq
+        self.checkpoint_freq = checkpoint_freq
+        self.distributed_state = distributed_state
 
     def learn(self):
         """
@@ -66,9 +66,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
             )
 
             self.trainer.step(episodes=episodes)
-
-            # Onpolicy paramater update for next iteration
-            # self.policy.set_params(self.trainer.policy_train_state.params)
 
         # Evalutate
         if iteration % self.evaluation_freq == 0:
@@ -99,7 +96,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
 
         # TODO: handle distributed environments differently
         # for now we just generate it in the main process
-
         # Feth the epiode path on all the devices
         episode_path = self.episode_generator.get_episode_checkpoint_path(iteration)
 
@@ -125,3 +121,6 @@ class OnPolicyAlgorithm(BaseAlgorithm):
     def _checkpoint(self):
         ...
 
+    @property
+    def logger(self) -> Logger:
+        raise NotImplementedError("logger method is not implemented yet.")

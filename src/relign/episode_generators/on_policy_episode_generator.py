@@ -23,7 +23,6 @@ from relign.episode_generators.base_episode_generator import (
 from relign.inference.base_inference_strategy import InferenceStrategy
 from relign.tasks.base_task import Task
 
-from relign.utils import logging
 
 logger = logging.get_logger(__name__)
 
@@ -113,6 +112,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         self._port_generator_rng = random.Random(self.seed)
         self._set_vllm_ports()
 
+
     def _set_vllm_ports(self, seed: Optional[int] = None):
         """
         The main process searches for self.distributed_state.num_processes's free ports.
@@ -135,8 +135,6 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         logger.info(
             f"Rank {self.distributed_state.process_index} using vLLM port {self._vllm_port}"
         )
-
-    
 
     def _log_on_main(self, msg, level="info"):
         if self.is_main_process() and self._logger is not None:

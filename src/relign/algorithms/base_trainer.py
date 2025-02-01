@@ -6,8 +6,6 @@ from pathlib import Path
 from accelerate import PartialState
 
 from relign.policies.base_policy import BasePolicy
-from relign.common.buffer import Buffer
-from relign.common.dataset import EpisodeDataset
 
 
 @dataclass
@@ -117,38 +115,4 @@ class BaseTrainer(ABC):
         return self.distributed_state.is_main_process
 
 
-class OnPolicyTrainer(BaseTrainer):
-    def __init__(self, **kwargs):
-        super().__init__(
-            **kwargs,
-        )
 
-    @abstractmethod
-    def step(self, episodes: EpisodeDataset) -> None:
-        """
-        Update method of the on policy trainer, which we will give a list of episodes to do a
-        multi-epoch optimization on.
-        """
-        pass
-
-
-class OffPolicyTrainer(BaseTrainer):
-    """
-    For Off policy algorithms.
-    """
-
-    def __init__(
-        self,
-        **kwargs,
-    ):
-        super().__init__(
-            **kwargs,
-        )
-
-    @abstractmethod
-    def step(self, buffer: Buffer) -> None:
-        """
-        In the off policy trainer update step we pass in a buffer from which we
-        can sample episodes during a training step.
-        """
-        pass

@@ -25,6 +25,7 @@ def actor_model_fn():
     return _actor_model_fn
 
 
+
 @pytest.fixture
 def critic_model_fn():
     """
@@ -34,6 +35,7 @@ def critic_model_fn():
         critic_backbone = AutoModel.from_pretrained("gpt-2")
         return PretrainedModelValueHead(pretrained_model=critic_backbone)
     return _critic_model_fn
+
 
 
 @pytest.fixture
@@ -52,7 +54,6 @@ def actor_policy(actor_model_fn):
     return ActorPolicy(
         actor_model_fn=actor_model_fn
     )
-
 
 
 @pytest.fixture

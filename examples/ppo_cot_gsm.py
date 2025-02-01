@@ -1,6 +1,5 @@
 import hydra
 import argparse
-import torch
 from pathlib import Path
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModel
 from omegaconf import OmegaConf
@@ -10,14 +9,19 @@ from relign.policies.actor_critic_policy import ActorCriticPolicy
 from relign.policies.base_critic import PretrainedModelValueHead
 from relign.algorithms.on_policy_algorithm import OnPolicyAlgorithm
 from relign.algorithms.ppo.trainer import PPOTrainer
-from relign.episode_generators.math_episode_generator import(
+from relign.episode_generators.envs.math_episode_generator import(
     MathEpisodeGenerator,
     MATHRewardFunction,
 )
 
+from relign.inference.cot_inference_strategy import COTInferenceStrategy
+from relign.inference.tree_inference.expansion import EfficientIIDExpander
+from relign.inference.tree_inference.answer_extraction import (IdentityAnswerExtractor)
 # For actor critic methods, we need a Distributed Runner
 from relign.runners.distributed_runner import DistributedRunner
 from relign.common.vllm_server import VLLMServer
+from relign.guidance.llms._mock import Mock
+from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor 
 
 
 def ppo_gsm(cfg,  local_rank: int = -1):
@@ -58,20 +62,13 @@ def ppo_gsm(cfg,  local_rank: int = -1):
         timeout=1,
     )
 
-    # -------- Inference Strategy --------#
-    from relign.inference.cot_inference_strategy import COTInferenceStrategy
-    from relign.inference.tree_inference.expansion import EfficientIIDExpander
-    from relign.inference.tree_inference.answer_extraction import (IdentityAnswerExtractor)
-    from relign.guidance.llms._openai_vllm import OpenAIVLLM
-
     n_episodes_per_iteration = 1
     n_rollouts_per_sample = 1
     max_concurrent_programs = 1
     max_concurrent_generations = 1
     n_epiodes_per_iteration = n_episodes_per_iteration / n_rollouts_per_sample
     
-    from relign.guidance.llms._mock import Mock
-    from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor 
+    
     mock_guidance = Mock()
 
     # ---------- Node Expanders---------- #

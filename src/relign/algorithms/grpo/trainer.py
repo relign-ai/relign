@@ -41,7 +41,7 @@ class GRPOTrainer(OnPolicyTrainer):
         self.policy.init_actor_engine_if_needed()
 
         # change to appropriate input structure
-        episodes = self._get_curr_logs_and_values(episodes)
+        episodes = self._hydrate_log_probs(episodes)
         dataloader = prepare_data_loader_for_training(
             episodes, 
             per_device_batch_size=self.per_device_batch_size, 
@@ -86,7 +86,6 @@ class GRPOTrainer(OnPolicyTrainer):
         ):
             for step, batch in enumerate(dataloader_iter):
                 self._step(batch)
-
 
     def _hydrate_log_probs(
         self, 
@@ -172,11 +171,11 @@ class GRPOTrainer(OnPolicyTrainer):
 
         return episodes 
 
-
     def _step(
         self,
         inputs: Dict[str, torch.Tensor],
     ) -> Dict[str, Union[float, torch.Tensor]]:
+    
         # noinspection DuplicatedCode
         inputs = {k: v.to(self.policy.actor.device) for k, v in inputs.items()}
 
@@ -186,18 +185,14 @@ class GRPOTrainer(OnPolicyTrainer):
         labels = inputs["labels"]  # Shape: (batch_size, max_seq_len)
         scores = inputs["rewards"]  # Shape: (batch_size,)
 
-        shifted_labels = labels[
-            ..., 1:
-        ].contiguous()  # Shape: (batch_size, max_seq_len-1)
+        shifted_labels = labels[ ..., 1: ].contiguous()  # Shape: (batch_size, max_seq_len-1)
         shifted_labels_mask = (shifted_labels != -100).to(
             attention_mask.dtype
         )  # Shape: (batch_size, max_seq_len-1)
 
         # Note that this is the log probability of the actor model
         # in the beginning of this iteration (aka the old log probs)
-        shifted_actor_logprobs = inputs[
-            COLUMN_ACTOR_SHIFTED_LOGPS
-        ]  # Shape: (batch_size, max_seq_len-1)
+        shifted_actor_logprobs = inputs[COLUMN_ACTOR_SHIFTED_LOGPS]  # Shape: (batch_size, max_seq_len-1)
         assert shifted_actor_logprobs.shape == shifted_labels_mask.shape
 
         #  Compute the rewards, advantages, and returns
@@ -211,19 +206,11 @@ class GRPOTrainer(OnPolicyTrainer):
             # The `advantages` is computed for the actions. That's why they are of shape (batch_size, max_seq_len-1)
             # Shape of `advantages`: (batch_size, max_seq_len-1)
             if "advantages" not in inputs:
-                # Print all the keys in the inputs
-                # Note that this is the value of the critic model in the beginning of
-                # this iteration (aka the old values)
-                values = inputs[COLUMN_VALUES]  # Shape: (batch_size, max_seq_len)
-                valid_values = values[:, :-1]  # Shape: (batch_size, max_seq_len-1)
-                assert valid_values.shape == shifted_actor_logprobs.shape
-                valid_values = valid_values * shifted_labels_mask
-                advantages, returns = self._compute_advantages(
-                    valid_values, rewards, shifted_labels_mask
-                )
-
+                advantages = self._get_advantages()
+            
             assert advantages.shape == shifted_actor_logprobs.shape
             assert rewards.shape == shifted_actor_logprobs.shape
+
 
         model_inputs = {
             "input_ids": input_ids,
@@ -242,6 +229,7 @@ class GRPOTrainer(OnPolicyTrainer):
 
         self.policy.actor.backward(actor_loss)
         self.policy.actor.step()
+        
         # Get rid of actor's activations to free up memory
         actor_loss = actor_loss.detach().clone()
         release_memory()
