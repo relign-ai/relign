@@ -247,6 +247,14 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
 
 
 class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
+    def __init__(
+        self, 
+        with_process_reward: bool = False,
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.with_process_reward = with_process_reward # Wether we want to reward reasoning tokens
+
     def _generate_episodes(
         self, 
         inference_results: Dataset, 
@@ -301,23 +309,19 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                         )
                     )
 
-                    # Vectorized assignment using tensor indexing
-                    process_rewards = torch.zeros_like(response_token_ids, dtype=torch.float)
-                    if reasoning_indices:
-                        idx_tensor = torch.tensor(
-                            reasoning_indices, 
-                            dtype=torch.long, 
-                            device=response_token_ids.device
-                        )
-                        process_rewards[idx_tensor] = 1.0
-
                 except Exception as e:
                     logger.info(f"Failed to tokenize query and response: {e}")
                     metrics.setdefault("empty_response", []).append(True)
                     continue
+            
+                # Reward reasoning tokens
+                if self.with_process_reward:
+                    process_reward = 1
+                    process_rewards = [0] * len(response_token_ids)
+                    for index in reasoning_indices:
+                        process_rewards[index] = process_reward 
 
                 all_responses.append(response_text)
-
                 if self.max_sequence_length is not None:
                     seq_len = len(query_token_ids) + len(response_token_ids)
                     if seq_len > self.max_sequence_length:
@@ -344,7 +348,7 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                     response_token_ids=response_token_ids,
                     reward=float(reward),
                     group=int(i),
-                    advantages=[1.0],
+                    process_rewards=process_rewards
                 )
 
                 episodes.append(episode)
