@@ -1,18 +1,17 @@
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
+import numpy as np
 import torch
-from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from datasets import Dataset
 from tqdm import tqdm
 from deepspeed import comm as dist
-from deepspeed import DeepSpeedEngine
 from accelerate.utils import gather, pad_across_processes, release_memory
 
 from relign.common.deepspeed_utils import prepare_data_loader_for_inference
 from relign.common.dataset import EpisodeDataset
-from relign.algorithms.base_trainer import OnPolicyTrainer
+from relign.algorithms.base_trainer import BaseTrainer 
 from relign.utils.trainer import prepare_data_loader_for_training 
 
 from relign.algorithms.ppo.data_collator import (
@@ -27,7 +26,7 @@ from relign.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-class PPOTrainer(OnPolicyTrainer):
+class PPOTrainer(BaseTrainer):
     """
     PPO Trainer.
     Implementation of the PPO update rule.
@@ -267,54 +266,7 @@ class PPOTrainer(OnPolicyTrainer):
         self,
         inputs: Dict[str, torch.Tensor],
     ) -> Dict[str, Union[float, torch.Tensor]]:
-        # To better understand the alignment of inputs, logits, logps, and labels,
-        # we provide a detailed explanation below.
-        # -----------------------------------------------------------------------------------------------------------
-        # Consider the sequence: "<s> q1 q2 a b c </s>", where "<s> q1 q2" forms the prompt, and "a b c </s>"
-        # the response, with `prompt_len = 3` and `response_len = 4`. Additionally, we include a padding token at
-        # the end for the sake of generality.
-        #
-        # Here is the inputs dictionary setup:
-        # Inputs:
-        # [     <s>           q1           q2           a            b            c           </s>         <p>   ]
-        # Attn Mask:
-        # [       1            1            1           1            1            1              1           0   ]
-        # Labels:
-        # [    -100         -100         -100        ID_a         ID_b         ID_c        ID_</s>        -100   ]
-        # >>> seq_len = torch.sum(attn_mask) = 7
-        #
-        # Feeding the Inputs+Attn Mask, the model outputs logits for next tokens in the sequence:
-        # Logits:
-        # [  p(.|<s>)      p(.|q1)      p(.|q2)      p(.|a)       p(.|b)       p(.|c)      p(.|</s>)    p(.|<p>)]
-        #
-        # We exclude the nonsensical last logit (predicting beyond </s>). Also, to obtain the logprobs of next
-        # ground-truth token, we shift the labels by 1 to the left:
-        #
-        # Valid Logits:
-        # [  p(.|<s>)      p(.|q1)      p(.|q2)      p(.|a)       p(.|b)       p(.|c)      p(.|</s>)  ]
-        # Shifted Labels:
-        # [     -100         -100         ID_a        ID_b         ID_c        ID_</s>         -100   ]
-        # Shifted Labels Mask (aka Action Mask), i.e. shifted_labels != -100, highlighting valid token-preds/actions:
-        # [        0            0            1           1            1            1              0   ]
-        # Aligning them to obtain logprobs (lp) of predicting the next token (or lp of action):
-        # [    lp(q1)       lp(q2)        lp(a)       lp(b)        lp(c)      lp(</s>)       lp(<p>)  ]
-        #
-        #
-        # Applying the labels mask gives us logprobs of predicting the valid response tokens (aka actions):
-        # [     -inf          inf         lp(a)       lp(b)        lp(c)      lp(</s>)         -inf   ]
-        # Rewriting the original shifted inputs (for clarity). These are the states we care about:
-        # [      <s>           q1           q2           a            b            c           </s>   ]
-        # In this example, with S=[<s>;q1;q2] as the state and A=a, we compute lp(A|S) = log(p(a|<s>;q1;q2)) = lp(a)
-        #
-        # Note that the values are also computed for the entire sequence, but similar to inputs, we ignore
-        # the last one since it nonsensical (i.e. V(</s>) is not used).
-        # Valid Values:
-        # [    V(<s>)        V(q1)        V(q2)        V(a)         V(b)         V(c)        V(</s>)  ]
-        # Applying the action mask:
-        # [     -inf         -inf         V(q2)        V(a)         V(b)         V(c)          -inf   ]
-        #
-        # >>> logits_seq_len = logps_seq_len = valid_values_len = seq_len - 1 = 6
-        # noinspection DuplicatedCode
+
         inputs = {k: v.to(self.policy.actor.device) for k, v in inputs.items()}
 
         # Turn this into a dataclass
@@ -326,6 +278,7 @@ class PPOTrainer(OnPolicyTrainer):
         shifted_labels = labels[
             ..., 1:
         ].contiguous()  # Shape: (batch_size, max_seq_len-1)
+
         shifted_labels_mask = (shifted_labels != -100).to(
             attention_mask.dtype
         )  # Shape: (batch_size, max_seq_len-1)
@@ -339,16 +292,18 @@ class PPOTrainer(OnPolicyTrainer):
 
         #  Compute the rewards, advantages, and returns
         with torch.no_grad():
-            #TODO: add KL Penalty Here
-            shifted_ref_logprobs = None
+            if self._is_kl_penalty_enabled():
+                shifted_ref_logprobs = inputs[COLUMN_REF_SHIFTED_LOGPS]
+            else:
+                shifted_ref_logprobs = None
 
-            rewards, non_score_rewards, kls = self._compute_rewards(
+            rewards, _, _ = self._compute_rewards(
                 scores, shifted_actor_logprobs, shifted_ref_logprobs, attention_mask
+
             )
             # The `advantages` is computed for the actions. That's why they are of shape (batch_size, max_seq_len-1)
             # Shape of `advantages`: (batch_size, max_seq_len-1)
             if "advantages" not in inputs:
-                # Print all the keys in the inputs
                 # Note that this is the value of the critic model in the beginning of
                 # this iteration (aka the old values)
                 values = inputs[COLUMN_VALUES]  # Shape: (batch_size, max_seq_len)
@@ -383,6 +338,21 @@ class PPOTrainer(OnPolicyTrainer):
         actor_loss = actor_loss.detach().clone()
         release_memory()
         # training step complete
+
+        # Step 3: Compute critic loss
+        critic_loss, critic_metrics = self.policy.critic_loss(
+            model_inputs=model_inputs,
+            shifted_labels_mask=shifted_labels_mask,
+            old_valid_values=valid_values,
+            returns=returns,
+        )
+
+        self.policy.critic.backward(critic_loss)
+        self.policy.critic.step()
+        # Get rid of critic's activations to free up memory
+        critic_loss = critic_loss.detach().clone()
+        release_memory()
+
 
     def _compute_rewards(
         self,
@@ -484,3 +454,71 @@ class PPOTrainer(OnPolicyTrainer):
 
         returns = advantages + valid_values
         return advantages.detach(), returns.detach()
+
+    def _compute_kl_penalty(
+        self,
+        logprob: Union[torch.FloatTensor, np.ndarray],
+        ref_logprob: Union[torch.FloatTensor, np.ndarray],
+        estimation_type: Optional[str] = None,
+    ) -> Union[torch.FloatTensor, np.ndarray]:
+        """
+        Compute the per-token KL penalty between the log probabilities of the actor and the reference model.
+
+        Args:
+            logprob (`Union[torch.FloatTensor, np.ndarray]`):
+                Log probabilities of the actor, shape (`batch_size`, T)
+            ref_logprob (`Union[torch.FloatTensor, np.ndarray]`):
+                Log probabilities of the reference model, shape (`batch_size`, T)
+
+        Returns:
+            `Union[torch.FloatTensor, np.ndarray]`: KL penalty, shape (`batch_size`, `T`)
+        """
+
+        if estimation_type is None:
+            estimation_type = self.ppo_hparams.kl_penalty
+
+        if estimation_type == "kl":
+            return logprob - ref_logprob
+
+        if estimation_type == "abs":
+            return (logprob - ref_logprob).abs()
+
+        if estimation_type == "mse":
+            return 0.5 * (logprob - ref_logprob).square()
+
+        if estimation_type == "control_variate":
+            # Compute the per-token approximate KL penalty between the log probabilities of the actor
+            # and the reference model as suggested by Schulman in http://joschu.net/blog/kl-approx.html
+            #
+            # D_KL [π_θ || π_ref] =
+            #    π_ref(y_t | x, y_<t) / π_θ(y_t | x, y_<t) - log(π_ref(y_t | x, y_<t) / π_θ(y_t | x, y_<t)) - 1
+            #
+
+            log_ratio = ref_logprob - logprob
+            if isinstance(log_ratio, torch.Tensor):
+                kl = torch.exp(log_ratio) - log_ratio - 1
+            elif isinstance(log_ratio, np.ndarray):
+                kl = np.exp(log_ratio) - log_ratio - 1
+            else:
+                raise ValueError("Unsupported type for log_ratio.")
+            return kl
+
+        if estimation_type == "seq_control_variate":
+            log_ratio = ref_logprob - logprob
+            if isinstance(log_ratio, torch.Tensor):
+                prob_ratio = torch.exp(log_ratio.sum(dim=-1, keepdim=True))
+                kl = prob_ratio - log_ratio - 1
+            elif isinstance(log_ratio, np.ndarray):
+                prob_ratio = np.exp(log_ratio.sum(axis=-1, keepdims=True))
+                kl = prob_ratio - log_ratio - 1
+            else:
+                raise ValueError("Unsupported type for log_ratio.")
+            return kl
+
+        if estimation_type == "full":
+            # Flip is required due to this issue? :https://github.com/pytorch/pytorch/issues/57459
+            return F.kl_div(
+                ref_logprob, logprob, log_target=True, reduction="none"
+            ).sum(-1)
+
+        raise NotImplementedError

@@ -273,23 +273,6 @@ class DebugEpisodeGenerator(BaseEpisodeGenerator):
         return episodes_dataset
 
 
-# TODO: What best way to differentiate between the more classical
-# RL environments and the ones where we rollout episodes from some
-# Model itself.
-# class EpisodeGeneratorEnvironment(BaseEpisodeGenerator):
-#     """
-#     Generate episodes by interacting with some environment,
-#     in an policy step, environment step kind of way.
-#     [o, a, r, o, a, r]
-#     """
-
-#     def __init__(self, environment: Env, policy):
-#         self.environment = environment
-#         self.policy = policy
-
-#     def generate_episodes(self) -> List[Episode]:
-#         pass
-
 
 class EpisodeGeneratorInference(BaseEpisodeGenerator):
     """

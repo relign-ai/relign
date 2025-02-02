@@ -25,6 +25,7 @@ class BaseCritic(nn.Module):
         """
         pass
 
+
 class PretrainedModelValueHead(BaseCritic):
     def __init__(
             self,

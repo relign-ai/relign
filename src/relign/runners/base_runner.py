@@ -4,7 +4,7 @@ from typing import Type, Dict, Any, Optional
 from abc import ABC, abstractmethod
 from pathlib import Path  # Corrected import
 
-from relign.algorithms.base_algorithm import BaseAlgorithm
+from relign.algorithms.train_loop import TrainLoop 
 from relign.policies.base_policy import BasePolicy 
 from relign.episode_generators.base_episode_generator import BaseEpisodeGenerator
 from relign.algorithms.base_trainer import BaseTrainer
@@ -14,7 +14,7 @@ class BaseRunner(ABC):
         self,
         experiment_name: str,
         directory: str,
-        algorithm_cls: Type[BaseAlgorithm],
+        algorithm_cls: Type[TrainLoop],
         policy_cls: Type[BasePolicy],
         trainer_cls: Type[BaseTrainer],
         episode_generator_cls: Type[BaseEpisodeGenerator],
@@ -39,7 +39,8 @@ class BaseRunner(ABC):
         self._init_random_seed()
 
         # classes
-        self.algorithm_cls: Type[BaseAlgorithm] = algorithm_cls
+        # TODO: change naming of algorithm here to train loop to avoid confusion
+        self.algorithm_cls: Type[TrainLoop] = algorithm_cls
         self.policy_cls: Type[BasePolicy] = policy_cls
         self.trainer_cls: Type[BaseTrainer] = trainer_cls
         self.episode_generator_cls: Type[BaseEpisodeGenerator] = episode_generator_cls

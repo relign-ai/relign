@@ -4,7 +4,10 @@ from relign.inference.tree_inference.branch_factor_strategy import ListBranchFac
 from relign.inference.tree_inference.expansion import NodeExpander
 from relign.inference.tree_inference_strategy import TreeInferenceStrategy
 
-from relign.utils.logging import logger
+
+from relign.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 class COTInferenceStrategy(TreeInferenceStrategy):
     def __init__(
@@ -13,22 +16,23 @@ class COTInferenceStrategy(TreeInferenceStrategy):
         node_expander: NodeExpander,
         **kwargs,
     ):
-        if "branch_factor_strategy" in node_expander._params:
-            old_strategy = node_expander._params["branch_factor_strategy"]
-            logger.warning(
-                "The old branch_factor_strategy is overwritten by COTInferenceStrategy"
-            )
-            logger.warning(f"Old branch_factor_strategy: {old_strategy}")
-            node_expander._params.pop("branch_factor_strategy")
+        """ Chain of thought inference is a listBranchfactor witn a single root/question node
+            branching out to `samples` single path reasoning traces. 
 
-        node_expander = node_expander.construct(
-            branch_factor_strategy=ListBranchFactor(
-                branch_factors=[
-                    {"depth": 0, "branch_factor": samples}, # Branch out at the root node (i.e., the question)
-                    {"depth": 1, "branch_factor": 1}, # follow a single path
-                ],
-            ),
+            Therefore we overwrite the branchfactor strategy    
+        """
+        logger.warning(
+            "The old branch_factor_strategy is overwritten by COTInferenceStrategy"
         )
+
+        branch_factor_strategy = ListBranchFactor(
+            branch_factors=[
+                {"depth": 0, "branch_factor": samples}, # Branch out at the root node (i.e., the question)
+                {"depth": 1, "branch_factor": 1}, # follow a single path
+            ],
+        )
+        node_expander.branch_factor_strategy = branch_factor_strategy
+
         super().__init__(
             node_expander=node_expander,
             **kwargs,

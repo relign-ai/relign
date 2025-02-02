@@ -3,7 +3,7 @@ import hydra
 from omegaconf import OmegaConf, dictconfig
 from transformers import AutoModelForCausalLM, AutoModel
 
-from relign.algorithms.on_policy_algorithm import OnPolicyAlgorithm
+from relign.algorithms.train_loop import TrainLoop
 from relign.policies.actor_critic_policy import ActorCriticPolicy
 from relign.policies.base_critic import PretrainedModelValueHead
 from relign.algorithms.ppo.trainer import PPOTrainer
@@ -21,6 +21,7 @@ def test_drunner_ppo_policy(cfg, local_rank: int =-1):
     def actor_model_fn():
         ## load gp2 as actor
         return AutoModelForCausalLM.from_pretrained("gpt2").to("cuda")
+
 
     def critic_model_fn():
         # Wrap the critic with the value head model.
@@ -49,7 +50,7 @@ def test_drunner_ppo_policy(cfg, local_rank: int =-1):
     }
     
     # Define an algorithm (takes a policy and a trainer)
-    algorithm_cls = OnPolicyAlgorithm
+    algorithm_cls = TrainLoop
     algorithm_kwargs = {
         "num_iterations": 2,
         "num_episodes_per_iteration":5,

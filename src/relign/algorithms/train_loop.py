@@ -1,5 +1,4 @@
 import tqdm 
-import logging
 from pathlib import Path
 from logging import Logger
 from datasets import Dataset
@@ -11,8 +10,9 @@ from relign.episode_generators.base_episode_generator import BaseEpisodeGenerato
 from relign.common.dataset import EpisodeDataset
 from relign.utils.dataset import remove_null_columns
 
+from relign.utils.logging import get_logger
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
 
 class TrainLoop():
     def __init__(

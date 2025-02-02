@@ -78,9 +78,7 @@ class TreeInferenceStrategy(InferenceStrategy):
         self.max_concurrent_programs = max_concurrent_programs
         self.max_concurrent_generations = max_concurrent_generations
 
-        # TODO: we need to find a better way do to lazy loading.
 
-        # self.guidance_llm_lazy = guidance_llm
         self.guidance_llm = guidance_llm
         self.question_field = question_field
         self.no_cache = no_cache

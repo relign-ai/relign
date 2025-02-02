@@ -1,6 +1,4 @@
-import copy
 import json
-import logging
 import random
 import shutil
 import tempfile
@@ -23,8 +21,10 @@ from relign.episode_generators.base_episode_generator import (
 from relign.inference.base_inference_strategy import InferenceStrategy
 from relign.tasks.base_task import Task
 
+from relign.utils.logging import get_logger
 
-logger = logging.get_logger(__name__)
+
+logger = get_logger(__name__)
 
 
 class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
@@ -199,7 +199,8 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
                         self._orig_ds = self._orig_ds.shuffle(seed=self.seed)
 
     def generate(
-        self, iteration: Optional[int] = None, 
+        self, 
+        iteration: Optional[int] = None, 
         latest_policy_path: Optional[Path] = None
     ):
         """

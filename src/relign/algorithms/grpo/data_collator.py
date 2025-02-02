@@ -9,7 +9,7 @@ COLUMN_VALUES = "critic_values"
 
 logger = get_logger(__name__)
 
-class PPODataCollator:
+class GRPODataCollator:
     """
         Collates the given data instances into a batch.
         Every data instance should have the following keys:
@@ -17,6 +17,7 @@ class PPODataCollator:
         - "response_token_ids": The token ids of the response.
         - "score": The reward of the response (single scalar per response)
         - "advantages": The advantages of the response.
+        - "group: The group of the response. It is a scalar tensor.
 
         Args:
             data_instances (List[Dict[str, Any]]):
@@ -72,16 +73,10 @@ class PPODataCollator:
         if has_actor_logps:
             batch[COLUMN_ACTOR_SHIFTED_LOGPS] = []
 
-        has_values = COLUMN_VALUES in instances[0]
-        if has_values:
-            batch[COLUMN_VALUES] = []
 
         pad_token_id = 0  # It doesn't matter what the pad token id is, since we will mask it out anyway
-        pad_label = (
-            -100
-        )  # -100 is the default value for the padding token in the loss function
+        pad_label = (-100)  # -100 is the default value for the padding token in the loss function
         pad_logp = -float(1e9)  # Crazy value to show up it in case of a bug
-        pad_value = -float(1e9)  # Crazy value to show up it in case of a bug
 
         def prepare_shifted_logps(shifted_logps_with_query, query_len, response_len):
             assert len(shifted_logps_with_query) == (
@@ -133,7 +128,6 @@ class PPODataCollator:
                 assert len(labels) == len(advantages)
                 batch["advantages"].append(instance["advantages"])
 
-
             if has_scores:
                 assert isinstance(instance['rewards'], float)
                 batch["rewards"].append(instance["rewards"])
@@ -155,20 +149,6 @@ class PPODataCollator:
                 )
                 assert len(shifted_actor_logps) == (max_seq_length - 1)
                 batch[COLUMN_ACTOR_SHIFTED_LOGPS].append(shifted_actor_logps)
-
-            if has_values:
-                values_with_query = instance[COLUMN_VALUES]
-                values_without_query = values_with_query[len(query_token_ids) -1 :]
-                assert(len(values_without_query) -1) == len(response_token_ids)
-
-                values = (
-                    [pad_value] * (len(query_token_ids) -1) 
-                    + values_without_query 
-                    + [pad_value] * num_pad_at_end
-                )
-
-                assert len(values) == max_seq_length
-                batch[COLUMN_VALUES].append(values)
 
 
         # Convert the lists to tensors

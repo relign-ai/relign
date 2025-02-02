@@ -9,7 +9,7 @@ from relign.runners.base_runner import BaseRunner
 from relign.policies.base_policy import BasePolicy
 from relign.algorithms.base_trainer import BaseTrainer
 from relign.episode_generators.base_episode_generator import BaseEpisodeGenerator
-from relign.algorithms.base_algorithm import BaseAlgorithm
+from relign.algorithms.train_loop import TrainLoop 
 from relign.policies.actor_critic_policy import DeepSpeedPolicy
 
 
@@ -18,7 +18,7 @@ P = TypeVar("P", bound=BasePolicy)
 Pds = TypeVar("Pds", bound=DeepSpeedPolicy)
 T = TypeVar("T", bound=BaseTrainer)
 E = TypeVar("E", bound=BaseEpisodeGenerator)
-A = TypeVar("A", bound=BaseAlgorithm)
+A = TypeVar("A", bound=TrainLoop)
 
 # TODO: Sharpen the typing here.
 # The policy should be a deepspeedpolicy,

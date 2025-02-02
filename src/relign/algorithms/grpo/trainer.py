@@ -1,23 +1,21 @@
-from typing import Any, Dict, List, Optional, Tuple, Union
-import torch
-from torch.utils.data import DataLoader
-import torch.nn.functional as F
-from torch.utils.data import Dataset
+from typing import Dict, Tuple, Union, Optional
 
-from datasets import Dataset
-from tqdm import tqdm
+import torch
+import torch.nn.functional as F
+import numpy as np
 from deepspeed import comm as dist
 from accelerate.utils import gather, pad_across_processes, release_memory
+from datasets import Dataset
+from tqdm import tqdm
 
 from relign.common.deepspeed_utils import prepare_data_loader_for_inference
 from relign.common.dataset import EpisodeDataset
 from relign.algorithms.base_trainer import OnPolicyTrainer
 from relign.utils.trainer import prepare_data_loader_for_training 
 
-from relign.algorithms.ppo.data_collator import (
-    PPODataCollator, 
-    COLUMN_ACTOR_SHIFTED_LOGPS, 
-    COLUMN_VALUES
+from relign.algorithms.grpo.data_collator import (
+    GRPODataCollator, 
+    COLUMN_ACTOR_SHIFTED_LOGPS
 )
 
 from relign.utils.logging import get_logger
@@ -30,7 +28,15 @@ class GRPOTrainer(OnPolicyTrainer):
     PPO Trainer.
     Impelmentation of the PPO update rule.
     """
-    def __init__(self, **kwargs):
+
+    def __init__(
+        self, 
+        num_groups: int,
+        group_size: int,
+        **kwargs
+    ):
+        self.num_groups =  num_groups
+        self.group_size = group_size
         super().__init__(**kwargs)
 
     def step(self, episodes: EpisodeDataset) -> None:
@@ -48,7 +54,7 @@ class GRPOTrainer(OnPolicyTrainer):
             seed=self.seed,
             drop_last=False,
             data_loader_kwargs={
-                "collate_fn": PPODataCollator(),
+                "collate_fn": GRPODataCollator(),
                 "num_workers": self.dataloader_num_workers,
                 "pin_memory": self.dataloader_pin_memory,
             }
@@ -76,7 +82,7 @@ class GRPOTrainer(OnPolicyTrainer):
         )
         progress_bar.update(self.state.global_step)
 
-        # Set everything in train mode
+        # Set the actor in train mode
         self.policy.actor.train()
 
         for epoch in tqdm(
@@ -84,8 +90,9 @@ class GRPOTrainer(OnPolicyTrainer):
             desc="Epoch", 
             disable=not self._is_main_process()
         ):
-            for step, batch in enumerate(dataloader_iter):
+            for _, batch in enumerate(dataloader_iter):
                 self._step(batch)
+
 
     def _hydrate_log_probs(
         self, 
@@ -198,16 +205,23 @@ class GRPOTrainer(OnPolicyTrainer):
         #  Compute the rewards, advantages, and returns
         with torch.no_grad():
             #TODO: add KL Penalty Here
-            shifted_ref_logprobs = None
+            if self.is_kl_poenalty_enabled():
+                shifted_ref_logprobs = None
+            else:
+                shifted_ref_logprobs = None
 
-            rewards, non_score_rewards, kls = self._compute_rewards(
+            # Shape of rewards: (batch_size, max_seq_len-1)
+            rewards, _, _= self._compute_rewards(
                 scores, shifted_actor_logprobs, shifted_ref_logprobs, attention_mask
             )
-            # The `advantages` is computed for the actions. That's why they are of shape (batch_size, max_seq_len-1)
+
             # Shape of `advantages`: (batch_size, max_seq_len-1)
             if "advantages" not in inputs:
-                advantages = self._get_advantages()
-            
+                advantages = self._compute_advantages(rewards)
+            else:
+                precomputed_advantages = inputs["advantages"]
+                advantages = precomputed_advantages[:, 1:] 
+
             assert advantages.shape == shifted_actor_logprobs.shape
             assert rewards.shape == shifted_actor_logprobs.shape
 
@@ -218,7 +232,7 @@ class GRPOTrainer(OnPolicyTrainer):
             "labels": labels,
         }
 
-        # Step 2: Compute the policy/actor loss
+        # Step 2: Compute the actor loss
         actor_loss, is_skipped, actor_metrics, approx_ref_kl = self.policy.actor_loss(
             model_inputs=model_inputs,
             shifted_labels_mask=shifted_labels_mask,
@@ -233,7 +247,7 @@ class GRPOTrainer(OnPolicyTrainer):
         # Get rid of actor's activations to free up memory
         actor_loss = actor_loss.detach().clone()
         release_memory()
-        # training step complete
+
 
     def _compute_rewards(
         self,
@@ -244,35 +258,34 @@ class GRPOTrainer(OnPolicyTrainer):
     ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """
         Compute per token rewards from scores and KL-penalty.
-
         Args:
             scores (`torch.FloatTensor`):
-                Scores from the episodes; one scalar per episode, shape (`batch_size`)
+                Outcome Scores from the episodes; one scalar per episode, shape (`group`, `group_size`)
             shifted_actor_logprobs (`torch.FloatTensor`):
-                Log probabilities of the actor, shape (`batch_size`, `max_seq_len-1`)
+                Log probabilities of the actor, shape (`group`, `group_size`, `max_seq_len-1`)
             shifted_ref_logprobs (`torch.FloatTensor`):
-                Log probabilities of the reference model, shape (`batch_size`, `max_seq_len-1`)
+                Log probabilities of the reference model, shape (`group`, `group_size`, `max_seq_len-1`)
             attention_mask (`torch.LongTensor`):
-                Mask for the input, shape (`batch_size`, `max_seq_len`)
+                Mask for the input, shape (`group`, `group_size`, `max_seq_len`)
 
         Returns:
-            `torch.FloatTensor`: Per token rewards, shape (`batch_size`, `max_seq_len-1`)
-            `torch.FloatTensor`: Non-score rewards, shape (`batch_size`, `max_seq_len-1`)
-            `torch.FloatTensor`: KL penalty, shape (`batch_size`, `max_seq_len-1`)
+            `torch.FloatTensor`: Per token rewards, shape (`group`, `group_size`, `max_seq_len-1`)
+            `torch.FloatTensor`: Non-score rewards, shape (`group`, `group_size`, `max_seq_len-1`)
+            `torch.FloatTensor`: KL penalty, shape (`group`, `group_size`, `max_seq_len-1`)
         """
         if (
             shifted_ref_logprobs is not None
             and self.ppo_hparams.kl_penalty_loss_type is None
         ):
             kl = self._compute_kl_penalty(shifted_actor_logprobs, shifted_ref_logprobs)
-            non_score_rewards = -self.kl_ctl.value * kl
+            non_score_rewards = -self.kl_ctl.value * kl # can be seen as beta
         else:
             # KL penalty is not part of the reward
             kl = None
             non_score_rewards = torch.zeros_like(shifted_actor_logprobs)
 
         # Initialize the rewards with non-score rewards
-        rewards = non_score_rewards.clone()
+        rewards = scores - non_score_rewards.clone()
 
         # Find the last non-masked index for each sample in the batch
         last_non_masked_indices = (
@@ -280,11 +293,11 @@ class GRPOTrainer(OnPolicyTrainer):
         )  # Shape: (batch_size)
         # Since the length of shifted_actor_log_probs is `max_seq_len - 1`, we need to
         # subtract 1 from the last non-masked index to get the corresponding index
-        last_non_masked_label_indices = last_non_masked_indices - 1
 
-        # Reward is score + KL penalty
+        last_non_masked_label_indices = last_non_masked_indices - 1
+        #  Reward is score - KL penalty
         batch_size = rewards.size(0)
-        rewards[torch.arange(batch_size), last_non_masked_label_indices] += scores
+        rewards[torch.arange(batch_size), last_non_masked_label_indices] -= scores
 
         if kl is not None:
             kl = kl.detach()
@@ -293,45 +306,113 @@ class GRPOTrainer(OnPolicyTrainer):
 
     def _compute_advantages(
         self,
-        valid_values: torch.FloatTensor,
         rewards: torch.FloatTensor,
         shifted_labels_mask: torch.LongTensor,
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
+    ) -> Tuple[torch.FloatTensor]:
         """
         Compute the advantages from the values and rewards.
 
         Args:
-            valid_values (`torch.FloatTensor`):
-                The values of the responses, shape (`batch_size`, `max_seq_len-1`)
             rewards (`torch.FloatTensor`):
-                The rewards of the responses, shape (`batch_size`, `max_seq_len-1`)
-            shifted_labels_mask (`torch.LongTensor`):
-                Left Shifted by 1 Mask for the labels (i.e. actions), shape (`batch_size`, `max_seq_len-1`)
+                The rewards of the responses, shape (`group`, `group_size`)
 
         Returns:
-            `torch.FloatTensor`: The advantages of the responses, shape (`batch_size`, `max_seq_len-1`)
-            `torch.FloatTensor`: The returns of the responses, shape (`batch_size`, `max_seq_len-1`)
+            `torch.FloatTensor`: The advantages of the group, (`group`, `group_size`, `max_seq_len-1`)
         """
-        lastgaelam = 0
-        advantages_reversed = []
-        actions_seq_len = rewards.shape[-1]
 
-        # Make sure invalid rewards are masked
-        rewards *= shifted_labels_mask
-
+        advantages = []
         for t in reversed(range(actions_seq_len)):
-            next_state_values = (
-                valid_values[:, t + 1] if t < (actions_seq_len - 1) else 0.0
-            )
-            delta = (
-                rewards[:, t]
-                +  1 * next_state_values
-                - valid_values[:, t]
-            )
-            lastgaelam = (delta + 1 * self.lam * lastgaelam)
-            advantages_reversed.append(lastgaelam)
-        advantages = torch.stack(advantages_reversed[::-1]).transpose(0, 1)
-        assert advantages.shape == rewards.shape
+            pass
 
-        returns = advantages + valid_values
-        return advantages.detach(), returns.detach()
+        assert advantages.shape == rewards.shape
+        return advantages.detach()
+
+
+    def _compute_rewards(
+        self, 
+        scores: torch.FloatTensor,
+    ):
+        """
+        Compute per token rewards from scores and KL-penalty.
+
+        Args:
+            scores (`torch.FloatTensor`):
+                Scores from the episodes; one scalar per episode, shape (`batch_size`)
+
+        Returns:
+            `torch.FloatTensor`: Per token rewards, shape (`batch_size`, `max_seq_len-1`)
+        """
+        # Initialize the rewards with non-score rewards
+        rewards = scores.clone()
+        non_score_rewards = torch.zeros_like(scores)
+
+        return rewards.detach(), non_score_rewards.detach(), None
+
+
+    def _compute_kl_penalty(
+        self,
+        logprob: Union[torch.FloatTensor, np.ndarray],
+        ref_logprob: Union[torch.FloatTensor, np.ndarray],
+        estimation_type: Optional[str] = None,
+    ) -> Union[torch.FloatTensor, np.ndarray]:
+        """
+        Compute the per-token KL penalty between the log probabilities of the actor and the reference model.
+
+        Args:
+            logprob (`Union[torch.FloatTensor, np.ndarray]`):
+                Log probabilities of the actor, shape (`batch_size`, T)
+            ref_logprob (`Union[torch.FloatTensor, np.ndarray]`):
+                Log probabilities of the reference model, shape (`batch_size`, T)
+
+        Returns:
+            `Union[torch.FloatTensor, np.ndarray]`: KL penalty, shape (`batch_size`, `T`)
+        """
+
+        if estimation_type is None:
+            estimation_type = self.ppo_hparams.kl_penalty
+
+        if estimation_type == "kl":
+            return logprob - ref_logprob
+
+        if estimation_type == "abs":
+            return (logprob - ref_logprob).abs()
+
+        if estimation_type == "mse":
+            return 0.5 * (logprob - ref_logprob).square()
+
+        if estimation_type == "control_variate":
+            # Compute the per-token approximate KL penalty between the log probabilities of the actor
+            # and the reference model as suggested by Schulman in http://joschu.net/blog/kl-approx.html
+            #
+            # D_KL [π_θ || π_ref] =
+            #    π_ref(y_t | x, y_<t) / π_θ(y_t | x, y_<t) - log(π_ref(y_t | x, y_<t) / π_θ(y_t | x, y_<t)) - 1
+            #
+
+            log_ratio = ref_logprob - logprob
+            if isinstance(log_ratio, torch.Tensor):
+                kl = torch.exp(log_ratio) - log_ratio - 1
+            elif isinstance(log_ratio, np.ndarray):
+                kl = np.exp(log_ratio) - log_ratio - 1
+            else:
+                raise ValueError("Unsupported type for log_ratio.")
+            return kl
+
+        if estimation_type == "seq_control_variate":
+            log_ratio = ref_logprob - logprob
+            if isinstance(log_ratio, torch.Tensor):
+                prob_ratio = torch.exp(log_ratio.sum(dim=-1, keepdim=True))
+                kl = prob_ratio - log_ratio - 1
+            elif isinstance(log_ratio, np.ndarray):
+                prob_ratio = np.exp(log_ratio.sum(axis=-1, keepdims=True))
+                kl = prob_ratio - log_ratio - 1
+            else:
+                raise ValueError("Unsupported type for log_ratio.")
+            return kl
+
+        if estimation_type == "full":
+            # Flip is required due to this issue? :https://github.com/pytorch/pytorch/issues/57459
+            return F.kl_div(
+                ref_logprob, logprob, log_target=True, reduction="none"
+            ).sum(-1)
+
+        raise NotImplementedError

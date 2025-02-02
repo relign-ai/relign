@@ -13,16 +13,11 @@ from deepspeed import DeepSpeedEngine
 
 from relign.common.dataset import EpisodeDataset
 from relign.utils.logging import get_logger
-from relign.policies.base_policy import DeepSpeedPolicy 
+from relign.policies.base_policy import DeepSpeedPolicy, ForwardOutput
 from relign.policies.base_critic import PretrainedModelValueHead
 from relign.utils.trainer import masked_mean, monitor_tensor_anomalies
 
 logger = get_logger(__name__)
-
-class ActorForwardOutput(NamedTuple):
-    logits: Optional[torch.Tensor] = None
-    sequence_logp: Optional[torch.Tensor] = None
-    all_logp: Optional[torch.Tensor] = None
 
 
 class CriticForwardOutput(NamedTuple):
@@ -265,7 +260,6 @@ class ActorCriticPolicy(DeepSpeedPolicy):
         """
         raise NotImplementedError
 
-
     def forward_actor(
         self,
         input_ids: torch.Tensor,
@@ -276,7 +270,7 @@ class ActorCriticPolicy(DeepSpeedPolicy):
         return_sequence_logp: bool = False,
         return_all_logp : bool = False,
         sequence_logp_reduction: Optional[Literal["mean"]] = None
-    ) -> ActorForwardOutput:
+    ) -> ForwardOutput:
         """
         Forward pass of the policy.
 
@@ -325,7 +319,7 @@ class ActorCriticPolicy(DeepSpeedPolicy):
         if return_all_logp:
             output["all_logp"] = per_token_log_probs 
 
-        return ActorForwardOutput(**output)
+        return ForwardOutput(**output)
 
 
     def forward_critic(

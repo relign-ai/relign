@@ -202,3 +202,55 @@ class EpisodeGeneratorWithRewardFunction(OnPolicyEpisodeGenerator, TreeEpisodeUt
             raise ValueError(
                 f"Cannot automatically determine whether to append EOS for tokenizer {self.tokenizer.name_or_path}"
             )
+
+
+class EpisodeGeneratorWithGroupAdvantages(EpisodeGeneratorWithRewardFunction, TreeEpisodeUtils):
+    def __init__(): pass
+
+    def _generate_episodes(
+        self, 
+        inference_results: Dataset, 
+        iteration: int
+    ) -> List[Union[Dict[str, Any], Episode]]:
+        episodes = []
+        for instance in inference_results:
+            tree = json.loads(instance["_treetune__reasoning_tree"])
+            paths = self.extract_paths_from_tree(tree)
+            for path in paths:
+                assert len(path["node_chain"]) == 2, "Does not support multi-hop paths."
+
+                query_text = path["node_chain"][0]["text"]
+                full_text = path["node_chain"][-1]["full_text"]
+                response_text = full_text[len(query_text) :]
+        
+                reward, is_unfinished_response = self.reward_function(
+                    query_text, response_text, instance
+                )
+
+                try:
+                    query_token_ids, response_token_ids = (
+                        self._tokenize_query_and_response(
+                            query_text,
+                            response_text,
+                            allow_append_eos=not is_unfinished_response,
+                        )
+                    )
+                except Exception as e:
+                    return []
+
+                episode = Episode(
+                    query_token_ids=query_token_ids,
+                    response_token_ids=response_token_ids,
+                    scores=reward,
+                )
+                episodes.append(episode)
+        return episodes
+
+
+    def extract_reasoning_steps(self, response_text: str) -> int:
+        """ Function that takes in the response text and find all 
+            Reasoning tokens which are contained within the <think> </think> tags. 
+        """
+        pass
+
+        

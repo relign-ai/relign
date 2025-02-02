@@ -96,9 +96,6 @@ class BasePolicy:
     @abstractmethod
     def set_params(self, policy_params):
         self.inference = self.inference.replace(params=policy_params)
-    
-    @abstractmethod
-    def init_model_
 
     def set_cloud_log(self, cloud_logger: WandbRun):
         self.cloud_logger = cloud_logger

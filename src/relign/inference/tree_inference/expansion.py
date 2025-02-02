@@ -275,6 +275,10 @@ class EfficientIIDExpander(NodeExpander):
         tokenizer: Optional[Tokenizer] = None,
         **kwargs,
     ):
+        """
+        Can request multiple child samples in a single request. 
+        Split up results into multiple nodes and reutnrs them 
+        """
         super().__init__(**kwargs)
 
         if "logprobs" in program_kwargs:
@@ -314,7 +318,11 @@ class EfficientIIDExpander(NodeExpander):
             assert self.tokenizer is not None, "tokenizer must be provided"
 
     async def _sample_node(
-        self, prefix: str, depth: int, branch_factor: int, seed: Optional[int] = None
+        self, 
+        prefix: str, 
+        depth: int, 
+        branch_factor: int, 
+        seed: Optional[int] = None
     ) -> List[Node]:
         program_kwargs = self.program_kwargs.copy()
 

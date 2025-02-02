@@ -11,7 +11,6 @@ import torch
 from accelerate.utils import release_memory
 from datasets import Dataset
 from deepspeed import get_accelerator
-from deepspeed.runtime.utils import torch_memory_reserved, torch_max_memory_reserved
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import (
@@ -22,65 +21,18 @@ from transformers import (
     BatchEncoding,
 )
 
-from relign.common import Lazy
-from relign.episode_generators.base_episode_generator import (EpisodeGenerator, Episode)
-from relign.episode_generators.on_policy_episode_generator import (OnPolicyEpisodeGenerator)
+from relign.episode_generators.base_episode_generator import Episode
+from relign.episode_generators.on_policy_episode_generator import OnPolicyEpisodeGenerator
 from relign.episode_generators.tree_episode_generator import TreeEpisodeUtils
 from relign.tokenization import Tokenizer
+from relign.utils.logging import get_logger 
 
-
-
-def see_memory_usage(message, force=False):
-    if not force:
-        return
-
-    from deepspeed import comm as dist
-
-    # python doesn't do real-time garbage collection so do it explicitly to get the correct RAM reports
-    gc.collect()
-
-    # Print message except when distributed but not rank 0
-    device_index = dist.get_rank()
-
-    vm_stats = psutil.virtual_memory()
-    used_GB = round(((vm_stats.total - vm_stats.available) / (1024**3)), 2)
-    print(f"CPU Virtual Memory:  used = {used_GB} GB, percent = {vm_stats.percent}%")
-    # get the peak memory to report correct data, so reset the counter for the next call
-    get_accelerator().reset_peak_memory_stats(device_index=device_index)
-
-
-def get_gpu_memory():
-    # Run the nvidia-smi command to get GPU memory usage
-    result = subprocess.run(
-        ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
-        capture_output=True,
-        text=True,
-    )
-    # Parse the output to get memory usage as a list of integers (in MB)
-    memory_usage = [int(x) for x in result.stdout.strip().split("\n")]
-    return memory_usage
-
-
-def wait_for_memory_release(target_gpu_index, threshold_mb=1024):
-    # Wait until memory usage for the specified GPU is below the threshold
-    while True:
-        memory_usage = get_gpu_memory()
-        if memory_usage[target_gpu_index] < threshold_mb:
-            print(
-                f"GPU {target_gpu_index} has less than {threshold_mb} MB used. Continuing..."
-            )
-            break
-        else:
-            print(
-                f"GPU {target_gpu_index} memory used: {memory_usage[target_gpu_index]} MB. Waiting..."
-            )
-            time.sleep(2)
-
+logger = get_logger(__name__)
 
 class EpisodeGeneratorWithRewardModel(OnPolicyEpisodeGenerator, TreeEpisodeUtils):
     def __init__(
         self,
-        reward_model: Optional[Model] = None,
+        reward_model: Optional[Any] = None,#TODO , create a reward model class
         reward_model_tokenizer: Optional[Tokenizer] = None,
         reward_model_padding_side: str = "right",
         reward_pipline_model_name: Optional[str] = None,
@@ -350,9 +302,9 @@ class EpisodeGeneratorWithRewardModel(OnPolicyEpisodeGenerator, TreeEpisodeUtils
                 query_text, response_text
             )
         except Exception as e:
-            # logger.error( f"Failed to tokenize query and response for instance {instance['_treetune__idx']}")
-            # logger.error(f"Query: {query_text}")
-            # logger.error(f"Response: {response_text}")
+            logger.error( f"Failed to tokenize query and response for instance {instance['_treetune__idx']}")
+            logger.error(f"Query: {query_text}")
+            logger.error(f"Response: {response_text}")
             return []
 
         if self.chop_response:
@@ -476,3 +428,50 @@ class EpisodeGeneratorWithRewardModel(OnPolicyEpisodeGenerator, TreeEpisodeUtils
             raise ValueError(
                 f"Cannot automatically determine whether to append EOS for tokenizer {self.tokenizer.name_or_path}"
             )
+
+
+def see_memory_usage(message, force=False):
+    if not force:
+        return
+
+    from deepspeed import comm as dist
+
+    # python doesn't do real-time garbage collection so do it explicitly to get the correct RAM reports
+    gc.collect()
+
+    # Print message except when distributed but not rank 0
+    device_index = dist.get_rank()
+
+    vm_stats = psutil.virtual_memory()
+    used_GB = round(((vm_stats.total - vm_stats.available) / (1024**3)), 2)
+    print(f"CPU Virtual Memory:  used = {used_GB} GB, percent = {vm_stats.percent}%")
+    # get the peak memory to report correct data, so reset the counter for the next call
+    get_accelerator().reset_peak_memory_stats(device_index=device_index)
+
+
+def get_gpu_memory():
+    # Run the nvidia-smi command to get GPU memory usage
+    result = subprocess.run(
+        ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+        capture_output=True,
+        text=True,
+    )
+    # Parse the output to get memory usage as a list of integers (in MB)
+    memory_usage = [int(x) for x in result.stdout.strip().split("\n")]
+    return memory_usage
+
+
+def wait_for_memory_release(target_gpu_index, threshold_mb=1024):
+    # Wait until memory usage for the specified GPU is below the threshold
+    while True:
+        memory_usage = get_gpu_memory()
+        if memory_usage[target_gpu_index] < threshold_mb:
+            print(
+                f"GPU {target_gpu_index} has less than {threshold_mb} MB used. Continuing..."
+            )
+            break
+        else:
+            print(
+                f"GPU {target_gpu_index} memory used: {memory_usage[target_gpu_index]} MB. Waiting..."
+            )
+            time.sleep(2)
