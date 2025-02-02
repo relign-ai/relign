@@ -7,9 +7,9 @@ from .fixtures.task_fixtures import (
 
 from .fixtures.episode_generation_fixtures import (
     math_reward_function,
-    grouped_episode_generator,
     episode_gen_config,
-    math_episode_generator
+    math_episode_generator,
+    math_grouped_episode_generator
 )
 
 from .fixtures.inference_fixtures import (
@@ -42,7 +42,8 @@ from .fixtures.common_fixtures import (
 )
 
 from .fixtures.guidance_fixtures import (
-    mock_guidance
+    mock_guidance,
+    math_mock_with_think_tags
 )
 
 def pytest_addoption(parser):
@@ -52,7 +53,7 @@ def pytest_addoption(parser):
     parser.addoption(
         "--output-dir",
         action="store",
-        default="test/output",
+        default="tests/output",
         help="Base directory for storing test outputs"
     )
 

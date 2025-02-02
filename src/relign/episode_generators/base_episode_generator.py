@@ -25,8 +25,10 @@ class Episode:
     """
     query_token_ids: List[int]
     response_token_ids: List[int]
-    reward: float
-    advantages: Optional[List[float]] = None
+    reward: float # Final reward of the episode 
+    process_reward: Optional[List[float]] = None # Process rewards for each token in the response
+    advantages: Optional[List[float]] = None # Advantages for each token in the response
+    group: Optional[int] = None # GRPO for grouped advantages/rewards
 
     def __post_init__(self):
         assert len(self.query_token_ids) > 0
@@ -37,6 +39,11 @@ class Episode:
             assert len(self.advantages) == len(
                 self.response_token_ids
             ), "advantages have to be the same length as the response token ids"
+        
+        if self.process_rewards is not None:
+            assert len(self.process_rewards) == len(
+                self.response_token_ids
+            ), "process_rewards have to be the same length as the response token ids"
 
 
 class EpisodeGeneratorStrategy(ABC):

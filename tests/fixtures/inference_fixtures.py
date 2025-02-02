@@ -20,7 +20,7 @@ def list_branch_factor():
     """
     Returns a branch factor strategy for testing.
     """
-    return ListBranchFactor(branch_factors=[{"depth": 1, "branch_factor": 4}])
+    return ListBranchFactor(branch_factors=[{"depth": 0, "branch_factor": 1}])
     
 
 # --- Node Expanders ---- #
@@ -61,18 +61,20 @@ def cot_inference_strategy(
     identity_answer_extractor,
     math_question_template,
     experiment_dir,
-    mock_guidance,
+    math_mock_with_think_tags,
 ):
     """
     A fixture for chain-of-thought inference strategy (if needed).
     """
+    guidance_llm = math_mock_with_think_tags
+    
     return COTInferenceStrategy(
-        guidance_llm=mock_guidance,
+        guidance_llm=guidance_llm,
         node_expander=efficient_iid_node_expander,
         answer_extractor=identity_answer_extractor,
         question_template=math_question_template,
         question_field='query',
-        samples=2, # Number of thought chains we rollout from a single node
+        samples=4, # Number of thought chains we rollout from a single node
         max_depth=2,
         result_dir=Path(experiment_dir) / "chain_of_thoughts",
         max_concurrent_generations=1,

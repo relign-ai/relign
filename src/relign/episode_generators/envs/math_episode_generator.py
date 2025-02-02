@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Union, Optional, Tuple
 
 import evaluate
 import numpy as np
+import torch
 from datasets import Dataset
 
 from relign.episode_generators.base_episode_generator import Episode
@@ -92,9 +93,8 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
         ), f"Task {self.task} does not have a method `split_solution_into_intermediate_steps`."
 
     def compute_number_of_reasoning_steps(self, response_text: str) -> int:
-        # noinspection PyUnresolvedReferences
         indices = self.task.split_solution_into_intermediate_steps(response_text)
-        return len(indices) - 1
+        return len(indices) - 1, indices
 
     def _generate_episodes(
         self, 
@@ -246,8 +246,7 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
         return bleu
 
 
-
-class MathEpisodeGeneratorGrouped(MathEpisodeGenerator):
+class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
     def _generate_episodes(
         self, 
         inference_results: Dataset, 
@@ -255,7 +254,7 @@ class MathEpisodeGeneratorGrouped(MathEpisodeGenerator):
     ) -> List[Union[Dict[str, Any], Episode]]:
         episodes = []
         metrics = {}
-        for instance in inference_results:
+        for i, instance in enumerate(inference_results):
             tree = json.loads(instance["_treetune__reasoning_tree"])
             paths = self.extract_paths_from_tree(tree)
 
@@ -270,11 +269,11 @@ class MathEpisodeGeneratorGrouped(MathEpisodeGenerator):
                 full_text = path["node_chain"][-1]["full_text"]
                 response_text = full_text[len(query_text) :]
 
-                # Compute the number of reasoning steps in response 
                 try:
-                    num_reasoning_steps = self.compute_number_of_reasoning_steps(
+                    num_reasoning_steps, reasoning_indices = self.extract_reasoning_steps(
                         response_text
                     )
+                    
                     metrics.setdefault("num_reasoning_steps", []).append(
                         num_reasoning_steps
                     )
@@ -291,6 +290,7 @@ class MathEpisodeGeneratorGrouped(MathEpisodeGenerator):
                     # Generation stopped because the model hit the `max_tokens` limit
                     reward = self.reward_function.get_unfinished_response_penalty()
                     is_unfinished_response = True
+
                 try:
                     query_token_ids, response_token_ids = (
                         self._tokenize_query_and_response(
@@ -300,6 +300,17 @@ class MathEpisodeGeneratorGrouped(MathEpisodeGenerator):
                             allow_append_eos=not is_unfinished_response,
                         )
                     )
+
+                    # Vectorized assignment using tensor indexing
+                    process_rewards = torch.zeros_like(response_token_ids, dtype=torch.float)
+                    if reasoning_indices:
+                        idx_tensor = torch.tensor(
+                            reasoning_indices, 
+                            dtype=torch.long, 
+                            device=response_token_ids.device
+                        )
+                        process_rewards[idx_tensor] = 1.0
+
                 except Exception as e:
                     logger.info(f"Failed to tokenize query and response: {e}")
                     metrics.setdefault("empty_response", []).append(True)
@@ -332,6 +343,8 @@ class MathEpisodeGeneratorGrouped(MathEpisodeGenerator):
                     query_token_ids=query_token_ids,
                     response_token_ids=response_token_ids,
                     reward=float(reward),
+                    group=int(i),
+                    advantages=[1.0],
                 )
 
                 episodes.append(episode)

@@ -112,7 +112,6 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         self._port_generator_rng = random.Random(self.seed)
         self._set_vllm_ports()
 
-
     def _set_vllm_ports(self, seed: Optional[int] = None):
         """
         The main process searches for self.distributed_state.num_processes's free ports.
