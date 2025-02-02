@@ -247,38 +247,9 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
 
 
 
-class MathEpisodeGeneratorGrouped(EpisodeGeneratorWithRewardFunction):
-    def __init__(
-        self,
-        reasoning_step_delimiter: Optional[str] = None,
-        answer_prefix: Optional[str] = None,
-        max_sequence_length: Optional[int] = None,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        self.max_sequence_length = max_sequence_length
-        self.reasoning_step_delimiter = reasoning_step_delimiter
-        self.answer_prefix = answer_prefix
-
-        try:
-            self._bleu_metric = evaluate.load(
-                "bleu",
-                experiment_id=uuid.uuid4().hex,
-            )
-        except Exception as e:
-            self._bleu_metric = None
-
-        assert hasattr(
-            self.task, "split_solution_into_intermediate_steps"
-        ), f"Task {self.task} does not have a method `split_solution_into_intermediate_steps`."
-
-    def compute_number_of_reasoning_steps(self, response_text: str) -> int:
-        # noinspection PyUnresolvedReferences
-        indices = self.task.split_solution_into_intermediate_steps(response_text)
-        return len(indices) - 1
-
+class MathEpisodeGeneratorGrouped(MathEpisodeGenerator):
     def _generate_episodes(
-        self,
+        self, 
         inference_results: Dataset, 
         iteration: int
     ) -> List[Union[Dict[str, Any], Episode]]:
@@ -411,17 +382,3 @@ class MathEpisodeGeneratorGrouped(EpisodeGeneratorWithRewardFunction):
             self._cloud_log({**logs, "train/global_iteration": iteration})
 
         return episodes
-
-    # noinspection DuplicatedCode
-    def _avg_bleu_of_pairs_of_response(self, response: List[str]) -> float:
-        preds = []
-        refs = []
-        for i in range(len(response)):
-            for j in range(i + 1, len(response)):
-                sen_1 = response[i]
-                sen_2 = response[j]
-                preds.append(sen_1)
-                refs.append(sen_2)
-        bleu_full_stats = self._bleu_metric.compute(predictions=preds, references=refs)
-        bleu = bleu_full_stats["bleu"]
-        return bleu

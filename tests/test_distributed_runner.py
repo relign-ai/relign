@@ -10,7 +10,7 @@ from relign.algorithms.ppo.trainer import PPOTrainer
 from relign.episode_generators.base_episode_generator import DebugEpisodeGenerator
 from relign.runners.distributed_runner import DistributedRunner
 
-
+#TODO: refractor this test to use conftest fixtures
 def test_drunner_ppo_policy(cfg, local_rank: int =-1):
     ds_config = cfg.deepspeed
     print(type(ds_config))

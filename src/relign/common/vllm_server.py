@@ -5,6 +5,7 @@ import shlex
 import socket
 import subprocess
 import time
+import signal
 
 from pathlib import Path
 from typing import Optional, Union, Callable, Dict
@@ -257,7 +258,12 @@ class VLLMServer:
         server_url = f"http://localhost:{self.port}/v1"
         return server_url
 
-    def _launch_process(self, gpu_idx, hf_ckpt_path_or_model, log_path):
+    def _launch_process(
+        self, 
+        gpu_idx: int, 
+        hf_ckpt_path_or_model: str, 
+        log_path: str
+    ):
         logger.info("Launching vLLM server")
         # The command arguments:
         command = (
@@ -283,16 +289,25 @@ class VLLMServer:
         # Redirect both stdout and stderr to the log file if specified
         if log_path is not None:
             with log_path.open("w") as f:
-                self.process = subprocess.Popen(command, stdout=f, stderr=f)
+                self.process = subprocess.Popen(
+                    command, stdout=f, stderr=f, preexec_fn=os.setsid
+                )
         else:
-            self.process = subprocess.Popen(command)
+            self.process = subprocess.Popen(
+                command, preexec_fn=os.setsid
+            )
 
     def stop_server(self):
         if self.process is None or self.process.poll() is not None:
             logger.info("Server is not running.")
             return
 
-        self.process.kill()
+        # kill entire process group instead
+            # Kill the entire process group to ensure child processes are also terminated.
+        try:
+            os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
+        except Exception as e:
+            logger.error(f"Error killing process group: {e}")
         time.sleep(3)
 
         # Use pkill to kill processes matching the pattern

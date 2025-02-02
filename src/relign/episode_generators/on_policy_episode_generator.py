@@ -198,6 +198,11 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
                     if self.dataset_shuffle_on_each_iteration:
                         self._orig_ds = self._orig_ds.shuffle(seed=self.seed)
 
+    def _get_device_index(self) -> int:
+        """Returns a valid device index either from self.distributed_state.device.index or using torch.cuda.current_device()."""
+        device = self.distributed_state.device
+        return device.index if device.index is not None else torch.cuda.current_device()
+
     def generate(
         self, 
         iteration: Optional[int] = None, 
@@ -225,7 +230,8 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
                 threshold_mb=used_threshold_mb,
             )
 
-        gpu_memory_usage_before_mb = get_gpu_memory()[this_process_device.index]
+        device_index = self._get_device_index()
+        gpu_memory_usage_before_mb = get_gpu_memory()[device_index]
 
         from deepspeed.runtime.utils import see_memory_usage
 
@@ -446,7 +452,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         """
         infer_result_path = results_root_dir / "results_ds"
         vllm_server, guidance_llm_kwargs = vllm_init_fn()
-        target_device_index = self.distributed_state.device.index
+        target_device_index = self._get_device_index()
 
         results = self.inference_strategy.generate(dataset_shard)
          

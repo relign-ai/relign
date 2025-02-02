@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from relign.common.deepspeed_utils import prepare_data_loader_for_inference
 from relign.common.dataset import EpisodeDataset
-from relign.algorithms.base_trainer import OnPolicyTrainer
+from relign.algorithms.base_trainer import BaseTrainer 
 from relign.utils.trainer import prepare_data_loader_for_training 
 
 from relign.algorithms.grpo.data_collator import (
@@ -23,7 +23,7 @@ from relign.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-class GRPOTrainer(OnPolicyTrainer):
+class GRPOTrainer(BaseTrainer):
     """
     PPO Trainer.
     Impelmentation of the PPO update rule.
@@ -108,7 +108,7 @@ class GRPOTrainer(OnPolicyTrainer):
             episodes,
             per_device_batch_size=self.per_device_batch_size,
             data_loader_kwargs={
-                "collate_fn": PPODataCollator(),
+                "collate_fn": GRPODataCollator(),
                 "num_workers": self.dataloader_num_workers,
                 "pin_memory": self.dataloader_pin_memory,
             },

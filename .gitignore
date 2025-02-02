@@ -16,6 +16,7 @@ build/
 dist/
 out/
 outputs/
+*output/
 experiment/
 data/
 
