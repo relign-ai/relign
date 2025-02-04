@@ -298,15 +298,28 @@ class ActorCriticPolicy(ActorPolicy):
 
     def destroy_critic_engine_if_not_cached(self) -> None:
         """
-        Destroys the critic engine unless it is cached.
+        Destroys the critic engine to free memory if engine caching is disabled.
         """
         if not self.cache_ds_engines:
-            if hasattr(self, "critic") and self.critic is not None:
+            if getattr(self, "critic", None) is not None:
                 logger.info("Destroying critic engine to free memory.")
-                del self.critic
+                self._destroy_ds_engine(self.critic)
+                # If the engine provides a shutdown/cleanup method, call it.
+                if hasattr(self.critic, "shutdown") and callable(self.critic.shutdown):
+                    try:
+                        self.critic.shutdown()
+                    except Exception as e:
+                        logger.warning(f"Error during critic engine shutdown: {e}")
+                # If there is an internal engine attribute, clear it.
+                if hasattr(self.critic, "_engine"):
+                    del self.critic._engine
+
+                # Remove the critic engine reference.
                 self.critic = None
 
-            self.critic = None
+            # Also clear the cached critic engine if it exists.
+            if hasattr(self, "_critic_engine"):
+                self._critic_engine = None
 
     def destroy_ds_engines(self) -> None:
         """

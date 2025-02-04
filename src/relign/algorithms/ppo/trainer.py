@@ -208,6 +208,11 @@ class PPOTrainer(BaseTrainer):
         self.policy.destroy_ds_engines()
         release_memory()
 
+        import gc
+
+        gc.collect()
+        torch.cuda.empty_cache()
+
     def _hydrate_episodes(self, episodes: Dataset) -> Dataset:
         """
         Takes the collated dataset and hydrates it with the

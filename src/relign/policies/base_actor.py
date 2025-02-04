@@ -283,18 +283,29 @@ class ActorPolicy(DeepSpeedPolicy):
 
     def destroy_actor_engine_if_not_cached(self) -> None:
         """
-        Destroys the actor engine unless it is cached (self.cache_deepspeed_engines == True).
-        Useful for freeing memory between iterations if desired.
+        Destroys the actor engine to free memory if engine caching is disabled.
         """
         if not self.cache_ds_engines:
-            if hasattr(self, "actor") and self.actor is not None:
+            if getattr(self, "actor", None) is not None:
                 logger.info("Destroying actor engine to free memory.")
-                # You might want to call engine.release_workspace() or similar if needed
-                del self.actor
+                self._destroy_ds_engine(self.actor)
+                # If the engine provides a shutdown/cleanup method, call it.
+                if hasattr(self.actor, "shutdown") and callable(self.actor.shutdown):
+                    logger.info("Shutting down actor engine.")
+                    try:
+                        self.actor.shutdown()
+                    except Exception as e:
+                        logger.warning(f"Error during actor engine shutdown: {e}")
+                # If there is an internal engine attribute, clear it.
+                if hasattr(self.actor, "_engine"):
+                    logger.info("Clearing actor engine internal state.")
+                    del self.actor._engine
+                # Remove the actor engine reference.
                 self.actor = None
 
-            # Clear the `self.actor` reference as well, to truly free memory
-            self.actor = None
+            # Also clear the cached actor engine if it exists.
+            if hasattr(self, "_actor_engine"):
+                self._actor_engine = None
 
     def cache_initial_actor_state(self) -> None:
         """
@@ -443,16 +454,30 @@ class ActorPolicy(DeepSpeedPolicy):
 
     def destroy_reference_engine_if_not_cached(self) -> None:
         """
-        Destroys the reference engine unless it is cached.
+        Destroys the reference engine to free memory if engine caching is disabled.
         """
         if not self.cache_ds_engines:
-            if self.reference is not None:
+            if getattr(self, "reference", None) is not None:
                 logger.info("Destroying reference engine to free memory.")
-                del self.reference
+                self._destroy_ds_engine(self.reference)
+                # Call a shutdown or cleanup method if the engine provides one.
+                if hasattr(self.reference, "shutdown") and callable(
+                    self.reference.shutdown
+                ):
+                    logger.info("Shutting down reference engine.")
+                    try:
+                        self.reference.shutdown()
+                    except Exception as e:
+                        logger.warning(f"Error during reference engine shutdown: {e}")
+                # Clear any internal engine references.
+                if hasattr(self.reference, "_engine"):
+                    logger.info("Clearing reference engine internal state.")
+                    del self.reference._engine
+                # Remove the reference engine.
                 self.reference = None
-                if hasattr(self, "reference"):
-                    del self.reference
-                    self.reference = None
+
+            if hasattr(self, "_reference_engine"):
+                self._reference_engine = None
 
     def _compute_kl_penalty(
         self,
