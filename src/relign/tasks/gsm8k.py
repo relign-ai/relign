@@ -94,11 +94,12 @@ class GSM8K(Task):
         if self.intermediate_step_tags is not None:
             start_tag, end_tag = self.intermediate_step_tags
             import re
-
-            # using a regex to extract text enclosed between the given start and end tags
-            pattern = re.compile(f"{re.escape(start_tag)}(.*?){re.escape(end_tag)}", flags=re.DOTALL)
+            # Modified regex: now we capture the entire block including the tags.
+            pattern = re.compile(
+                f"({re.escape(start_tag)}.*?{re.escape(end_tag)})", flags=re.DOTALL
+            )
             matches = list(pattern.finditer(sol_without_answer))
-            # Extract non-empty steps (strip away extra spaces)
+            # Extract steps preserving the <think> tags.
             steps = [match.group(1).strip() for match in matches if match.group(1).strip() != ""]
 
             # If no tagged steps are found, fallback to treating the whole text as one step.
@@ -107,22 +108,21 @@ class GSM8K(Task):
 
             # Merge the final answer (if provided) to the last intermediate step.
             if answer is not None:
-                last_step = steps[-1]
-                steps[-1] = f"{last_step}{answer_prefix}{answer}"
+                steps[-1] = f"{steps[-1]}{answer_prefix}{answer}"
 
-            # Reassemble a "clean" solution string (without the tags) by joining the steps with a newline.
-            clean_solution = "\n".join(steps)
+            # Reassemble a solution string that still contains the tags.
+            tag_preserving_solution = "\n".join(steps)
             indices = [0]
             for i, step in enumerate(steps):
                 if i == 0:
                     indices.append(len(step))
                 else:
-                    # add one for the joining newline
+                    # add one to account for the newline joining.
                     indices.append(indices[-1] + 1 + len(step))
-            assert indices[-1] == len(clean_solution), f"{indices[-1]} != {len(clean_solution)}"
+            assert indices[-1] == len(tag_preserving_solution), (
+                f"{indices[-1]} != {len(tag_preserving_solution)}"
+            )
             return indices
-
-
         # ===== Delimiter-based splitting (existing logic) =====
         assert self.intermediate_step_delimiter is not None
         delimiter = self.intermediate_step_delimiter

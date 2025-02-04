@@ -24,7 +24,6 @@ class GRPODataCollator:
                 The data instances to collate.
         Returns:
             Dict[str, torch.Tensor]:
-                The collated batch.
                 It contains the following keys:
                 - "input_ids": The token ids of the entire episode (query + responses).
                         Description: Query + response tokens + padding
@@ -57,13 +56,22 @@ class GRPODataCollator:
         # Create the batch
         batch = {"input_ids": [], "labels": [], "attention_mask": []}
 
-        has_advantages = "advantages" in instances[0]
+        has_group = "group" in instances[0] and instances[0]["group"] is not None
+        if has_group:
+            # Group to which the instance belongs 
+            batch["group"] = []
+
+        has_advantages = "advantages" in instances[0] and instances[0]["advantages"] is not None
         if has_advantages:
             batch["advantages"] = []
 
-        has_scores = "rewards" in instances[0]
-        if has_scores:
-            batch["rewards"] = []
+        has_process_rewards = "process_rewards" in instances[0] and instances[0]["process_rewards"] is not None
+        if has_process_rewards: 
+            batch["process_rewards"] = []
+
+        has_reward= "reward" in instances[0] and instances[0]["reward"] is not None
+        if has_reward:
+            batch["reward"] = []
 
         has_ref_shifted_logps = COLUMN_REF_SHIFTED_LOGPS in instances[0]
         if has_ref_shifted_logps:
@@ -72,7 +80,6 @@ class GRPODataCollator:
         has_actor_logps = COLUMN_ACTOR_SHIFTED_LOGPS in instances[0]
         if has_actor_logps:
             batch[COLUMN_ACTOR_SHIFTED_LOGPS] = []
-
 
         pad_token_id = 0  # It doesn't matter what the pad token id is, since we will mask it out anyway
         pad_label = (-100)  # -100 is the default value for the padding token in the loss function
@@ -121,16 +128,25 @@ class GRPODataCollator:
             )
             batch["labels"].append(labels)
 
+            if has_group:
+                batch["group"].append(instance["group"])
+
             if has_advantages:
                 advantages = instance["advantages"]
                 # Advantages are the same length as the reponse_token_ids 
                 advantages = [0.0] * len(query_token_ids) + advantages + [0.0] * num_pad_at_end
                 assert len(labels) == len(advantages)
-                batch["advantages"].append(instance["advantages"])
+                batch["advantages"].append(advantages)
 
-            if has_scores:
-                assert isinstance(instance['rewards'], float)
-                batch["rewards"].append(instance["rewards"])
+            if has_process_rewards:
+                process_rewards = instance["process_rewards"]
+                process_rewards = [0.0] * len(query_token_ids) + process_rewards + [0.0] * num_pad_at_end
+                assert len(labels) == len(process_rewards)
+                batch["process_rewards"].append(process_rewards)
+
+            if has_reward:
+                assert isinstance(instance['reward'], float)
+                batch["reward"].append(instance["reward"])
 
             if has_ref_shifted_logps:
                 shifted_ref_logps = prepare_shifted_logps(
@@ -153,5 +169,4 @@ class GRPODataCollator:
 
         # Convert the lists to tensors
         batch = {k: torch.tensor(v) for k, v in batch.items()}
-
         return batch

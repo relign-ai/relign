@@ -7,7 +7,7 @@ from omegaconf import OmegaConf
 from relign.tasks import GSM8K
 from relign.policies.actor_critic_policy import ActorCriticPolicy
 from relign.policies.base_critic import PretrainedModelValueHead
-from relign.algorithms.on_policy_algorithm import OnPolicyAlgorithm
+from relign.algorithms.train_loop import TrainLoop 
 from relign.algorithms.ppo.trainer import PPOTrainer
 from relign.episode_generators.envs.math_episode_generator import(
     MathEpisodeGenerator,
@@ -148,7 +148,7 @@ def ppo_gsm(cfg,  local_rank: int = -1):
     }
 
     # ----------- Algorithm--------------#
-    algorithm_cls = OnPolicyAlgorithm
+    algorithm_cls =  TrainLoop 
     algorithm_kwargs = {
         "num_iterations": 1,
         "num_episodes_per_iteration": 5,

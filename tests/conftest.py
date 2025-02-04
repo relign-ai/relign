@@ -24,8 +24,8 @@ from .fixtures.policies_fixtures import (
     tokenizer,
     actor_model_fn,
     critic_model_fn,
+    actor_policy,
     actor_critic_policy,
-    actor_policy
 )
 
 from .fixtures.trainer_fixtures import (
@@ -38,7 +38,8 @@ from .fixtures.common_fixtures import (
     experiment_dir,
     vllm_server,
     distributed_state_cpu,
-    distributed_single_gpu
+    distributed_single_gpu,
+    deepspeed_config
 )
 
 from .fixtures.guidance_fixtures import (

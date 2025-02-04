@@ -90,13 +90,14 @@ class EpisodeGeneratorWithRewardFunction(OnPolicyEpisodeGenerator, TreeEpisodeUt
         self, 
         query: str, 
         response: str, 
-        allow_append_eos: bool = True
+        allow_append_eos: bool = True,
+        return_offsets: bool = False
     ) -> Tuple[List[int], List[int]]:
         # This a legacy method that is not used anymore. It is kept here for reference.
         return self._tokenize_trajectory(
             {"query_text": query, "response_text": response},
             is_unfinished_response=not allow_append_eos,
-            return_offsets=False,
+            return_offsets=return_offsets,
         )
 
     def _tokenize_trajectory(
@@ -104,6 +105,7 @@ class EpisodeGeneratorWithRewardFunction(OnPolicyEpisodeGenerator, TreeEpisodeUt
         trajectory: Dict[str, Any],
         is_unfinished_response: bool = False,
         return_offsets: bool = False,
+        return_word_ids: bool = False,
         safety_check_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Union[
         Tuple[List[int], List[int]],

@@ -10,7 +10,8 @@ from relign.policies.base_policy import BasePolicy
 from relign.algorithms.base_trainer import BaseTrainer
 from relign.episode_generators.base_episode_generator import BaseEpisodeGenerator
 from relign.algorithms.train_loop import TrainLoop 
-from relign.policies.actor_critic_policy import DeepSpeedPolicy
+from relign.policies.base_actor import DeepSpeedPolicy
+
 
 
 # Define TypeVars for Generics

@@ -13,6 +13,7 @@ from relign.policies.actor_critic_policy import ActorCriticPolicy
 def mock_tokenizer():
     ...
 
+
 @pytest.fixture
 def tokenizer():
     return AutoTokenizer.from_pretrained("gpt2")
@@ -37,17 +38,37 @@ def critic_model_fn():
     return _critic_model_fn
 
 @pytest.fixture
-def actor_critic_policy(actor_model_fn, critic_model_fn):
+def actor_critic_policy(
+    actor_model_fn, 
+    critic_model_fn, 
+    deepspeed_config,
+    distributed_single_gpu,
+    experiment_dir
+):
     """
     Creates a standard Actor-Critic policy for tests (used by PPO, for example).
     """
     return ActorCriticPolicy(
         actor_model_fn=actor_model_fn,
-        critic_model_fn=critic_model_fn
+        critic_model_fn=critic_model_fn,
+        actor_config=deepspeed_config,
+        critic_config=deepspeed_config,
+        distributed_single_gpu=distributed_single_gpu,
+        project_root_dir=experiment_dir,
+        seed=69
     )
 
 @pytest.fixture
-def actor_policy(actor_model_fn):
+def actor_policy(
+    actor_model_fn, 
+    deepspeed_config,
+    distributed_single_gpu,
+    experiment_dir,
+):
     return ActorPolicy(
-        actor_model_fn=actor_model_fn
+        actor_model_fn=actor_model_fn,
+        actor_config=deepspeed_config,
+        distributed_state=distributed_single_gpu,
+        project_root_dir=experiment_dir,
+        seed=69
     )

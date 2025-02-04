@@ -25,7 +25,7 @@ from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-
+# nra
 class PPOTrainer(BaseTrainer):
     """
     PPO Trainer.
@@ -43,7 +43,7 @@ class PPOTrainer(BaseTrainer):
         self.policy.init_critic_engine_if_needed()
 
         # change to appropriate input structure
-        episodes = self._get_curr_logs_and_values(episodes)
+        episodes = self._hydrate_episodes(episodes)
         dataloader = prepare_data_loader_for_training(
             episodes, 
             per_device_batch_size=self.per_device_batch_size, 
@@ -90,7 +90,7 @@ class PPOTrainer(BaseTrainer):
             for step, batch in enumerate(dataloader_iter):
                 self._step(batch)
 
-    def _get_curr_logs_and_values(
+    def _hydrate_episodes(
         self, 
         episodes: Dataset
     ) -> Dataset:
@@ -120,7 +120,7 @@ class PPOTrainer(BaseTrainer):
                 "collate_fn": PPODataCollator(),
                 "num_workers": self.dataloader_num_workers,
                 "pin_memory": self.dataloader_pin_memory,
-            },
+            }
         )
 
         # Switch actor to eval mode before doing inference
@@ -352,7 +352,6 @@ class PPOTrainer(BaseTrainer):
         # Get rid of critic's activations to free up memory
         critic_loss = critic_loss.detach().clone()
         release_memory()
-
 
     def _compute_rewards(
         self,

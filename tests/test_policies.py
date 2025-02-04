@@ -1,7 +1,7 @@
 import pytest
 from transformers import AutoModelForCausalLM, AutoModel
 
-from relign.policies.base_policy import BasePolicy, ForwardOutput
+from relign.policies.base_policy import BasePolicy, ActorForwardOutput
 from relign.policies.base_critic import BaseCritic, PretrainedModelValueHead
 from relign.policies.actor_critic_policy import ActorCriticPolicy
 from relign.episode_generators.base_episode_generator import DebugEpisodeGenerator 

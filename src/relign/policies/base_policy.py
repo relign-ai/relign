@@ -18,10 +18,18 @@ from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-class ForwardOutput(NamedTuple):
+
+class CriticForwardOutput(NamedTuple):
     initial_poilicy_raw_output: CausalLMOutput 
     policy_raw_output: CausalLMOutput
     values: torch.Tensor 
+
+
+class ActorForwardOutput(NamedTuple):
+    logits: Optional[torch.Tensor] = None
+    sequence_logp: Optional[torch.Tensor] = None
+    all_logp: Optional[torch.Tensor] = None
+
 
 class BasePolicy:
     """
@@ -87,7 +95,7 @@ class BasePolicy:
             input_ids: torch.Tensor,
             attention_masks: torch.Tensor,
             labels: torch.Tensor,
-        ) -> ForwardOutput:
+        ) -> ActorForwardOutput:
         """
         Forward pass of the policy.
         """

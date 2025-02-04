@@ -26,7 +26,7 @@ class Episode:
     query_token_ids: List[int]
     response_token_ids: List[int]
     reward: float # Final reward of the episode 
-    process_reward: Optional[List[float]] = None # Process rewards for each token in the response
+    process_rewards: Optional[List[float]] = None # Process rewards for each token in the response
     advantages: Optional[List[float]] = None # Advantages for each token in the response
     group: Optional[int] = None # GRPO for grouped advantages/rewards
 
@@ -40,10 +40,13 @@ class Episode:
                 self.response_token_ids
             ), "advantages have to be the same length as the response token ids"
         
+        
         if self.process_rewards is not None:
+            if len(self.process_rewards) != len(self.response_token_ids):
+                print(f"[DEBUG] Token count mismatch: process_rewards length = {len(self.process_rewards)}; response_token_ids length = {len(self.response_token_ids)}")
             assert len(self.process_rewards) == len(
                 self.response_token_ids
-            ), "process_rewards have to be the same length as the response token ids"
+            ), "process_rewards have to be the same length as the response token ids" 
 
 
 class EpisodeGeneratorStrategy(ABC):

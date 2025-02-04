@@ -1,5 +1,5 @@
-import tqdm 
 from pathlib import Path
+from tqdm import tqdm
 from logging import Logger
 from datasets import Dataset
 

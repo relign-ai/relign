@@ -9,4 +9,6 @@ def gsm8k():
         load_dataset_dict=True,
         dataset_dict_path="data/gsm8k",
         remove_calculator_expressions=True,
+        use_original_format=True, #TODO: is this really nessecary? and why? 
+        intermetdiate_step_tags=["<think>", "</think>"]
     )

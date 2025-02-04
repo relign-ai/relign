@@ -6,8 +6,8 @@ from omegaconf import OmegaConf
 
 from relign.tasks import GSM8K
 from relign.policies.base_actor import ActorPolicy
-from relign.algorithms.on_policy_algorithm import OnPolicyAlgorithm
-from relign.algorithms.ppo.trainer import PPOTrainer
+from relign.algorithms.train_loop import TrainLoop 
+from relign.algorithms.grpo.trainer import GRPOTrainer 
 from relign.episode_generators.envs.math_episode_generator import (
     MathEpisodeGenerator,
     MATHRewardFunction,
@@ -38,6 +38,7 @@ def grpo_gsm(cfg,  local_rank: int = -1):
         answer_prefix=None,
         load_dataset_dict=True,
         dataset_dict_path="data/gsm8k",
+        intermetdiate_step_tags= ["<think>", "</think>"],
         remove_calculator_expressions=True,
     )
 
@@ -54,10 +55,9 @@ def grpo_gsm(cfg,  local_rank: int = -1):
     from relign.inference.cot_inference_strategy import COTInferenceStrategy
     from relign.inference.tree_inference.expansion import EfficientIIDExpander
     from relign.inference.tree_inference.answer_extraction import (IdentityAnswerExtractor)
-    from relign.guidance.llms._openai_vllm import OpenAIVLLM
 
-    n_episodes_per_iteration = 1
-    n_rollouts_per_sample = 1
+    n_episodes_per_iteration = 10 
+    n_rollouts_per_sample = 10 # Effective group size 
     max_concurrent_programs = 1
     max_concurrent_generations = 1
     n_epiodes_per_iteration = n_episodes_per_iteration / n_rollouts_per_sample
@@ -70,7 +70,7 @@ def grpo_gsm(cfg,  local_rank: int = -1):
     answer_extractor = IdentityAnswerExtractor(node_key_name="text")
     program = """{{prefix}}{{gen "chain_of_thought" temperature={temperature} top_p={top_p} max_tokens={max_tokens} save_stop_text="stop_text" stop={stop} n={num_samples}}}"""
 
-    branch_factors = [{"depth": 0, "branch_factor": 2}]
+    branch_factors = [{"depth": 0, "branch_factor": 10}]
     node_expander = EfficientIIDExpander(
         branch_factor_strategy=ListBranchFactor(branch_factors=branch_factors),
         program=program,
@@ -102,7 +102,7 @@ def grpo_gsm(cfg,  local_rank: int = -1):
         answer_extractor=answer_extractor,
         node_expander=node_expander,
         guidance_llm=mock_guidance,
-        max_depth=4,
+        max_depth=2,
         result_dir=Path(experiment_dir) / "chain_of_thoughts",
     )
 
@@ -133,7 +133,7 @@ def grpo_gsm(cfg,  local_rank: int = -1):
 
 
     # ----------- Trainer ---------------#
-    ppo_trainer_class = PPOTrainer
+    ppo_trainer_class = GRPOTrainer 
     ppo_trainer_kwargs = {
         "per_device_batch_size": 10,
         "dataloader_num_workers": 1,
@@ -141,9 +141,9 @@ def grpo_gsm(cfg,  local_rank: int = -1):
     }
 
     # ----------- Algorithm--------------#
-    algorithm_cls = OnPolicyAlgorithm
+    algorithm_cls = TrainLoop 
     algorithm_kwargs = {
-        "num_iterations": 1,
+        "num_iterations": 10,
         "num_episodes_per_iteration": 5,
         "verbose": 1,
         "evaluation_freq": 10,
@@ -155,11 +155,11 @@ def grpo_gsm(cfg,  local_rank: int = -1):
         experiment_name=experiment_name,
         directory=experiment_dir,
         use_deepspeed=True,
-        policy_cls=actor_critic_policy,
+        policy_cls=actor_policy,
         trainer_cls=ppo_trainer_class,
         episode_generator_cls=episode_generator,
         algorithm_cls=algorithm_cls,
-        policy_kwargs=actor_critic_kwargs,
+        policy_kwargs=actor_kwargs,
         trainer_kwargs=ppo_trainer_kwargs,
         episode_generator_kwargs=episode_generator_kwargs,
         algorithm_kwargs=algorithm_kwargs,

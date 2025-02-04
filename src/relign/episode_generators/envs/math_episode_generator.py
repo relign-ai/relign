@@ -140,12 +140,12 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
                     reward = self.reward_function.get_unfinished_response_penalty()
                     is_unfinished_response = True
                 try:
-                    query_token_ids, response_token_ids = (
+                    query_token_ids, response_token_ids, offsets = (
                         self._tokenize_query_and_response(
                             query_text,
                             response_text,
                             # Only append EOS token if the response is complete
-                            allow_append_eos=not is_unfinished_response,
+                            allow_append_eos=not is_unfinished_response
                         )
                     )
                 except Exception as e:
@@ -249,11 +249,13 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
 class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
     def __init__(
         self, 
-        with_process_reward: bool = False,
+        with_process_reward: bool = True,
+        reward_entire_span: bool = False,
         **kwargs
     ):
         super().__init__(**kwargs)
         self.with_process_reward = with_process_reward # Wether we want to reward reasoning tokens
+        self.reward_entire_span = reward_entire_span # Wether we want to reward the entire span between reasoning tokens
 
     def _generate_episodes(
         self, 
@@ -278,7 +280,7 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                 response_text = full_text[len(query_text) :]
 
                 try:
-                    num_reasoning_steps, reasoning_indices = self.extract_reasoning_steps(
+                    num_reasoning_steps, reasoning_indices = self._extract_reasoning_steps(
                         response_text
                     )
                     
@@ -300,12 +302,13 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                     is_unfinished_response = True
 
                 try:
-                    query_token_ids, response_token_ids = (
+                    query_token_ids, response_token_ids, offsets = (
                         self._tokenize_query_and_response(
                             query_text,
                             response_text,
                             # Only append EOS token if the response is complete
                             allow_append_eos=not is_unfinished_response,
+                            return_offsets=True
                         )
                     )
 
@@ -314,13 +317,6 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                     metrics.setdefault("empty_response", []).append(True)
                     continue
             
-                # Reward reasoning tokens
-                if self.with_process_reward:
-                    process_reward = 1
-                    process_rewards = [0] * len(response_token_ids)
-                    for index in reasoning_indices:
-                        process_rewards[index] = process_reward 
-
                 all_responses.append(response_text)
                 if self.max_sequence_length is not None:
                     seq_len = len(query_token_ids) + len(response_token_ids)
@@ -341,15 +337,31 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                 metrics.setdefault("is_unfinished_response", []).append(
                     is_unfinished_response
                 )
+                episode_kwargs = {
+                    "query_token_ids": query_token_ids,
+                    "response_token_ids": response_token_ids,
+                    "reward": float(reward),
+                    "group": int(i),
+                }
 
+                ############################################
+                #####Compute Process Reward Tokens #########
+                ############################################
+                if self.with_process_reward:
+                    process_rewards = self._compute_process_reward_tokens(
+                        response_text,
+                        query_text,
+                        query_token_ids,
+                        response_token_ids,
+                        offsets,
+                        reasoning_indices,
+                        process_reward_value=1,
+                        reward_entire_span=self.reward_entire_span,
+                    )
+                    episode_kwargs["process_rewards"] = process_rewards 
+                
                 # Generate an episode
-                episode = Episode(
-                    query_token_ids=query_token_ids,
-                    response_token_ids=response_token_ids,
-                    reward=float(reward),
-                    group=int(i),
-                    process_rewards=process_rewards
-                )
+                episode = Episode(**episode_kwargs)
 
                 episodes.append(episode)
                 all_rewards.append(float(reward))
@@ -399,3 +411,89 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
             self._cloud_log({**logs, "train/global_iteration": iteration})
 
         return episodes
+    
+    def _extract_reasoning_steps(
+        self, response_text: str
+    ) -> Tuple[int, List[int]]:
+        """ 
+        Computes the number of reasoning steps in the response text, along 
+        with the character of the indices of the FINAL token of each reasoning step
+        <think>.... </think> will give the index of the last character of the </think> 
+        """
+        indices = self.task.split_solution_into_intermediate_steps(response_text)
+        return len(indices) - 1, indices
+
+    def _compute_process_reward_tokens(
+        self,
+        response_text: str,
+        query_text: str,
+        query_token_ids: List[int],
+        response_token_ids: List[int],
+        offsets: List[Tuple[int, int]],
+        reasoning_indices: List[int],
+        process_reward_value: int = 1,
+        reward_entire_span: bool = False,
+    ) -> List[int]:
+        """
+        Computes a token-aligned process rewards vector based on reasoning steps in character space.
+
+        Args:
+            response_text (str): The generated response text.
+            query_text (str): The original query text.
+            query_token_ids (List[int]): List of token ids corresponding to the query.
+            response_token_ids (List[int]): List of token ids corresponding to the response.
+            offsets (List[Tuple[int, int]]): A list of (start, end) character positions for tokens
+                                             in the concatenated query+response.
+            reasoning_indices (List[int]): List of character positions that mark reasoning steps in the response.
+            process_reward_value (int, optional): The reward value assigned to the selected tokens. Defaults to 1.
+            reward_entire_span (bool, optional): If True, reward the full span between consecutive reasoning indices.
+                                                 If False, only the token corresponding to the reasoning index is rewarded.
+
+        Returns:
+            List[int]: A list of process reward values aligned with each token in response_token_ids.
+        """
+        # Create a character-level reward mapping for the entire response text.
+        char_rewards = np.zeros(len(response_text), dtype=int)
+
+        print("Query tokens:", len(query_token_ids))
+        print("Response tokens:", len(response_token_ids))
+        print("Total offsets:", len(offsets))
+
+        #  Discard the EOS to match the initial response text
+        has_eos = response_token_ids[-1] == self.tokenizer.eos_token_id
+        if has_eos:
+            response_token_ids = response_token_ids[:-1]
+
+        # Discard the BOS to match the initial query text
+        has_bos = query_token_ids[0] == self.tokenizer.bos_token_id
+        if has_bos:
+            query_token_ids = query_token_ids[1:]
+     
+        if reward_entire_span:
+            # Reward the entire span of each reasoning step.
+            for start, end in zip(reasoning_indices[:-1], reasoning_indices[1:]):
+                # Ensure indices are within bounds.
+                start = max(0, start)
+                end = min(len(response_text), end)
+                char_rewards[start:end] = process_reward_value
+        else:
+            # Reward only the token at the beginning of each reasoning step.
+            for index in reasoning_indices[1:]:
+                if 0 <= index < len(response_text):
+                    char_rewards[index] = process_reward_value
+
+        # Map character-level rewards to token-level rewards.
+        process_rewards = [0] * len(response_token_ids)
+        query_length = len(query_text)
+        for i in range(len(process_rewards)):
+            char_pos_of_token = offsets[i + len(query_token_ids)][0]
+            char_pos_of_token -= query_length
+            if 0 <= char_pos_of_token < len(response_text):
+                process_rewards[i] = int(char_rewards[char_pos_of_token])
+            else:
+                process_rewards[i] = 0
+
+        if has_eos:
+            # we need to add the EOS token back
+            process_rewards.append(process_rewards[-1])
+        return process_rewards

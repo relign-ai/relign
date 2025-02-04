@@ -5,6 +5,7 @@ import torch
 from accelerate import PartialState
 
 from relign.common.vllm_server import VLLMServer
+from relign.utils.config import load_deepspeed_config 
 
 
 @pytest.fixture
@@ -65,3 +66,33 @@ def experiment_dir(request, pytestconfig):
     exp_dir = base_output_dir / test_nodeid
     exp_dir.mkdir(parents=True, exist_ok=True)
     return exp_dir
+
+@pytest.fixture
+def deepspeed_config():
+    return {
+        "optimizer": {
+            "type": "AdamW",
+            "params": {
+                "lr": 0.001,
+                "betas": [0.9, 0.999],
+                "eps": 1e-8,
+                "weight_decay": 0.01,
+            },
+        },
+        "scheduler": {},
+        "gradient_accumulation_steps": 1,
+        "gradient_clipping": 1.0,
+        "train_batch_size": 16,
+        "train_micro_batch_size_per_gpu": 16,
+        "zero_allow_untested_optimizer": True,
+        "bf16": {"enabled": True},
+        "zero_0": {
+            "stage": 0,
+            "allgather_partitions": True,
+            "allgather_bucket_size": 500000000,
+            "overlap_comm": False,
+            "reduce_scatter": True,
+            "reduce_bucket_size": 50000000,
+            "contiguous_gradients": True,
+        },
+    }
