@@ -23,7 +23,7 @@ def remove_text_between_symbols(text, start_symbol, end_symbol):
 class GSM8K(BaseTask):
     def __init__(
         self,
-        dataset_dict_path="data/gsm8k",
+        dataset_dict_path: str,
         use_original_format: bool = False,
         remove_calculator_expressions: bool = True,
         intermediate_step_delimiter: Optional[str] = "\n",
@@ -38,7 +38,8 @@ class GSM8K(BaseTask):
         system_prompt = "TODO"
 
         super().__init__()
-
+        
+        self.dataset_dict_path = dataset_dict_path
         self.remove_calculator_expressions = remove_calculator_expressions
         self.use_original_format = use_original_format
         self.answer_prefix = answer_prefix
@@ -48,6 +49,7 @@ class GSM8K(BaseTask):
         self.remove_mapped_fields = remove_mapped_fields    
         self.hf_num_proc = hf_num_proc
 
+    # ----------------- Abstract Function Implementations ----------------- #
 
     def build_dataset(
         self,
@@ -64,12 +66,74 @@ class GSM8K(BaseTask):
         )
         return datasets
     
+
+    def evaluate_predictions(
+        self,
+        *,
+        predictions: List[List[str]] = None,
+        references: Dataset = None,
+    ) -> Dict[str, float]:
+        once_hit_acc = []
+        correct_frac = []
+        majority_vote_acc = []
+        unique_answer_count = []
+        none_answer_extracted = []
+
+        for solution_candidates, ref in zip(predictions, references):
+            gold_answer = ref["answer"]
+
+            assert len(solution_candidates) > 0
+            answer_candidates = [
+                self.extract_predicted_answer_from_text(sol)
+                for sol in solution_candidates
+            ]
+            none_answer_extracted.append(
+                sum([1 for ans in answer_candidates if ans is None])
+                / len(answer_candidates)
+            )
+
+            grading_results = [
+                self.grade_answer(given_answer=ans, ground_truth=gold_answer, item=ref)
+                for ans in answer_candidates
+            ]
+            once_hit_acc.append(float(any(grading_results)))
+            correct_frac.append(sum(grading_results) / len(grading_results))
+
+            answer_candidates = [
+                tuple(ans) if isinstance(ans, list) else ans
+                for ans in answer_candidates
+            ]
+
+            majority_answer, _ = Counter(answer_candidates).most_common(n=1)[0]
+            assert len(answer_candidates) == len(grading_results)
+            majority_answer_index = answer_candidates.index(majority_answer)
+            majority_answer_is_correct = grading_results[majority_answer_index]
+            majority_vote_acc.append(majority_answer_is_correct)
+
+            unique_answer_count.append(len(set(answer_candidates)))
+
+        once_hit = sum(once_hit_acc) / len(once_hit_acc)
+        correct_frac = sum(correct_frac) / len(correct_frac)
+
+        return {
+            "once_hit": once_hit,
+            "exact_match": once_hit,  # for backwards compatibility
+            "correct_frac": correct_frac,
+            "exact_match_frac": correct_frac,  # for backwards compatibility
+            "majority_vote_acc": sum(majority_vote_acc) / len(majority_vote_acc),
+            "unique_answer_count": sum(unique_answer_count) / len(unique_answer_count),
+            "none_answer_extracted_frac_per_problem": (
+                sum(none_answer_extracted) / len(none_answer_extracted)
+            ),
+        }
+
+    # ----------------- Helper Functions ----------------- #
+
     def _load_data_source(self) -> DatasetDict: 
         return DatasetDict.load_from_disk(self.dataset_dict_path)
 
 
-
-    def extract_predicted_answer_from_text(
+    def _extract_predicted_answer_from_text(
         self, text: str, problem: Optional[str] = None
     ) -> Optional[str]:
         if self.use_original_format:
@@ -88,11 +152,13 @@ class GSM8K(BaseTask):
             # Pick the last number
             pred_answer = pred_answer[-1].strip()
             return pred_answer
+        
 
-    def extract_gold_answer_from_text(self, text: str) -> str:
+    def _extract_gold_answer_from_text(self, text: str) -> str:
         return text.split("####")[1].strip()
 
-    def split_solution_into_intermediate_steps(self, solution: str) -> List[int]:
+
+    def _split_solution_into_intermediate_steps(self, solution: str) -> List[int]:
         """
         Split the solution into reasoning steps.
 
@@ -198,7 +264,7 @@ class GSM8K(BaseTask):
         assert indices[-1] == len(solution), f"{indices[-1]} != {len(solution)}"
         return indices
 
-    def grade_answer(
+    def _grade_answer(
         self,
         *,
         given_answer: Optional[str] = None,
@@ -214,67 +280,6 @@ class GSM8K(BaseTask):
             given_answer.strip().replace(",", "").lower()
             == ground_truth.strip().lower()
         )
-
-    # noinspection DuplicatedCode
-    def evaluate_predictions(
-        self,
-        *,
-        predictions: List[List[str]] = None,
-        references: Dataset = None,
-    ) -> Dict[str, float]:
-        once_hit_acc = []
-        correct_frac = []
-        majority_vote_acc = []
-        unique_answer_count = []
-        none_answer_extracted = []
-
-        for solution_candidates, ref in zip(predictions, references):
-            gold_answer = ref["answer"]
-
-            assert len(solution_candidates) > 0
-            answer_candidates = [
-                self.extract_predicted_answer_from_text(sol)
-                for sol in solution_candidates
-            ]
-            none_answer_extracted.append(
-                sum([1 for ans in answer_candidates if ans is None])
-                / len(answer_candidates)
-            )
-
-            grading_results = [
-                self.grade_answer(given_answer=ans, ground_truth=gold_answer, item=ref)
-                for ans in answer_candidates
-            ]
-            once_hit_acc.append(float(any(grading_results)))
-            correct_frac.append(sum(grading_results) / len(grading_results))
-
-            answer_candidates = [
-                tuple(ans) if isinstance(ans, list) else ans
-                for ans in answer_candidates
-            ]
-
-            majority_answer, _ = Counter(answer_candidates).most_common(n=1)[0]
-            assert len(answer_candidates) == len(grading_results)
-            majority_answer_index = answer_candidates.index(majority_answer)
-            majority_answer_is_correct = grading_results[majority_answer_index]
-            majority_vote_acc.append(majority_answer_is_correct)
-
-            unique_answer_count.append(len(set(answer_candidates)))
-
-        once_hit = sum(once_hit_acc) / len(once_hit_acc)
-        correct_frac = sum(correct_frac) / len(correct_frac)
-
-        return {
-            "once_hit": once_hit,
-            "exact_match": once_hit,  # for backwards compatibility
-            "correct_frac": correct_frac,
-            "exact_match_frac": correct_frac,  # for backwards compatibility
-            "majority_vote_acc": sum(majority_vote_acc) / len(majority_vote_acc),
-            "unique_answer_count": sum(unique_answer_count) / len(unique_answer_count),
-            "none_answer_extracted_frac_per_problem": (
-                sum(none_answer_extracted) / len(none_answer_extracted)
-            ),
-        }
 
     def _preprocess_example(self, example: Dict[str, Any]) -> Dict[str, Any]:
         question = example["question"].strip()

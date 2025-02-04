@@ -65,7 +65,8 @@ class BaseTask(ABC):
         """
         pass
 
-    
+    # ----------------- Public functions -----------------#
+
     def get_datasets(
         self, split: Optional[str] = None, no_cache: bool = False
     ) -> Union[DatasetDict, Dataset]:
@@ -84,8 +85,11 @@ class BaseTask(ABC):
         else:
             return self._ds_cache[split]
         
-    
+
     #----------------- Helper functions -----------------# 
+    # Mostly intended for internal use, but can be 
+    # used externally as well
+
 
     def map_datasets_fields(data_source: DatasetDict, 
                            field_map: Dict[str, str], 
