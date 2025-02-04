@@ -134,8 +134,7 @@ class GRPOTrainer(BaseTrainer):
         episodes = self._hydrate_episodes(episodes)
         dataloader = DataLoader(
             episodes,
-            batch_size=self.per_device_batch_size,
-            sampler=GroupedBatchSampler(
+            batch_sampler=GroupedBatchSampler(
                 episodes, 
                 group_column='group',
                 groups_per_step=1,
