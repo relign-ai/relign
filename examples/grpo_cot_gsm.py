@@ -70,7 +70,7 @@ def grpo_gsm(cfg,  local_rank: int = -1):
     answer_extractor = IdentityAnswerExtractor(node_key_name="text")
     program = """{{prefix}}{{gen "chain_of_thought" temperature={temperature} top_p={top_p} max_tokens={max_tokens} save_stop_text="stop_text" stop={stop} n={num_samples}}}"""
 
-    branch_factors = [{"depth": 0, "branch_factor": 10}]
+    branch_factors = [{"depth": 0, "branch_factor": 2}]
     node_expander = EfficientIIDExpander(
         branch_factor_strategy=ListBranchFactor(branch_factors=branch_factors),
         program=program,
@@ -89,6 +89,8 @@ def grpo_gsm(cfg,  local_rank: int = -1):
     [MATH_TASK] Problem:
     {query}
 
+    answr format:
+    <think>reasoning</rink>
     Solution:
     """
 
@@ -144,7 +146,7 @@ def grpo_gsm(cfg,  local_rank: int = -1):
     algorithm_cls = TrainLoop 
     algorithm_kwargs = {
         "num_iterations": 10,
-        "num_episodes_per_iteration": 5,
+        "num_episodes_per_iteration": 1,
         "verbose": 1,
         "evaluation_freq": 10,
         "checkpoint_freq": 10,

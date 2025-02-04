@@ -140,7 +140,7 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
                     reward = self.reward_function.get_unfinished_response_penalty()
                     is_unfinished_response = True
                 try:
-                    query_token_ids, response_token_ids, offsets = (
+                    query_token_ids, response_token_ids  = (
                         self._tokenize_query_and_response(
                             query_text,
                             response_text,

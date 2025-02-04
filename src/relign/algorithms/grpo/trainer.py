@@ -2,11 +2,13 @@ from typing import Dict, Tuple, Union, Optional, Literal
 from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 import numpy as np
 from deepspeed import comm as dist
 from accelerate.utils import gather, pad_across_processes, release_memory
 from datasets import Dataset
 from tqdm import tqdm
+
 
 from relign.common.deepspeed_utils import prepare_data_loader_for_inference
 from relign.common.dataset import EpisodeDataset
@@ -15,6 +17,7 @@ from relign.utils.trainer import prepare_data_loader_for_training
 
 from relign.algorithms.grpo.data_collator import (
     GRPODataCollator, 
+    GroupedBatchSampler,
     COLUMN_ACTOR_SHIFTED_LOGPS,
     COLUMN_REF_SHIFTED_LOGPS
 )
@@ -129,17 +132,30 @@ class GRPOTrainer(BaseTrainer):
 
         # change to appropriate input structure
         episodes = self._hydrate_episodes(episodes)
-        dataloader = prepare_data_loader_for_training(
-            episodes, 
-            per_device_batch_size=self.per_device_batch_size, 
-            seed=self.seed,
-            drop_last=False,
-            data_loader_kwargs={
-                "collate_fn": GRPODataCollator(),
-                "num_workers": self.dataloader_num_workers,
-                "pin_memory": self.dataloader_pin_memory,
-            }
+        dataloader = DataLoader(
+            episodes,
+            batch_size=self.per_device_batch_size,
+            sampler=GroupedBatchSampler(
+                episodes, 
+                group_column='group',
+                groups_per_step=1,
+            ), 
+            collate_fn=GRPODataCollator(),
+            num_workers=self.dataloader_num_workers,
+            pin_memory=self.dataloader_pin_memory
         )
+
+        # dataloader = prepare_data_loader_for_training(
+        #     episodes, 
+        #     per_device_batch_size=self.per_device_batch_size, 
+        #     seed=self.seed,
+        #     drop_last=False,
+        #     data_loader_kwargs={
+        #         "collate_fn": GRPODataCollator(),
+        #         "num_workers": self.dataloader_num_workers,
+        #         "pin_memory": self.dataloader_pin_memory,
+        #     }
+        # )
 
         steps_in_epoch = len(dataloader)
         optim_steps_in_epoch = steps_in_epoch // self.gradient_accumulation_steps

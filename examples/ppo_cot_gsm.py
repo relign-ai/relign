@@ -107,7 +107,7 @@ def ppo_gsm(cfg,  local_rank: int = -1):
         answer_extractor=answer_extractor,
         node_expander=node_expander,
         guidance_llm=mock_guidance,
-        max_depth=4,
+        max_depth=2,
         result_dir=Path(experiment_dir) / "chain_of_thoughts",
     )
 

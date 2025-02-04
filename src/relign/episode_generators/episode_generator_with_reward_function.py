@@ -177,7 +177,6 @@ class EpisodeGeneratorWithRewardFunction(OnPolicyEpisodeGenerator, TreeEpisodeUt
         """
         Determine whether to append BOS to the query based on the tokenizer
         """
-        logger.info(f"append bos to query{self.append_bos_to_query}")
         #TODO: support auto 
         if self.append_bos_to_query == "auto":
             return self.append_bos_to_query
