@@ -63,7 +63,8 @@ class BaseTrainer(ABC):
         num_iterations: int = 1,
         num_epochs: int = 1,
         gamma: int = 1,
-        lam = 0.95,
+        lam=0.95,
+        logging_steps: int = 5,
     ):
         """
         Main Trainer object.
@@ -99,6 +100,7 @@ class BaseTrainer(ABC):
         self.num_epochs = num_epochs
         self.gamma = gamma
         self.lam = lam
+        self.logging_steps = logging_steps
 
     def _init_trainer_dir(self):
         self.trainer_dir = self.project_root_dir / "trainer"
@@ -117,20 +119,22 @@ class BaseTrainer(ABC):
     def _is_main_process(self):
         return self.distributed_state.is_main_process
 
-    def _is_kl_penalty_enabled(self) -> bool:
+    def _is_kl_penalty_enabled(
+        self,
+        kl_penalty_loss_type: Optional[str] = None,
+        policy_reference: Optional[BasePolicy] = None,
+    ) -> bool:
         """
         Check if the KL penalty is enabled.
         """
-        return ( 
-            not self.grpo_params.kl_penalty_loss_type is not None
-            and self.policy.reference is not None
-        )
+        return not kl_penalty_loss_type is not None and policy_reference is not None
 
     def _compute_kl_penalty(
         self,
         logprob: Union[torch.FloatTensor, np.ndarray],
         ref_logprob: Union[torch.FloatTensor, np.ndarray],
         estimation_type: Optional[str] = None,
+        trainer_hparams: Optional[Dict[str, Any]] = None,
     ) -> Union[torch.FloatTensor, np.ndarray]:
         """
         Compute the per-token KL penalty between the log probabilities of the actor and the reference model.
@@ -146,7 +150,7 @@ class BaseTrainer(ABC):
         """
 
         if estimation_type is None:
-            estimation_type = self.ppo_hparams.kl_penalty
+            estimation_type = trainer_hparams.kl_penalty
 
         if estimation_type == "kl":
             return logprob - ref_logprob

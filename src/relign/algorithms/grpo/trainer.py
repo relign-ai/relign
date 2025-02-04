@@ -74,7 +74,6 @@ class GRPOParams:
         temperature (float):
             The temperature used for sampling.
     """
-
     adap_kl_ctrl: bool = True
     init_kl_coef: Optional[float] = 0.2
     kl_penalty: Literal["kl", "abs", "mse", "full", "control_variate"] = "kl"
@@ -478,7 +477,11 @@ class GRPOTrainer(BaseTrainer):
             shifted_ref_logprobs is not None
             and self.grpo_params.kl_penalty_loss_type is None
         ):
-            per_token_kl = self._compute_kl_penalty(shifted_actor_logprobs, shifted_ref_logprobs)
+            per_token_kl = self._compute_kl_penalty(
+                shifted_actor_logprobs, 
+                shifted_ref_logprobs,
+                trainer_hparams=self.grpo_params,
+            )
         else:
             # KL penalty is not part of the reward
             per_token_kl = None

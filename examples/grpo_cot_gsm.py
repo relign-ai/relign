@@ -1,13 +1,13 @@
 import hydra
 import argparse
 from pathlib import Path
-from transformers import AutoModelForCausalLM, AutoTokenizer 
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from omegaconf import OmegaConf
 
 from relign.tasks import GSM8K
 from relign.policies.base_actor import ActorPolicy
-from relign.algorithms.train_loop import TrainLoop 
-from relign.algorithms.grpo.trainer import GRPOTrainer 
+from relign.algorithms.train_loop import TrainLoop
+from relign.algorithms.grpo.trainer import GRPOTrainer
 from relign.episode_generators.envs.math_episode_generator import (
     MathEpisodeGenerator,
     MATHRewardFunction,
@@ -18,12 +18,12 @@ from relign.runners.distributed_runner import DistributedRunner
 from relign.common.vllm_server import VLLMServer
 
 
-def grpo_gsm(cfg,  local_rank: int = -1):
+def grpo_gsm(cfg, local_rank: int = -1):
     ds_config = cfg.deepspeed
     ds_config = OmegaConf.to_container(ds_config, resolve=True)
     experiment_name = "grpo-cot-rho1b-gsm"
-    experiment_dir  = "experiment"
-    
+    experiment_dir = "experiment"
+
     # --------- Tokenizer --------------- #
     tokenizer = AutoTokenizer.from_pretrained("realtreetune/rho-1b-sft-GSM8K")
 
@@ -32,13 +32,12 @@ def grpo_gsm(cfg,  local_rank: int = -1):
         ## load gp2 as actor
         return AutoModelForCausalLM.from_pretrained("realtreetune/rho-1b-sft-GSM8K")
 
-
     # --------- Task Definition ----------#
     task = GSM8K(
         answer_prefix=None,
         load_dataset_dict=True,
         dataset_dict_path="data/gsm8k",
-        intermetdiate_step_tags= ["<think>", "</think>"],
+        intermetdiate_step_tags=["<think>", "</think>"],
         remove_calculator_expressions=True,
     )
 
@@ -54,16 +53,19 @@ def grpo_gsm(cfg,  local_rank: int = -1):
     # -------- Inference Strategy --------#
     from relign.inference.cot_inference_strategy import COTInferenceStrategy
     from relign.inference.tree_inference.expansion import EfficientIIDExpander
-    from relign.inference.tree_inference.answer_extraction import (IdentityAnswerExtractor)
+    from relign.inference.tree_inference.answer_extraction import (
+        IdentityAnswerExtractor,
+    )
 
-    n_episodes_per_iteration = 10 
-    n_rollouts_per_sample = 10 # Effective group size 
+    n_episodes_per_iteration = 10
+    n_rollouts_per_sample = 10  # Effective group size
     max_concurrent_programs = 1
     max_concurrent_generations = 1
     n_epiodes_per_iteration = n_episodes_per_iteration / n_rollouts_per_sample
-    
+
     from relign.guidance.llms._mock import Mock
-    from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor 
+    from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor
+
     mock_guidance = Mock()
 
     # ---------- Node Expanders---------- #
@@ -97,7 +99,7 @@ def grpo_gsm(cfg,  local_rank: int = -1):
     # ---- Chain of thought Strategy --- #
     cot_inference_strategy = COTInferenceStrategy(
         samples=n_rollouts_per_sample,
-        question_field='query',
+        question_field="query",
         question_template=question_template,
         max_concurrent_generations=max_concurrent_generations,
         max_concurrent_programs=max_concurrent_programs,
@@ -114,7 +116,7 @@ def grpo_gsm(cfg,  local_rank: int = -1):
     episode_generator_kwargs = {
         "tokenizer": tokenizer,
         "num_episodes_per_iteration": n_episodes_per_iteration,
-        "reasoning_step_delimiter": '',
+        "reasoning_step_delimiter": "",
         "answer_prefix": "\n\n # Answer\n",
         "max_sequence_length": 2048,
         "max_question_length": 1512,
@@ -129,13 +131,12 @@ def grpo_gsm(cfg,  local_rank: int = -1):
     # ----------- Policy ---------------#
     actor_policy = ActorPolicy
     actor_kwargs = {
-        "actor_model_fn": actor_model_fn,   
-        "actor_config": ds_config,  
+        "actor_model_fn": actor_model_fn,
+        "actor_config": ds_config,
     }
 
-
     # ----------- Trainer ---------------#
-    ppo_trainer_class = GRPOTrainer 
+    ppo_trainer_class = GRPOTrainer
     ppo_trainer_kwargs = {
         "per_device_batch_size": 10,
         "dataloader_num_workers": 1,
@@ -143,7 +144,7 @@ def grpo_gsm(cfg,  local_rank: int = -1):
     }
 
     # ----------- Algorithm--------------#
-    algorithm_cls = TrainLoop 
+    algorithm_cls = TrainLoop
     algorithm_kwargs = {
         "num_iterations": 10,
         "num_episodes_per_iteration": 1,
@@ -167,7 +168,7 @@ def grpo_gsm(cfg,  local_rank: int = -1):
         algorithm_kwargs=algorithm_kwargs,
     )
 
-    # Start train run 
+    # Start train run
     runner.run()
 
 
@@ -175,10 +176,11 @@ def main():
     parser = argparse.ArgumentParser(description="Deepspeed training")
     parser.add_argument("--local_rank", type=int, default=-1)
     args, unknown = parser.parse_known_args()
-     
+
     hydra.initialize(config_path="../configs", version_base=None)
     cfg = hydra.compose(config_name="config")
     grpo_gsm(cfg=cfg, local_rank=args.local_rank)
+
 
 if __name__ == "__main__":
     main()

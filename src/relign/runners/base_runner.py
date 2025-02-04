@@ -4,10 +4,15 @@ from typing import Type, Dict, Any, Optional
 from abc import ABC, abstractmethod
 from pathlib import Path  # Corrected import
 
-from relign.algorithms.train_loop import TrainLoop 
-from relign.policies.base_policy import BasePolicy 
+from relign.algorithms.train_loop import TrainLoop
+from relign.policies.base_policy import BasePolicy
 from relign.episode_generators.base_episode_generator import BaseEpisodeGenerator
 from relign.algorithms.base_trainer import BaseTrainer
+
+from relign.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 class BaseRunner(ABC):
     def __init__(
@@ -23,6 +28,7 @@ class BaseRunner(ABC):
         episode_generator_kwargs: Dict[str, Any],
         algorithm_kwargs: Dict[str, Any],
         seed: Optional[int] = None,
+        debug_mode: bool = False,
     ):
         # Initialize the seed
         if seed is None:
@@ -56,6 +62,7 @@ class BaseRunner(ABC):
 
         self.exp_root = self._init_experiment_dir()
         self.log_dir = self._init_log_dir()
+        self.debug_mode = debug_mode
 
     def _init_experiment_dir(self) -> Path:
         """
@@ -108,4 +115,33 @@ class BaseRunner(ABC):
         # Run the learn method of the algorithm
         self.algorithm.learn()
 
+    def _create_cloud_logger(self):
+        try:
+            import wandb
+        except ImportError:
+            logger.warning(
+                "Wandb is not installed. Please install it using `pip install wandb`"
+            )
+            return None
 
+        if wandb.run is None:
+            if self.debug_mode:
+                mode = "disabled"
+            else:
+                mode = None
+
+            settings = wandb.Settings()
+            settings.update(
+                _save_requirements=True,
+                _disable_meta=False,
+            )
+            wandb.init(
+                config={"seed": self.seed},
+                project="relign-01",
+                name=self.experiment_name,
+                resume="allow",
+                mode=mode,
+                force=True,
+            )
+
+        return wandb.run

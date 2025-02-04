@@ -8,7 +8,7 @@ from transformers import PreTrainedModel
 from transformers.integrations import HfTrainerDeepSpeedConfig
 from deepspeed import DeepSpeedEngine
 
-from relign.policies.base_policy import DeepSpeedPolicy 
+from relign.policies.base_policy import DeepSpeedPolicy
 from relign.policies.base_policy import ActorForwardOutput
 from relign.utils.trainer import masked_mean, monitor_tensor_anomalies
 from relign.utils.logging import get_logger
@@ -18,11 +18,7 @@ logger = get_logger(__name__)
 
 class ActorPolicy(DeepSpeedPolicy):
     def __init__(
-        self, 
-        actor_model_fn, 
-        actor_config,
-        enable_reference: bool = True,
-        **kwargs
+        self, actor_model_fn, actor_config, enable_reference: bool = True, **kwargs
     ):
         super().__init__(**kwargs)
         self.actor_model_fn = actor_model_fn
@@ -33,7 +29,7 @@ class ActorPolicy(DeepSpeedPolicy):
     def _init_actor_model(
         self,
         actor_model_fn: Callable[[], PreTrainedModel],
-        only_return_unwrapped_model: bool = False
+        only_return_unwrapped_model: bool = False,
     ) -> Union[DeepSpeedEngine, PreTrainedModel]:
 
         if hasattr(self, "_actor_engine"):
@@ -111,15 +107,21 @@ class ActorPolicy(DeepSpeedPolicy):
         logger.info("Initializing actor DeepSpeed engine...")
 
         # Decide whether to skip if we already have a cached engine
-        if (not force_reload) and hasattr(self, "_actor_engine") and self._actor_engine is not None:
+        if (
+            (not force_reload)
+            and hasattr(self, "_actor_engine")
+            and self._actor_engine is not None
+        ):
             return  # already loaded
-        
+
         # If a new callable was passed, update. Otherwise use existing
         if actor_model_fn is not None:
             self.actor_model_fn = actor_model_fn
 
         logger.info("Initializing actor DeepSpeed engine...")
-        self._init_actor_model(actor_model_fn=self.actor_model_fn, only_return_unwrapped_model=False)
+        self._init_actor_model(
+            actor_model_fn=self.actor_model_fn, only_return_unwrapped_model=False
+        )
         logger.info("Actor engine init done.")
 
     def get_actor_model(self):
@@ -136,8 +138,8 @@ class ActorPolicy(DeepSpeedPolicy):
         return_mean_entropy: bool = False,
         return_logits: bool = True,
         return_sequence_logp: bool = False,
-        return_all_logp : bool = False,
-        sequence_logp_reduction: Optional[Literal["mean"]] = None
+        return_all_logp: bool = False,
+        sequence_logp_reduction: Optional[Literal["mean"]] = None,
     ) -> ActorForwardOutput:
         """
         Forward pass of the policy.
@@ -151,7 +153,7 @@ class ActorPolicy(DeepSpeedPolicy):
             input_ids=input_ids,
             attention_mask=attention_mask,
             return_dict=True,
-            use_cache=False
+            use_cache=False,
         )
 
         logits = outputs.logits.float()
@@ -185,9 +187,9 @@ class ActorPolicy(DeepSpeedPolicy):
             output["sequence_logp"] = sequence_log_probs
 
         if return_all_logp:
-            output["all_logp"] = per_token_log_probs 
+            output["all_logp"] = per_token_log_probs
 
-        return ActorForwardOutput(**output)    
+        return ActorForwardOutput(**output)
 
     def actor_loss(
         self,
@@ -220,7 +222,9 @@ class ActorPolicy(DeepSpeedPolicy):
         ratio = torch.exp(log_ratio)
 
         pg_losses1 = -advantages * ratio
-        pg_losses1_anomalies = monitor_tensor_anomalies(pg_losses1.detach(), action_mask)
+        pg_losses1_anomalies = monitor_tensor_anomalies(
+            pg_losses1.detach(), action_mask
+        )
         clip_range = 0.4
         pg_losses2 = -advantages * torch.clamp(
             ratio, 1.0 - clip_range, 1.0 + clip_range
@@ -231,16 +235,14 @@ class ActorPolicy(DeepSpeedPolicy):
         # Possibly apply a KL penalty if self.ppo_hparams.kl_penalty_loss_type is not None
         ref_kl_loss = None
         ref_kl = None
-        kl_penalty_loss_type = "forward_kl" 
+        kl_penalty_loss_type = "forward_kl"
         kl_penalty_loss_clip_max = 1000
-        kl_penalty_loss_clip_min  = 0
+        kl_penalty_loss_clip_min = 0
         kl_clt = 0.2
         if kl_penalty_loss_type is not None:
             # _compute_kl_penalty is below
             ref_kl_tensor = self._compute_kl_penalty(
-                logprobs,
-                ref_logprobs,
-                estimation_type=kl_penalty_loss_type
+                logprobs, ref_logprobs, estimation_type=kl_penalty_loss_type
             )
             # clamp for numerical stability
             ref_kl_tensor = torch.clamp(
@@ -263,9 +265,7 @@ class ActorPolicy(DeepSpeedPolicy):
             pg_loss = pg_loss * 0.0
             is_skipped = True
 
-        pg_clip_frac = masked_mean(
-            (pg_losses2 > pg_losses1).float(), action_mask
-        )
+        pg_clip_frac = masked_mean((pg_losses2 > pg_losses1).float(), action_mask)
         approx_kl = 0.5 * masked_mean((logprobs - old_logprobs) ** 2, action_mask)
         policy_kl = masked_mean(old_logprobs - logprobs, action_mask)
 
@@ -287,18 +287,15 @@ class ActorPolicy(DeepSpeedPolicy):
         Useful for freeing memory between iterations if desired.
         """
         if not self.cache_ds_engines:
-            if hasattr(self, "_actor_engine") and self._actor_engine is not None:
+            if hasattr(self, "actor") and self.actor is not None:
                 logger.info("Destroying actor engine to free memory.")
                 # You might want to call engine.release_workspace() or similar if needed
-                del self._actor_engine
-                self._actor_engine = None
+                del self.actor
+                self.actor = None
 
             # Clear the `self.actor` reference as well, to truly free memory
             self.actor = None
 
-    # -------------------------------------------------------------------------
-    # New methods for managing the reference model (duplicate of the actor)
-    # -------------------------------------------------------------------------
     def cache_initial_actor_state(self) -> None:
         """
         Cache a snapshot of the actor model's state dict.
@@ -332,7 +329,10 @@ class ActorPolicy(DeepSpeedPolicy):
         ref_model: PreTrainedModel = self.actor_model_fn()
 
         # Load the cached actor snapshot, if available, to freeze the initial state.
-        if hasattr(self, "actor_snapshot_state_dict") and self.actor_snapshot_state_dict is not None:
+        if (
+            hasattr(self, "actor_snapshot_state_dict")
+            and self.actor_snapshot_state_dict is not None
+        ):
             ref_model.load_state_dict(self.actor_snapshot_state_dict)
         elif hasattr(self, "actor") and self.actor is not None:
             if isinstance(self.actor, DeepSpeedEngine):
@@ -352,6 +352,7 @@ class ActorPolicy(DeepSpeedPolicy):
         self._patch_ds_config_for_bucket_size(ds_config, ref_model.config)
 
         import copy
+
         ref_config = copy.deepcopy(ds_config)
         if "optimizer" in ref_config.config:
             del ref_config.config["optimizer"]
@@ -389,12 +390,12 @@ class ActorPolicy(DeepSpeedPolicy):
         return_mean_entropy: bool = False,
         return_logits: bool = True,
         return_sequence_logp: bool = False,
-        return_all_logp : bool = False,
-        sequence_logp_reduction: Optional[Literal["mean"]] = None
+        return_all_logp: bool = False,
+        sequence_logp_reduction: Optional[Literal["mean"]] = None,
     ) -> ActorForwardOutput:
         """
         Forward pass of the reference model.
-        
+
         This method is similar to forward_actor but runs the reference model in evaluation mode
         (with torch.no_grad()) and omits temperature scaling.
         """
@@ -406,12 +407,12 @@ class ActorPolicy(DeepSpeedPolicy):
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 return_dict=True,
-                use_cache=True
+                use_cache=True,
             )
 
             logits = outputs.logits.float()
             # Note: Skipping temperature scaling for the frozen reference model.
-            
+
             # Shift logits and labels in the same way as the actor forward
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
@@ -431,12 +432,14 @@ class ActorPolicy(DeepSpeedPolicy):
             if return_sequence_logp:
                 sequence_log_probs = per_token_log_probs.sum(dim=-1)
                 if sequence_logp_reduction == "mean":
-                    sequence_log_probs = sequence_log_probs / shift_label_mask.sum(dim=-1)
+                    sequence_log_probs = sequence_log_probs / shift_label_mask.sum(
+                        dim=-1
+                    )
                 output["sequence_logp"] = sequence_log_probs
             if return_all_logp:
                 output["all_logp"] = per_token_log_probs
 
-            return ActorForwardOutput(**output) 
+            return ActorForwardOutput(**output)
 
     def destroy_reference_engine_if_not_cached(self) -> None:
         """
@@ -447,9 +450,9 @@ class ActorPolicy(DeepSpeedPolicy):
                 logger.info("Destroying reference engine to free memory.")
                 del self.reference
                 self.reference = None
-                if hasattr(self, "_reference_engine"):
-                    del self._reference_engine
-                    self._reference_engine = None
+                if hasattr(self, "reference"):
+                    del self.reference
+                    self.reference = None
 
     def _compute_kl_penalty(
         self,

@@ -48,3 +48,5 @@ runner_test/
 
 #experiments/ testts
 *.arrow
+wandb/
+

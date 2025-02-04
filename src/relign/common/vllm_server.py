@@ -38,7 +38,7 @@ def find_and_kill_process(port: int):
         try:
             # Safely fetch connections. Some processes may not have them or may raise exceptions.
             connections = proc.net_connections()
-            
+
             for conn in connections:
                 if conn.laddr.port == port:
                     logger.info(
@@ -141,7 +141,7 @@ class VLLMServer:
         self,
         seed: int = 42,
         swap_space: int = 16,
-        gpu_memory_utilization: float = 0.8,
+        gpu_memory_utilization: float = 0.5,
         max_num_seqs: int = 256,
         enable_prefix_caching: bool = False,
         disable_sliding_window: bool = False,
@@ -258,12 +258,7 @@ class VLLMServer:
         server_url = f"http://localhost:{self.port}/v1"
         return server_url
 
-    def _launch_process(
-        self, 
-        gpu_idx: int, 
-        hf_ckpt_path_or_model: str, 
-        log_path: str
-    ):
+    def _launch_process(self, gpu_idx: int, hf_ckpt_path_or_model: str, log_path: str):
         logger.info("Launching vLLM server")
         # The command arguments:
         command = (
@@ -293,9 +288,7 @@ class VLLMServer:
                     command, stdout=f, stderr=f, preexec_fn=os.setsid
                 )
         else:
-            self.process = subprocess.Popen(
-                command, preexec_fn=os.setsid
-            )
+            self.process = subprocess.Popen(command, preexec_fn=os.setsid)
 
     def stop_server(self):
         if self.process is None or self.process.poll() is not None:
@@ -303,7 +296,7 @@ class VLLMServer:
             return
 
         # kill entire process group instead
-            # Kill the entire process group to ensure child processes are also terminated.
+        # Kill the entire process group to ensure child processes are also terminated.
         try:
             os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
         except Exception as e:
