@@ -179,7 +179,7 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
                 episode = Episode(
                     query_token_ids=query_token_ids,
                     response_token_ids=response_token_ids,
-                    reward=float(reward),
+                    scores=float(reward),
                 )
 
                 episodes.append(episode)
@@ -340,7 +340,7 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                 episode_kwargs = {
                     "query_token_ids": query_token_ids,
                     "response_token_ids": response_token_ids,
-                    "reward": float(reward),
+                    "scores": float(reward),
                     "group": int(i),
                 }
 

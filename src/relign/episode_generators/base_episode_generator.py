@@ -25,7 +25,7 @@ class Episode:
     """
     query_token_ids: List[int]
     response_token_ids: List[int]
-    reward: float # Final reward of the episode 
+    scores: float # Final scores of the episode 
     process_rewards: Optional[List[float]] = None # Process rewards for each token in the response
     advantages: Optional[List[float]] = None # Advantages for each token in the response
     group: Optional[int] = None # GRPO for grouped advantages/rewards
@@ -33,7 +33,7 @@ class Episode:
     def __post_init__(self):
         assert len(self.query_token_ids) > 0
         assert len(self.response_token_ids) > 0
-        assert self.reward is not None
+        assert self.scores is not None
 
         if self.advantages is not None:
             assert len(self.advantages) == len(
@@ -269,7 +269,7 @@ class DebugEpisodeGenerator(BaseEpisodeGenerator):
                 Episode(
                     query_token_ids=query_token_ids,
                     response_token_ids=response_token_ids,
-                    reward=reward,
+                    scores=reward,
                 )
             )
 

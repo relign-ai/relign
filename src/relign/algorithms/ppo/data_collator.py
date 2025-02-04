@@ -60,9 +60,9 @@ class PPODataCollator:
         if has_advantages:
             batch["advantages"] = []
 
-        has_scores = "rewards" in instances[0]
+        has_scores = "scores" in instances[0]
         if has_scores:
-            batch["rewards"] = []
+            batch["scores"] = []
 
         has_ref_shifted_logps = COLUMN_REF_SHIFTED_LOGPS in instances[0]
         if has_ref_shifted_logps:
@@ -133,8 +133,8 @@ class PPODataCollator:
 
 
             if has_scores:
-                assert isinstance(instance['rewards'], float)
-                batch["rewards"].append(instance["rewards"])
+                assert isinstance(instance['scores'], float)
+                batch["scores"].append(instance["scores"])
 
             if has_ref_shifted_logps:
                 shifted_ref_logps = prepare_shifted_logps(

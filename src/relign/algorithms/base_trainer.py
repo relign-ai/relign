@@ -1,8 +1,11 @@
-from typing import Dict, Any
+from typing import Dict, Any, Union, Optional
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
+import torch
+import torch.nn.functional as F
+import numpy as np
 from accelerate import PartialState
 
 from relign.policies.base_policy import BasePolicy
@@ -114,5 +117,79 @@ class BaseTrainer(ABC):
     def _is_main_process(self):
         return self.distributed_state.is_main_process
 
+    def _is_kl_penalty_enabled(self) -> bool:
+        """
+        Check if the KL penalty is enabled.
+        """
+        return ( 
+            not self.grpo_params.kl_penalty_loss_type is not None
+            and self.policy.reference is not None
+        )
 
+    def _compute_kl_penalty(
+        self,
+        logprob: Union[torch.FloatTensor, np.ndarray],
+        ref_logprob: Union[torch.FloatTensor, np.ndarray],
+        estimation_type: Optional[str] = None,
+    ) -> Union[torch.FloatTensor, np.ndarray]:
+        """
+        Compute the per-token KL penalty between the log probabilities of the actor and the reference model.
 
+        Args:
+            logprob (`Union[torch.FloatTensor, np.ndarray]`):
+                Log probabilities of the actor, shape (`batch_size`, T)
+            ref_logprob (`Union[torch.FloatTensor, np.ndarray]`):
+                Log probabilities of the reference model, shape (`batch_size`, T)
+
+        Returns:
+            `Union[torch.FloatTensor, np.ndarray]`: KL penalty, shape (`batch_size`, `T`)
+        """
+
+        if estimation_type is None:
+            estimation_type = self.ppo_hparams.kl_penalty
+
+        if estimation_type == "kl":
+            return logprob - ref_logprob
+
+        if estimation_type == "abs":
+            return (logprob - ref_logprob).abs()
+
+        if estimation_type == "mse":
+            return 0.5 * (logprob - ref_logprob).square()
+
+        if estimation_type == "control_variate":
+            # Compute the per-token approximate KL penalty between the log probabilities of the actor
+            # and the reference model as suggested by Schulman in http://joschu.net/blog/kl-approx.html
+            #
+            # D_KL [π_θ || π_ref] =
+            #    π_ref(y_t | x, y_<t) / π_θ(y_t | x, y_<t) - log(π_ref(y_t | x, y_<t) / π_θ(y_t | x, y_<t)) - 1
+            #
+
+            log_ratio = ref_logprob - logprob
+            if isinstance(log_ratio, torch.Tensor):
+                kl = torch.exp(log_ratio) - log_ratio - 1
+            elif isinstance(log_ratio, np.ndarray):
+                kl = np.exp(log_ratio) - log_ratio - 1
+            else:
+                raise ValueError("Unsupported type for log_ratio.")
+            return kl
+
+        if estimation_type == "seq_control_variate":
+            log_ratio = ref_logprob - logprob
+            if isinstance(log_ratio, torch.Tensor):
+                prob_ratio = torch.exp(log_ratio.sum(dim=-1, keepdim=True))
+                kl = prob_ratio - log_ratio - 1
+            elif isinstance(log_ratio, np.ndarray):
+                prob_ratio = np.exp(log_ratio.sum(axis=-1, keepdims=True))
+                kl = prob_ratio - log_ratio - 1
+            else:
+                raise ValueError("Unsupported type for log_ratio.")
+            return kl
+
+        if estimation_type == "full":
+            # Flip is required due to this issue? :https://github.com/pytorch/pytorch/issues/57459
+            return F.kl_div(
+                ref_logprob, logprob, log_target=True, reduction="none"
+            ).sum(-1)
+
+        raise NotImplementedError

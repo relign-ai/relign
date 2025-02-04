@@ -135,9 +135,9 @@ class GRPODataCollator:
         if has_process_rewards: 
             batch["process_rewards"] = []
 
-        has_reward= "reward" in instances[0] and instances[0]["reward"] is not None
-        if has_reward:
-            batch["reward"] = []
+        has_scores = "scores" in instances[0] and instances[0]["scores"] is not None
+        if has_scores:
+            batch["scores"] = []
 
         has_ref_shifted_logps = COLUMN_REF_SHIFTED_LOGPS in instances[0]
         if has_ref_shifted_logps:
@@ -210,9 +210,9 @@ class GRPODataCollator:
                 assert len(labels) == len(process_rewards)
                 batch["process_rewards"].append(process_rewards)
 
-            if has_reward:
-                assert isinstance(instance['reward'], float)
-                batch["reward"].append(instance["reward"])
+            if has_scores:
+                assert isinstance(instance['scores'], float)
+                batch["scores"].append(instance["scores"])
 
             if has_ref_shifted_logps:
                 shifted_ref_logps = prepare_shifted_logps(
