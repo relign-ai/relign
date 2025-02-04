@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from datasets import Dataset, DatasetDict
 
 from relign.utils import logging
-from relign.tasks import Task
+from relign.tasks import BaseTask
 
 logger = logging.get_logger(__name__)
 
@@ -20,22 +20,54 @@ def remove_text_between_symbols(text, start_symbol, end_symbol):
     return cleaned_text
 
 
-class GSM8K(Task):
+class GSM8K(BaseTask):
     def __init__(
         self,
+        dataset_dict_path="data/gsm8k",
         use_original_format: bool = False,
         remove_calculator_expressions: bool = True,
         intermediate_step_delimiter: Optional[str] = "\n",
         intermetdiate_step_tags: Optional[Tuple[str, str]] = None,
         answer_prefix: Optional[str] = "\n#### ",
-        **kwargs,
+        hf_num_proc: int = 4,
+        field_map: Optional[Dict[str, str]] = None,
+        remove_mapped_fields: bool = False,
+        
     ):
-        super().__init__(**kwargs)
+
+        system_prompt = "TODO"
+
+        super().__init__()
+
         self.remove_calculator_expressions = remove_calculator_expressions
         self.use_original_format = use_original_format
         self.answer_prefix = answer_prefix
         self.intermediate_step_delimiter = intermediate_step_delimiter
         self.intermediate_step_tags = intermetdiate_step_tags
+        self.field_map = field_map
+        self.remove_mapped_fields = remove_mapped_fields    
+        self.hf_num_proc = hf_num_proc
+
+
+    def build_dataset(
+        self,
+    ) -> DatasetDict:
+
+        data_source = self._load_data_source()
+        datasets = self.map_datasets_fields(data_source, 
+                                self.field_map, 
+                                self.remove_mapped_fields, 
+                                self.hf_num_proc)
+
+        datasets = datasets.map(
+            self._preprocess_example, num_proc=4, desc="Preprocessing examples"
+        )
+        return datasets
+    
+    def _load_data_source(self) -> DatasetDict: 
+        return DatasetDict.load_from_disk(self.dataset_dict_path)
+
+
 
     def extract_predicted_answer_from_text(
         self, text: str, problem: Optional[str] = None
@@ -243,15 +275,6 @@ class GSM8K(Task):
                 sum(none_answer_extracted) / len(none_answer_extracted)
             ),
         }
-
-    def build_dataset(
-        self,
-    ) -> DatasetDict:
-        datasets = super().build_dataset()
-        datasets = datasets.map(
-            self._preprocess_example, num_proc=4, desc="Preprocessing examples"
-        )
-        return datasets
 
     def _preprocess_example(self, example: Dict[str, Any]) -> Dict[str, Any]:
         question = example["question"].strip()

@@ -1,11 +1,8 @@
-from typing import Any, Optional, Dict, List, Union
-
+from typing import Optional, Dict, List, Union
+from abc import ABC, abstractmethod
 from datasets import (
     Dataset,
     DatasetDict,
-    IterableDataset,
-    IterableDatasetDict,
-    load_dataset,
 )
 
 from relign.utils import logging
@@ -13,60 +10,25 @@ from relign.utils import logging
 logger = logging.get_logger(__name__)
 
 
-class Task:
-    def __init__(
-        self,
-        hf_dataset_args: Optional[List[str]] = None,
-        hf_dataset_kwargs: Optional[Dict[str, Any]] = None,
-        load_dataset_dict: bool = True,
-        dataset_dict_path: Optional[str] = None,
-        hf_num_proc: int = 4,
-        field_map: Optional[Dict[str, str]] = None,
-        remove_mapped_fields: bool = False,
-    ):
+class BaseTask(ABC):
+    """
+    TODO: Add more documentation when the class is stable. For now it looks like it has two main functions:
+    
+    1. build_dataset: This function fully defines the dataset for this task.
+    2. evaluate_predictions: This function evaluates predictions against references and 
+       therefore determines the rewards for the task.
+    """    
+
+    def __init__(self, system_prompt: Optional[str] = None):
         """
-        Params:
-            hf_dataset_args: The arguments to pass to load_dataset
-            hf_dataset_kwargs: The keyword arguments to pass to load_dataset
+        Initializes a new instance of the BaseTask class.
 
-        Example:
-            # Load a dataset from the HuggingFace datasets library
-            >>> task = Task(
-            >>>    hf_dataset_args=["gsm8k", "main"],
-            >>> )
-
-            # Load a dataset from a local file
-            >>> task = Task(
-            >>>     hf_dataset_args=["json"],
-            >>>     hf_dataset_kwargs={
-            >>>         "data_files": {
-            >>>             "train": "data/train.jsonl",
-            >>>             "validation": "data/valid.jsonl",
-            >>>             "test": "data/test.jsonl",
-            >>>         },
-            >>>         "field": None,
-            >>>     },
-            >>> )
+        Args:
+            system_prompt: The system prompt to use for the queries of the task
         """
-        self.hf_dataset_args = hf_dataset_args
-        self.hf_dataset_kwargs = hf_dataset_kwargs or {}
-
-        self.load_dataset_dict = load_dataset_dict
-        self.dataset_dict_path = dataset_dict_path
-        if self.load_dataset_dict:
-            assert self.dataset_dict_path is not None
-
-        # Make sure either hf_dataset_args or load_dataset_dict is provided
-        if self.hf_dataset_args is None and self.load_dataset_dict is None:
-            raise ValueError(
-                "Either hf_dataset_args or load_dataset_dict must be provided"
-            )
-
-        self.hf_num_proc = hf_num_proc
-        self.field_map = field_map
-        self.remove_mapped_fields = remove_mapped_fields
-
         self._ds_cache: Optional[DatasetDict] = None
+        self.system_prompt = system_prompt
+
 
     @property
     def name(self) -> str:
@@ -75,57 +37,17 @@ class Task:
         """
         return f"{self.__class__.__name__}"
 
+
+    @abstractmethod
     def build_dataset(self) -> DatasetDict:
         """
-        Build the datasets for this task
+        Build the datasets for this task. This function is called by get_datasets if the 
+        datasets are not already cached. This function fully defines the dataset for this task.
         """
-        data_source = self._load_data_source()
-        if not isinstance(data_source, DatasetDict):
-            raise ValueError(
-                f"Expected a DatasetDict, but got {type(data_source)} instead"
-            )
+        pass
 
-        if self.field_map is not None:
-
-            def map_fields(example):
-                return {self.field_map[k]: v for k, v in example.items()}
-
-            data_source = data_source.map(
-                map_fields,
-                desc="Mapping fields",
-                num_proc=self.hf_num_proc,
-                remove_columns=(
-                    list(self.field_map.keys()) if self.remove_mapped_fields else None
-                ),
-            )
-
-        # Add idx column
-        data_source = data_source.map(
-            lambda example, idx: {"_treetune__idx": idx},
-            with_indices=True,
-            num_proc=self.hf_num_proc,
-            desc="Adding idx column",
-        )
-
-        return data_source
-
-    def get_datasets(
-        self, split: Optional[str] = None, no_cache: bool = False
-    ) -> Union[DatasetDict, Dataset]:
-        """
-        Get the datasets for this task
-        Params:
-            split: The split to get, if None, return the entire dataset
-            no_cache: If True, do not use the cached dataset
-        """
-        if self._ds_cache is None or no_cache:
-            self._ds_cache = self.build_dataset()
-
-        if split is None:
-            return self._ds_cache
-        else:
-            return self._ds_cache[split]
-
+    
+    @abstractmethod
     def evaluate_predictions(
         self,
         *,
@@ -141,17 +63,70 @@ class Task:
         Returns:
             A dictionary of metrics
         """
-        raise NotImplementedError
+        pass
 
-    def extract_predicted_answer_from_text(self, text: str) -> str:
+    
+    def get_datasets(
+        self, split: Optional[str] = None, no_cache: bool = False
+    ) -> Union[DatasetDict, Dataset]:
         """
-        Extract the predicted answer from the text
-        """
-        raise NotImplementedError
+        Get the datasets for this task
 
-    def _load_data_source(
-        self,
-    ) -> Union[DatasetDict, Dataset, IterableDatasetDict, IterableDataset]:
-        if self.load_dataset_dict:
-            return DatasetDict.load_from_disk(self.dataset_dict_path)
-        return load_dataset(*self.hf_dataset_args, **self.hf_dataset_kwargs)
+        Params:
+            split: The split to get, if None, return the entire dataset
+            no_cache: If True, do not use the cached dataset
+        """
+        if self._ds_cache is None or no_cache:
+            self._ds_cache = self.build_dataset()
+
+        if split is None:
+            return self._ds_cache
+        else:
+            return self._ds_cache[split]
+        
+    
+    #----------------- Helper functions -----------------# 
+
+    def map_datasets_fields(data_source: DatasetDict, 
+                           field_map: Dict[str, str], 
+                           remove_mapped_fields: bool, 
+                           hf_num_proc: int) -> DatasetDict:
+        """
+        Maps the fields of the datasets in the given DatasetDict according to the provided field map.
+
+        Params:
+            data_source: The source dataset to be mapped.
+            field_map: A dictionary mapping the original field names to the new field names.
+            remove_mapped_fields: If True, the original fields will be removed after mapping.
+            hf_num_proc: The number of processes to use for parallel processing.
+
+        Raises:
+            ValueError: If the data_source is not an instance of DatasetDict.
+        """
+        
+        if not isinstance(data_source, DatasetDict):
+            raise ValueError(
+                f"The datasource should be a DatasetDict, but got {type(data_source)} instead"
+            )
+
+        def map_fields(example):
+            return {field_map[k]: v for k, v in example.items()}
+
+        data_source = data_source.map(
+            map_fields,
+            desc="Mapping fields",
+            num_proc=hf_num_proc,
+            remove_columns=(
+                list(field_map.keys()) if remove_mapped_fields else None
+            ),
+        )
+
+        data_source = data_source.map(
+            lambda idx: {"_treetune__idx": idx},
+            with_indices=True,
+            num_proc=hf_num_proc,
+            desc="Adding idx column",
+        )
+
+        return data_source
+    
