@@ -6,7 +6,7 @@ import numpy as np
 from datasets import Dataset, DatasetDict
 
 from relign.utils import logging
-from relign.tasks import Task
+from relign.tasks import BaseTask
 from relign.tasks.math_answer_exctraction import (
     extract_math_minerva_few_shot_cot_answer,
     extract_math_answer,
@@ -18,7 +18,7 @@ from relign.tokenization import Tokenizer
 logger = logging.get_logger(__name__)
 
 
-class MATH(Task):
+class MATH(BaseTask):
     def __init__(
         self,
         prepend_in_context_few_shot: bool,

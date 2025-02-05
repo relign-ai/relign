@@ -13,7 +13,6 @@ FIND_NUMBERS_REGEX = re.compile(
     r"(?:[+-]?\d+\.\d*|[+-]?\.\d+|[+-]?\d+e[-+]?\d+|[+-]?\d+)"
 )
 
-
 def remove_text_between_symbols(text, start_symbol, end_symbol):
     pattern = f"{re.escape(start_symbol)}.*?{re.escape(end_symbol)}"
     cleaned_text = re.sub(pattern, "", text, flags=re.DOTALL)
@@ -27,14 +26,18 @@ class GSM8K(BaseTask):
         use_original_format: bool = False,
         remove_calculator_expressions: bool = True,
         intermediate_step_delimiter: Optional[str] = "\n",
-        intermetdiate_step_tags: Optional[Tuple[str, str]] = None,
+        intermediate_step_tags: Optional[Tuple[str, str]] = None,
         answer_prefix: Optional[str] = "\n#### ",
         hf_num_proc: int = 4,
         field_map: Optional[Dict[str, str]] = None,
         remove_mapped_fields: bool = False,
-        
+        penalize_unfinished_response: bool = False,
+        unfinished_response_penalty: float = -1.0,
+        timeout: Optional[int] = None,
     ):
 
+        # TODO: Add system prompt, also do something with the system prompt
+        # in the episode generator
         system_prompt = "TODO"
 
         super().__init__()
@@ -44,10 +47,14 @@ class GSM8K(BaseTask):
         self.use_original_format = use_original_format
         self.answer_prefix = answer_prefix
         self.intermediate_step_delimiter = intermediate_step_delimiter
-        self.intermediate_step_tags = intermetdiate_step_tags
+        self.intermediate_step_tags = intermediate_step_tags
         self.field_map = field_map
         self.remove_mapped_fields = remove_mapped_fields    
         self.hf_num_proc = hf_num_proc
+        self.penalize_unfinished_response = penalize_unfinished_response
+        self.unfinished_response_penalty = unfinished_response_penalty
+        self.timeout = timeout
+
 
     # ----------------- Abstract Function Implementations ----------------- #
 
@@ -65,67 +72,35 @@ class GSM8K(BaseTask):
             self._preprocess_example, num_proc=4, desc="Preprocessing examples"
         )
         return datasets
+
+
+    def reward(self, 
+               query: str, 
+               response: str, 
+               dataset_instance: Dict[str, Any]) -> Tuple[float, bool]:
+            
+        pred_answer = self._extract_predicted_answer_from_text(
+            response, dataset_instance["problem"]
+        )
+
+        is_unfinished_response = pred_answer is None
+        if is_unfinished_response and self.penalize_unfinished_response:
+            return float(self.unfinished_response_penalty), is_unfinished_response
+
+        gold_answer = dataset_instance["answer"]
+        reward = self._grade_answer(
+            given_answer=pred_answer,
+            ground_truth=gold_answer,
+            item=dataset_instance,
+            timeout=self.timeout,
+        )
+
+        return float(reward), is_unfinished_response
     
 
-    def evaluate_predictions(
-        self,
-        *,
-        predictions: List[List[str]] = None,
-        references: Dataset = None,
-    ) -> Dict[str, float]:
-        once_hit_acc = []
-        correct_frac = []
-        majority_vote_acc = []
-        unique_answer_count = []
-        none_answer_extracted = []
+    def get_unfinished_response_penalty(self) -> float:
+        return self.unfinished_response_penalty
 
-        for solution_candidates, ref in zip(predictions, references):
-            gold_answer = ref["answer"]
-
-            assert len(solution_candidates) > 0
-            answer_candidates = [
-                self.extract_predicted_answer_from_text(sol)
-                for sol in solution_candidates
-            ]
-            none_answer_extracted.append(
-                sum([1 for ans in answer_candidates if ans is None])
-                / len(answer_candidates)
-            )
-
-            grading_results = [
-                self.grade_answer(given_answer=ans, ground_truth=gold_answer, item=ref)
-                for ans in answer_candidates
-            ]
-            once_hit_acc.append(float(any(grading_results)))
-            correct_frac.append(sum(grading_results) / len(grading_results))
-
-            answer_candidates = [
-                tuple(ans) if isinstance(ans, list) else ans
-                for ans in answer_candidates
-            ]
-
-            majority_answer, _ = Counter(answer_candidates).most_common(n=1)[0]
-            assert len(answer_candidates) == len(grading_results)
-            majority_answer_index = answer_candidates.index(majority_answer)
-            majority_answer_is_correct = grading_results[majority_answer_index]
-            majority_vote_acc.append(majority_answer_is_correct)
-
-            unique_answer_count.append(len(set(answer_candidates)))
-
-        once_hit = sum(once_hit_acc) / len(once_hit_acc)
-        correct_frac = sum(correct_frac) / len(correct_frac)
-
-        return {
-            "once_hit": once_hit,
-            "exact_match": once_hit,  # for backwards compatibility
-            "correct_frac": correct_frac,
-            "exact_match_frac": correct_frac,  # for backwards compatibility
-            "majority_vote_acc": sum(majority_vote_acc) / len(majority_vote_acc),
-            "unique_answer_count": sum(unique_answer_count) / len(unique_answer_count),
-            "none_answer_extracted_frac_per_problem": (
-                sum(none_answer_extracted) / len(none_answer_extracted)
-            ),
-        }
 
     # ----------------- Helper Functions ----------------- #
 
@@ -304,3 +279,70 @@ class GSM8K(BaseTask):
             }
         )
         return output
+
+
+    #----------------- Misc -----------------#
+
+    def evaluate_predictions(
+        self,
+        *,
+        predictions: List[List[str]] = None,
+        references: Dataset = None,
+    ) -> Dict[str, float]:
+        """
+        This function is not used anywhere in the codebase. It is kept here for reference. 
+        """
+
+        once_hit_acc = []
+        correct_frac = []
+        majority_vote_acc = []
+        unique_answer_count = []
+        none_answer_extracted = []
+
+        for solution_candidates, ref in zip(predictions, references):
+            gold_answer = ref["answer"]
+
+            assert len(solution_candidates) > 0
+            answer_candidates = [
+                self.extract_predicted_answer_from_text(sol)
+                for sol in solution_candidates
+            ]
+            none_answer_extracted.append(
+                sum([1 for ans in answer_candidates if ans is None])
+                / len(answer_candidates)
+            )
+
+            grading_results = [
+                self.grade_answer(given_answer=ans, ground_truth=gold_answer, item=ref)
+                for ans in answer_candidates
+            ]
+            once_hit_acc.append(float(any(grading_results)))
+            correct_frac.append(sum(grading_results) / len(grading_results))
+
+            answer_candidates = [
+                tuple(ans) if isinstance(ans, list) else ans
+                for ans in answer_candidates
+            ]
+
+            majority_answer, _ = Counter(answer_candidates).most_common(n=1)[0]
+            assert len(answer_candidates) == len(grading_results)
+            majority_answer_index = answer_candidates.index(majority_answer)
+            majority_answer_is_correct = grading_results[majority_answer_index]
+            majority_vote_acc.append(majority_answer_is_correct)
+
+            unique_answer_count.append(len(set(answer_candidates)))
+
+        once_hit = sum(once_hit_acc) / len(once_hit_acc)
+        correct_frac = sum(correct_frac) / len(correct_frac)
+
+        return {
+            "once_hit": once_hit,
+            "exact_match": once_hit,  # for backwards compatibility
+            "correct_frac": correct_frac,
+            "exact_match_frac": correct_frac,  # for backwards compatibility
+            "majority_vote_acc": sum(majority_vote_acc) / len(majority_vote_acc),
+            "unique_answer_count": sum(unique_answer_count) / len(unique_answer_count),
+            "none_answer_extracted_frac_per_problem": (
+                sum(none_answer_extracted) / len(none_answer_extracted)
+            ),
+        }

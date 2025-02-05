@@ -1,4 +1,4 @@
-from typing import Optional, Dict, List, Union
+from typing import Optional, Dict, List, Union, Any, Tuple
 from abc import ABC, abstractmethod
 from datasets import (
     Dataset,
@@ -30,13 +30,7 @@ class BaseTask(ABC):
         self.system_prompt = system_prompt
 
 
-    @property
-    def name(self) -> str:
-        """
-        The name of this task
-        """
-        return f"{self.__class__.__name__}"
-
+    # ----------------- Abstract Functions -----------------#
 
     @abstractmethod
     def build_dataset(self) -> DatasetDict:
@@ -44,28 +38,45 @@ class BaseTask(ABC):
         Build the datasets for this task. This function is called by get_datasets if the 
         datasets are not already cached. This function fully defines the dataset for this task.
         """
-        pass
+        # TODO Should there be any constraints on the dataset?
+        ...
 
-    
+
     @abstractmethod
-    def evaluate_predictions(
-        self,
-        *,
-        predictions: List[List[str]] = None,
-        references: Dataset = None,
-    ) -> Dict[str, float]:
+    def reward(
+        self, 
+        query: str, 
+        response: str, 
+        dataset_instance: Dict[str, Any],
+    ) -> Tuple[float, bool]:
         """
-        Evaluate predictions against references
-        Params:
-            predictions: A list of predictions, each prediction is a list of candidate answers
-            references: The reference dataset
+        TODO Add documentation
 
+        
         Returns:
-            A dictionary of metrics
+            Tuple[float, bool]: The reward and a boolean indicating whether the response was stopped prematurely. TODO: Can't this always be determined in the episode generator?
         """
-        pass
+        ...
 
-    # ----------------- Public functions -----------------#
+
+    @abstractmethod
+    def get_unfinished_response_penalty(self) -> float:
+        """
+        TODO Return the penalty for an unfinished response
+        """
+        ...
+
+
+
+    # ----------------- Public Functions -----------------#
+
+    @property
+    def name(self) -> str:
+        """
+        The name of this task
+        """
+        return f"{self.__class__.__name__}"
+
 
     def get_datasets(
         self, split: Optional[str] = None, no_cache: bool = False
@@ -86,15 +97,15 @@ class BaseTask(ABC):
             return self._ds_cache[split]
         
 
-    #----------------- Helper functions -----------------# 
+    #----------------- Internal Helper Functions -----------------# 
     # Mostly intended for internal use, but can be 
     # used externally as well
 
 
     def map_datasets_fields(data_source: DatasetDict, 
-                           field_map: Dict[str, str], 
-                           remove_mapped_fields: bool, 
-                           hf_num_proc: int) -> DatasetDict:
+                            field_map: Dict[str, str], 
+                            remove_mapped_fields: bool, 
+                            hf_num_proc: int) -> DatasetDict:
         """
         Maps the fields of the datasets in the given DatasetDict according to the provided field map.
 

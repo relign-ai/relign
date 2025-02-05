@@ -1,0 +1,3 @@
+# Experimental Episode Generation 
+
+This directory contains refactored code of the episode generator. The goal is that we have a single base episode generators, two policy generators, one for on-policy and one for off-policy (or perhaps they can even be merged into a single one) and one tree generator. This also implies that the reward (whether it is determined by a function or model) is completely determined by the task and should be defined there.
