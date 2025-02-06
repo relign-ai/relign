@@ -57,7 +57,7 @@ def grpo_gsm(cfg, local_rank: int = -1):
         IdentityAnswerExtractor,
     )
 
-    n_episodes_per_iteration = 10
+    n_episodes_per_iteration = 5000
     n_rollouts_per_sample = 10  # Effective group size
     max_concurrent_programs = 1
     max_concurrent_generations = 1
@@ -138,15 +138,15 @@ def grpo_gsm(cfg, local_rank: int = -1):
     # ----------- Trainer ---------------#
     ppo_trainer_class = GRPOTrainer
     ppo_trainer_kwargs = {
-        "per_device_batch_size": 10,
-        "dataloader_num_workers": 1,
+        "per_device_batch_size": 16,
+        "dataloader_num_workers": 2,
         "dataloader_pin_memory": False,
     }
 
     # ----------- Algorithm--------------#
     algorithm_cls = TrainLoop
     algorithm_kwargs = {
-        "num_iterations": 10,
+        "num_iterations": 500,
         "num_episodes_per_iteration": 1,
         "verbose": 1,
         "evaluation_freq": 10,

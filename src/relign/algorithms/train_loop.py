@@ -1,3 +1,4 @@
+from typing import Union
 from pathlib import Path
 from tqdm import tqdm
 from logging import Logger
@@ -40,7 +41,6 @@ class TrainLoop():
         """
         self.seed = seed
         self.project_root_dir = (project_root_dir,)
-
         self.policy = policy
         self.trainer = trainer
         self.episode_generator = episode_generator
@@ -65,7 +65,7 @@ class TrainLoop():
                 current_policy_path=current_policy_path
             )
 
-            self.trainer.step(episodes=episodes)
+            current_policy_path = self.trainer.step(episodes=episodes)
 
         # Evalutate
         if iteration % self.evaluation_freq == 0:
@@ -78,7 +78,7 @@ class TrainLoop():
     def _generate_episodes(
         self,
         iteration: int,
-        current_policy_path: str,
+        current_policy_path: Union[str | None],
         # TODO allow_from_cache: bool = True,
     ) -> EpisodeDataset:
         """
@@ -88,12 +88,6 @@ class TrainLoop():
             current_policy_path: path to the weights of the current policy.
             #TODO allow_from_cache: bool = True,
         """
-        # Generate epiosdes data set
-        # TODO: is this the cleanest way? do we pass a path, or do we simply pass the policy module? idk?
-        # do we run into trouble when we use distributed learning?
-        # or distributed generation in the  episode generator?
-        self.episode_generator.set_policy_path(current_policy_path)
-
         # TODO: handle distributed environments differently
         # for now we just generate it in the main process
         # Feth the epiode path on all the devices
@@ -103,10 +97,14 @@ class TrainLoop():
         if not self.episode_generator.supports_distributed:
             if self.distributed_state.is_main_process:
                 episode_path = self.episode_generator.generate(
-                    self.num_episodes_per_iteration, iteration, return_path=True
+                    iteration=iteration,
+                    altest_policy_path=current_policy_path
                 )
         else:
-            episodes = self.episode_generator.generate(iteration=iteration)
+            episodes = self.episode_generator.generate(
+                iteration=iteration, 
+                latest_policy_path=current_policy_path 
+            )
             assert isinstance(episodes, Dataset)
             if self.distributed_state.is_main_process:
                 remove_null_columns(episodes).save_to_disk(episode_path)
@@ -118,8 +116,10 @@ class TrainLoop():
     def _evaluate(self):
         ...
 
-    def _checkpoint(self):
-        ...
+    def _checkpoint(self, iteration: int):
+        logger.info("Checkpointing models...")
+        self.trainer.policy.checkpoint(self.project_root_dir / "policy"/ "checkpoint"/ f"policy_{iteration}.pt")
+        #TODO: checkpoint other parts of the train state here
 
     @property
     def logger(self) -> Logger:

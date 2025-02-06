@@ -72,7 +72,6 @@ class BaseEpisodeGenerator():
         self.num_episodes_per_iteration = num_episodes_per_iteration
         self.tokenizer = tokenizer
         self.project_root_dir = project_root_dir
-        self.policy_path = None
         
         if project_root_dir is not None:
             self._init_episode_dir()
@@ -103,8 +102,6 @@ class BaseEpisodeGenerator():
         episodes.save_to_disk(checkpoint_path) 
         return checkpoint_path
 
-    def set_policy_path(self, policy_path: str) -> None:
-        self.policy_path = policy_path
     
     def is_main_process(self) -> bool:
         return self.distributed_state.is_main_process
@@ -223,23 +220,23 @@ class BaseEpisodeGenerator():
             self.cloud_logger.log({f"episodes/iteration_{iteration_idx:04}": table})
 
 
-class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
-    """
-    Allow for a policy path (model weights) or
-    pass down the current policy to infer from
-    during episode generation.
-    """
+# class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
+#     """
+#     Allow for a policy path (model weights) or
+#     pass down the current policy to infer from
+#     during episode generation.
+#     """
 
-    def __init__(
-        self,
-        policy_path: str,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        self.policy_path = policy_path
+#     def __init__(
+#         self,
+#         policy_path: str,
+#         **kwargs,
+#     ):
+#         super().__init__(**kwargs)
+#         self.policy_path = policy_path
 
-    def set_policy_path(self, policy_path: str) -> None:
-        self.policy_path = policy_path
+#     def set_policy_path(self, policy_path: str) -> None:
+#         self.policy_path = policy_path
 
 
 class DebugEpisodeGenerator(BaseEpisodeGenerator):

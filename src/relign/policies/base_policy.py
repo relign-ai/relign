@@ -125,6 +125,9 @@ class BasePolicy:
     def get_checkpoint_format(self) -> str:
         return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
 
+    @abstractmethod
+    def checkpoint(self):
+       NotImplementedError("checkpoint method is not implemented yet.") 
 
 class DeepSpeedPolicy(BasePolicy):
     """
@@ -197,13 +200,6 @@ class DeepSpeedPolicy(BasePolicy):
             kwargs["optimizer"] = optimizer
         engine, *_ = deepspeed.initialize(**kwargs)
         return engine
-
-    # def _destroy_engines(self):
-    #     """ Destorys the engines after use (if not caches)"""
-    #     if self.cache_ds_engines:
-    #         return
-    #     for engine in self.engines:
-    #         self._destroy_ds_engine(engine)
 
     def _destroy_ds_engine(self, ds_engine: DeepSpeedEngine):
         if self.cache_ds_engines:

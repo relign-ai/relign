@@ -20,7 +20,6 @@ from relign.algorithms.ppo.data_collator import (
 )
 
 from relign.utils.logging import get_logger
-
 logger = get_logger(__name__)
 
 
@@ -72,7 +71,6 @@ class PPOHParams:
         temperature (float):
             The temperature used for sampling.
     """
-
     adap_kl_ctrl: bool = True
     init_kl_coef: Optional[float] = 0.2
     kl_penalty: Literal["kl", "abs", "mse", "full", "control_variate"] = "kl"
@@ -113,11 +111,13 @@ class PPOTrainer(BaseTrainer):
     PPO Trainer.
     Implementation of the PPO update rule.
     """
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # TODO: make this initialization more robust ( ideally we get it from a config file)
         self.ppo_hparams = PPOHParams(**kwargs.get("ppo_hparams", {}))
+
+    def set_cloud_logger(self, cloud_log):
+        self.cloud_log = cloud_log
 
     def step(self, episodes: EpisodeDataset) -> None:
         """
@@ -126,6 +126,12 @@ class PPOTrainer(BaseTrainer):
         """
         self.policy.init_actor_engine_if_needed()
         self.policy.init_critic_engine_if_needed()
+
+        if not self.policy.cache_ds_engines:
+            # engines are not cached, need to laod the latest weights from checkpoin path
+            logger.info(f"Loading latest policy from latest policy path")
+            self.policy.load_latest_policy_path()
+
 
         # change to appropriate input structure
         episodes = self._hydrate_episodes(episodes)
@@ -205,14 +211,19 @@ class PPOTrainer(BaseTrainer):
 
         self.state.iteration += 1
         progress_bar.close()
+        latest_policy_path = self.policy.save_latest_policy_path()
+        logger.info(f"Latest policy path: {latest_policy_path}")
+
+        # destroy engines and release memory
         self.policy.destroy_ds_engines()
         release_memory()
-
         import gc
-
         gc.collect()
         torch.cuda.empty_cache()
 
+        # return latest policy path
+        return latest_policy_path
+        
     def _hydrate_episodes(self, episodes: Dataset) -> Dataset:
         """
         Takes the collated dataset and hydrates it with the

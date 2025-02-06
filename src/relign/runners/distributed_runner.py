@@ -74,8 +74,9 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
             cloud_logger = self._create_cloud_logger()
             if cloud_logger is not None:
                 from wandb.sdk.wandb_run import Run
+
                 self.cloud_logger: Run = self._create_cloud_logger()
-        
+
         if self.distributed_state.use_distributed:
             self.distributed_state.wait_for_everyone()
 
@@ -111,6 +112,7 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
             project_root_dir=self.exp_root,
             distributed_state=self.distributed_state,
             policy=self.policy,
+            cloud_log=self._cloud_log,
             **self.trainer_kwargs,
         )
 
@@ -132,3 +134,7 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
             episode_generator=self.episode_generator,
             **self.algorithm_kwargs,
         )
+
+    def _cloud_log(self, *args, **kwargs):
+        if self.distributed_state.is_main_process and self.cloud_logger is not None:
+            self.cloud_logger.log(*args, **kwargs)

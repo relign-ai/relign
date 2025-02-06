@@ -1,7 +1,11 @@
+import os
+import shutil
 from typing import Dict, Any, Union, Optional
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
+from accelerate import Accelerator, PartialState
+from accelerate.utils import GradientAccumulationPlugin 
 
 import torch
 import torch.nn.functional as F
@@ -10,11 +14,10 @@ from accelerate import PartialState
 
 from relign.policies.base_policy import BasePolicy
 
+from relign.utils.logging import get_logger
 
-@dataclass
-class Checkpoint:
-    path: Path
-    iteration: int
+logger = get_logger(__name__)
+
 
 
 class TrainerState:
@@ -54,17 +57,19 @@ class BaseTrainer(ABC):
         seed: int,
         project_root_dir: Path,
         policy: BasePolicy,
-        per_device_batch_size: int,
         dataloader_num_workers: int,
         dataloader_pin_memory: bool,
         distributed_state: PartialState,
         gradient_accumulation_steps: int = 1,
-        num_epochs_per_iteration: int = 1,
+        num_epochs_per_iteration: int = 8,
         num_iterations: int = 1,
-        num_epochs: int = 1,
+        num_episodes_per_iteration: int = 1,
         gamma: int = 1,
         lam=0.95,
         logging_steps: int = 5,
+        per_device_batch_size: Optional[int] = None,
+        target_batch_size: Optional[int] = None,
+        cloud_log: Optional[Any] = None,
     ):
         """
         Main Trainer object.
@@ -94,13 +99,21 @@ class BaseTrainer(ABC):
         self.dataloader_pin_memory = dataloader_pin_memory
         self.distributed_state = distributed_state
         self.state = TrainerState()
+
         self.gradient_accumulation_steps = gradient_accumulation_steps
         self.num_epochs_per_iteration = num_epochs_per_iteration
         self.num_iterations = num_iterations
-        self.num_epochs = num_epochs
+        self.target_batch_size = target_batch_size
+        self.num_episodes_per_iteration = num_episodes_per_iteration
+
+        self._compute_batch_size_and_steps()
+
         self.gamma = gamma
         self.lam = lam
         self.logging_steps = logging_steps
+        self._cloud_log = cloud_log
+        # self._create_accelerator_and_postprocess()
+        self.deepspeed_plugin = None
 
     def _init_trainer_dir(self):
         self.trainer_dir = self.project_root_dir / "trainer"
@@ -197,3 +210,58 @@ class BaseTrainer(ABC):
             ).sum(-1)
 
         raise NotImplementedError
+
+    def _compute_batch_size_and_steps(self):
+        if self.target_batch_size is not None:
+            if (
+                self.per_device_batch_size is None
+                and self.gradient_accumulation_steps is None
+            ):
+                raise ValueError(
+                    "Either per_device_train_batch_size or gradient_accumulation_steps "
+                    "should be provided."
+                )
+            if (
+                self.per_device_batch_size is not None
+                and self.gradient_accumulation_steps is not None
+            ):
+                raise ValueError(
+                    "Only one of per_device_train_batch_size or gradient_accumulation_steps "
+                    "should be provided."
+                )
+
+            if self.per_device_batch_size is not None:
+                self.gradient_accumulation_steps = (
+                    self.target_batch_size
+                    // self.per_device_batch_size
+                    // self.distributed_state.num_processes
+                )
+            elif self.gradient_accumulation_steps is not None:
+                self.per_device_batch_size = (
+                    self.target_batch_size
+                    // self.gradient_accumulation_steps
+                    // self.distributed_state.num_processes
+                )
+
+        self.global_batch_size = (
+            self.per_device_batch_size
+            * self.gradient_accumulation_steps
+            * self.distributed_state.num_processes
+        )
+        self.total_num_training_steps = (
+            self.num_iterations
+            * self.num_epochs_per_iteration
+            * self.num_episodes_per_iteration
+            // self.global_batch_size
+        )
+        logger.info(f"Per device batch size: {self.per_device_batch_size}")
+        logger.info(
+            f"Gradient accumulation steps: {self.gradient_accumulation_steps}"
+        )
+        logger.info(f"Num of total processes: {self.distributed_state.num_processes}")
+        logger.info(
+            f"Global batch size (w. parallel, distributed & accumulation): {self.global_batch_size}"
+        )
+        logger.info(
+            f"Total number of training steps (Gradient Updates): {self.total_num_training_steps}"
+        ) 

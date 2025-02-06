@@ -1,6 +1,11 @@
 from abc import abstractmethod
+from dataclasses import dataclass
+from pathlib import Path
+import shutil
 from typing import Dict, Optional, Literal, Callable, Union
 
+from accelerate import Accelerator
+from accelerate.utils import GradientAccumulationPlugin
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -216,6 +221,8 @@ class ActorPolicy(DeepSpeedPolicy):
             return_sequence_logp=False,
         )
         logprobs = outputs.all_logp  # shape: (batch_size, seq_len-1)
+        assert logprobs.shape == old_logprobs.shape
+        assert action_mask.shape == logprobs.shape
 
         # Compute the PPO-clip loss
         log_ratio = (logprobs - old_logprobs) * action_mask
@@ -236,9 +243,9 @@ class ActorPolicy(DeepSpeedPolicy):
         ref_kl_loss = None
         ref_kl = None
         kl_penalty_loss_type = "forward_kl"
-        kl_penalty_loss_clip_max = 1000
+        kl_penalty_loss_clip_max = 10000
         kl_penalty_loss_clip_min = 0
-        kl_clt = 0.2
+        kl_clt = 0.05
         if kl_penalty_loss_type is not None:
             # _compute_kl_penalty is below
             ref_kl_tensor = self._compute_kl_penalty(
@@ -260,7 +267,7 @@ class ActorPolicy(DeepSpeedPolicy):
         ratio_threshold = 1.5
         if avg_ratio.item() > ratio_threshold:
             logger.warning(
-                f"High GRPO ratio detected: {avg_ratio.item():.2f}. Skipping this batch."
+                f"High ratio detected: {avg_ratio.item():.2f}. Skipping this batch."
             )
             pg_loss = pg_loss * 0.0
             is_skipped = True
@@ -499,3 +506,78 @@ class ActorPolicy(DeepSpeedPolicy):
             pass  # already computed
         # elif estimation_type == ...
         return kl
+
+    
+    def get_last_checkpoint(self, return_resumable_only: bool = False):
+        checkpoints = list(self.checkpoints_dir.iterdir())
+        checkpoints = [
+            checkpoint
+            for checkpoint in checkpoints
+            if checkpoint.is_dir() and checkpoint.name.startswith("ckpt--")
+        ]
+        if return_resumable_only:
+            checkpoints = [
+                checkpoint
+                for checkpoint in checkpoints
+                if self.is_checkpoint_resumable(checkpoint)
+            ]
+        if len(checkpoints) == 0:
+            return None
+
+        checkpoints = sorted(
+            checkpoints, key=lambda x: self.parse_checkpoint_name(x.name)
+        )
+        last_checkpoint = checkpoints[-1]
+        last_checkpoint_iteration = self.parse_checkpoint_name(last_checkpoint.name)[0]
+
+        grad_acc_kwargs = {"num_steps": self.args.gradient_accumulation_steps}
+        # grad_acc_kwargs["sync_with_dataloader"] = False
+
+
+    def _create_accelerator_and_postprocess(self):
+        grad_acc_kwargs = {"num_steps": self.args.gradient_accumulation_steps}
+        # grad_acc_kwargs["sync_with_dataloader"] = False
+        gradient_accumulation_plugin = GradientAccumulationPlugin(**grad_acc_kwargs)
+
+        # Create accelerator object
+        self.accelerator = Accelerator(
+            dispatch_batches=False,
+            deepspeed_plugin=self.deepspeed_plugin,
+            gradient_accumulation_plugin=gradient_accumulation_plugin,
+        )
+
+        # Deepspeed and Accelerate flags covering both trainer args and accelerate launcher
+        self.is_deepspeed_enabled = (
+            getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
+        )
+
+        if self.is_deepspeed_enabled:
+            from deepspeed.utils import logger as ds_logger
+            import logging
+
+            ds_logger.setLevel(logging.DEBUG)
+
+            if getattr(self.args, "hf_deepspeed_config", None) is None:
+                from transformers.deepspeed import HfTrainerDeepSpeedConfig
+
+                ds_plugin = self.accelerator.state.deepspeed_plugin
+
+                ds_plugin.hf_ds_config = HfTrainerDeepSpeedConfig(
+                    ds_plugin.hf_ds_config.config
+                )
+                ds_plugin.deepspeed_config = ds_plugin.hf_ds_config.config
+                ds_plugin.hf_ds_config.trainer_config_process(self.args)
+
+        if (
+            self.args.gradient_checkpointing
+            and not self.is_flash_attention_model
+            and not self.is_deepspeed_enabled
+        ):
+            from accelerate import DistributedDataParallelKwargs
+
+            self.accelerator.ddp_handler = DistributedDataParallelKwargs(
+                find_unused_parameters=False
+            )
+
+        # Add state to accelerator for checkpointing
+        self.accelerator.register_for_checkpointing(self.state)
