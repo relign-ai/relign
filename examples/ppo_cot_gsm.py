@@ -63,10 +63,13 @@ def ppo_gsm(cfg, local_rank: int = -1):
         timeout=1,
     )
 
-    n_episodes_per_iteration = 50 
-    n_rollouts_per_sample = 1
-    max_concurrent_programs = 2 
-    max_concurrent_generations = 20 
+    num_iterations = 100
+    num_epoch_per_iterations = 3
+    gradient_accumulation_steps = 1
+    n_episodes_per_iteration = 568 
+    n_rollouts_per_sample = 2
+    max_concurrent_programs = 128 
+    max_concurrent_generations = 128 
 
     guidance_llm_cls = OpenAIVLLM
     guidance_llm_kwargs = {
@@ -103,19 +106,19 @@ def ppo_gsm(cfg, local_rank: int = -1):
     """
 
     # ---- Chain of thought Strategy --- #
-    cot_inference_strategy = COTInferenceStrategy(
-        samples=n_rollouts_per_sample,
-        question_field="query",
-        question_template=question_template,
-        max_concurrent_generations=max_concurrent_generations,
-        max_concurrent_programs=max_concurrent_programs,
-        answer_extractor=answer_extractor,
-        node_expander=node_expander,
-        guidance_llm_cls=guidance_llm_cls,
-        guidance_llm_kwargs=guidance_llm_kwargs,
-        max_depth=2,
-        result_dir=Path(experiment_dir) / "chain_of_thoughts",
-    )
+    cot_inference_strategy_cls = COTInferenceStrategy 
+    cot_inference_strategy_kwargs = {
+        "samples": n_rollouts_per_sample,
+        "question_field": "query",
+        "question_template": question_template,
+        "max_concurrent_generations": max_concurrent_generations,
+        "max_concurrent_programs": max_concurrent_programs,
+        "answer_extractor": answer_extractor,
+        "node_expander": node_expander,
+        "guidance_llm_cls": guidance_llm_cls,
+        "guidance_llm_kwargs": guidance_llm_kwargs,
+        "max_depth": 2,
+    }
 
     # ----------- Episode Generator ------------#
     vllm_server = VLLMServer()
@@ -129,7 +132,8 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "max_sequence_length": 2048,
         "max_question_length": 1512,
         "reward_function": reward_function,
-        "inference_strategy": cot_inference_strategy,
+        "inference_strategy_cls": cot_inference_strategy_cls,
+        "inference_strategy_kwargs": cot_inference_strategy_kwargs,
         "vllm_server": vllm_server,
         "task": task,
         "initial_model_name_or_path": "realtreetune/rho-1b-sft-GSM8K",
@@ -148,16 +152,17 @@ def ppo_gsm(cfg, local_rank: int = -1):
     # ----------- Trainer ---------------#
     ppo_trainer_class = PPOTrainer
     ppo_trainer_kwargs = {
-        "target_batch_size": 8, 
-        "gradient_accumulation_steps": 2,
-        "dataloader_num_workers": 2,
+        "target_batch_size": 32, 
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "num_epochs_per_iteration": num_epoch_per_iterations,
+        "dataloader_num_workers": 4,
         "dataloader_pin_memory": False,
     }
 
     # ----------- Algorithm--------------#
     algorithm_cls = TrainLoop
     algorithm_kwargs = {
-        "num_iterations": 100,
+        "num_iterations": num_iterations,
         "num_episodes_per_iteration": n_episodes_per_iteration,
         "verbose": 1,
         "evaluation_freq": 10,
