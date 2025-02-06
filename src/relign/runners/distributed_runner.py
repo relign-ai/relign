@@ -9,9 +9,8 @@ from relign.runners.base_runner import BaseRunner
 from relign.policies.base_policy import BasePolicy
 from relign.algorithms.base_trainer import BaseTrainer
 from relign.episode_generators.base_episode_generator import BaseEpisodeGenerator
-from relign.algorithms.train_loop import TrainLoop 
+from relign.algorithms.train_loop import TrainLoop
 from relign.policies.base_actor import DeepSpeedPolicy
-
 
 
 # Define TypeVars for Generics
@@ -71,6 +70,16 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
         self._init_episode_generator()
         self._init_algorithm()
 
+        if self.distributed_state.is_main_process:
+            cloud_logger = self._create_cloud_logger()
+            if cloud_logger is not None:
+                from wandb.sdk.wandb_run import Run
+
+                self.cloud_logger: Run = self._create_cloud_logger()
+
+        if self.distributed_state.use_distributed:
+            self.distributed_state.wait_for_everyone()
+
     def _init_distributed_setup(self):
         from accelerate import PartialState
 
@@ -89,7 +98,6 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
                 kwargs["backend"] = "nccl"
             self.distributed_state = PartialState(use_cpu, **kwargs)
 
-
     def _init_policy(self):
         self.policy: Pds = self.policy_cls(
             seed=self.seed,
@@ -104,6 +112,7 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
             project_root_dir=self.exp_root,
             distributed_state=self.distributed_state,
             policy=self.policy,
+            cloud_log=self._cloud_log,
             **self.trainer_kwargs,
         )
 
@@ -125,3 +134,7 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
             episode_generator=self.episode_generator,
             **self.algorithm_kwargs,
         )
+
+    def _cloud_log(self, *args, **kwargs):
+        if self.distributed_state.is_main_process and self.cloud_logger is not None:
+            self.cloud_logger.log(*args, **kwargs)

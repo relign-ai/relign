@@ -2,11 +2,13 @@ from typing import Dict, Tuple, Union, Optional, Literal
 from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 import numpy as np
 from deepspeed import comm as dist
 from accelerate.utils import gather, pad_across_processes, release_memory
 from datasets import Dataset
 from tqdm import tqdm
+
 
 from relign.common.deepspeed_utils import prepare_data_loader_for_inference
 from relign.common.dataset import EpisodeDataset
@@ -15,6 +17,7 @@ from relign.utils.trainer import prepare_data_loader_for_training
 
 from relign.algorithms.grpo.data_collator import (
     GRPODataCollator, 
+    GroupedBatchSampler,
     COLUMN_ACTOR_SHIFTED_LOGPS,
     COLUMN_REF_SHIFTED_LOGPS
 )
@@ -71,7 +74,6 @@ class GRPOParams:
         temperature (float):
             The temperature used for sampling.
     """
-
     adap_kl_ctrl: bool = True
     init_kl_coef: Optional[float] = 0.2
     kl_penalty: Literal["kl", "abs", "mse", "full", "control_variate"] = "kl"
@@ -129,17 +131,29 @@ class GRPOTrainer(BaseTrainer):
 
         # change to appropriate input structure
         episodes = self._hydrate_episodes(episodes)
-        dataloader = prepare_data_loader_for_training(
-            episodes, 
-            per_device_batch_size=self.per_device_batch_size, 
-            seed=self.seed,
-            drop_last=False,
-            data_loader_kwargs={
-                "collate_fn": GRPODataCollator(),
-                "num_workers": self.dataloader_num_workers,
-                "pin_memory": self.dataloader_pin_memory,
-            }
+        dataloader = DataLoader(
+            episodes,
+            batch_sampler=GroupedBatchSampler(
+                episodes, 
+                group_column='group',
+                groups_per_step=1,
+            ), 
+            collate_fn=GRPODataCollator(),
+            num_workers=self.dataloader_num_workers,
+            pin_memory=self.dataloader_pin_memory
         )
+
+        # dataloader = prepare_data_loader_for_training(
+        #     episodes, 
+        #     per_device_batch_size=self.per_device_batch_size, 
+        #     seed=self.seed,
+        #     drop_last=False,
+        #     data_loader_kwargs={
+        #         "collate_fn": GRPODataCollator(),
+        #         "num_workers": self.dataloader_num_workers,
+        #         "pin_memory": self.dataloader_pin_memory,
+        #     }
+        # )
 
         steps_in_epoch = len(dataloader)
         optim_steps_in_epoch = steps_in_epoch // self.gradient_accumulation_steps
@@ -172,7 +186,26 @@ class GRPOTrainer(BaseTrainer):
             disable=not self._is_main_process()
         ):
             for _, batch in enumerate(dataloader_iter):
+                is_grad_acc_boundary = (
+                    self.policy.actor.is_gradient_accumulation_boundary()
+                )
                 self._step(batch)
+
+                metrics = self._step(batch)
+                # self._update_metrics(running_metrics, accumulated_metrics, metrics)
+                if is_grad_acc_boundary:
+                    self.state.global_step += 1
+                    # self.state.epoch = epoch + (step + 1) / steps_in_epoch
+                    progress_bar.update(1)
+
+                    should_log = self.state.global_step % self.logging_steps == 0
+                    if should_log:
+                        # self._log_training_metrics(
+                        #     global_step_last_logged,
+                        #     accumulated_metrics,
+                        #     progress_bar,
+                        # )
+                        global_step_last_logged = self.state.global_step
 
     def _hydrate_log_probs(
         self, 
@@ -361,7 +394,7 @@ class GRPOTrainer(BaseTrainer):
         input_ids = inputs["input_ids"]  # Shape: (batch_size, max_seq_len)
         attention_mask = inputs["attention_mask"]  # Shape: (batch_size, max_seq_len)
         labels = inputs["labels"]  # Shape: (batch_size, max_seq_len)
-        scores = inputs["reward"]  # Shape: (batch_size,)
+        scores = inputs["scores"]  # Shape: (batch_size,)
         groups = inputs["group"] # Shape: (batch_size,) 
 
         shifted_labels = labels[ ..., 1: ].contiguous()  # Shape: (batch_size, max_seq_len-1)
@@ -384,7 +417,7 @@ class GRPOTrainer(BaseTrainer):
 
             # Shape of rewards: (batch_size, max_seq_len-1)
             mean_rewards, std_rewards, unique_ids, per_token_kl = self._compute_rewards(
-                rewards=scores, 
+                scores=scores, 
                 groups=groups,
                 shifted_actor_logprobs=shifted_actor_logprobs,
                 shifted_ref_logprobs=shifted_ref_logprobs,
@@ -435,7 +468,7 @@ class GRPOTrainer(BaseTrainer):
 
     def _compute_rewards(
         self,
-        rewards,
+        scores,
         groups,
         shifted_ref_logprobs=None,
         shifted_actor_logprobs=None,
@@ -463,7 +496,11 @@ class GRPOTrainer(BaseTrainer):
             shifted_ref_logprobs is not None
             and self.grpo_params.kl_penalty_loss_type is None
         ):
-            per_token_kl = self._compute_kl_penalty(shifted_actor_logprobs, shifted_ref_logprobs)
+            per_token_kl = self._compute_kl_penalty(
+                shifted_actor_logprobs, 
+                shifted_ref_logprobs,
+                trainer_hparams=self.grpo_params,
+            )
         else:
             # KL penalty is not part of the reward
             per_token_kl = None
@@ -473,15 +510,15 @@ class GRPOTrainer(BaseTrainer):
         num_groups = unique_ids.size(0)
 
         # 2) Prepare accumulators on the same device
-        device = rewards.device
-        sums = torch.zeros(num_groups, device=device, dtype=rewards.dtype)
-        sum_of_squares = torch.zeros(num_groups, device=device, dtype=rewards.dtype)
-        counts = torch.zeros(num_groups, device=device, dtype=rewards.dtype)
+        device = scores.device
+        sums = torch.zeros(num_groups, device=device, dtype=scores.dtype)
+        sum_of_squares = torch.zeros(num_groups, device=device, dtype=scores.dtype)
+        counts = torch.zeros(num_groups, device=device, dtype=scores.dtype)
 
         # 3) Accumulate sums, sum_of_squares, counts in one pass
-        sums.index_add_(0, group_idx, rewards)
-        sum_of_squares.index_add_(0, group_idx, rewards**2)
-        counts.index_add_(0, group_idx, torch.ones_like(rewards))
+        sums.index_add_(0, group_idx, scores)
+        sum_of_squares.index_add_(0, group_idx, scores**2)
+        counts.index_add_(0, group_idx, torch.ones_like(scores))
 
         # 4) Compute mean & std
         means = sums / counts.clamp_min(1e-7)
@@ -531,80 +568,3 @@ class GRPOTrainer(BaseTrainer):
         
         assert advantages.shape == shifted_actor_log_probs.shape 
         return advantages.detach()
-
-    def _compute_kl_penalty(
-        self,
-        logprob: Union[torch.FloatTensor, np.ndarray],
-        ref_logprob: Union[torch.FloatTensor, np.ndarray],
-        estimation_type: Optional[str] = None,
-    ) -> Union[torch.FloatTensor, np.ndarray]:
-        """
-        Compute the per-token KL penalty between the log probabilities of the actor and the reference model.
-
-        Args:
-            logprob (`Union[torch.FloatTensor, np.ndarray]`):
-                Log probabilities of the actor, shape (`batch_size`, T)
-            ref_logprob (`Union[torch.FloatTensor, np.ndarray]`):
-                Log probabilities of the reference model, shape (`batch_size`, T)
-
-        Returns:
-            `Union[torch.FloatTensor, np.ndarray]`: KL penalty, shape (`batch_size`, `T`)
-        """
-
-        if estimation_type is None:
-            estimation_type = self.grpo_params.kl_penalty
-
-        if estimation_type == "kl":
-            return logprob - ref_logprob
-
-        if estimation_type == "abs":
-            return (logprob - ref_logprob).abs()
-
-        if estimation_type == "mse":
-            return 0.5 * (logprob - ref_logprob).square()
-
-        if estimation_type == "control_variate":
-            # Compute the per-token approximate KL penalty between the log probabilities of the actor
-            # and the reference model as suggested by Schulman in http://joschu.net/blog/kl-approx.html
-            #
-            # D_KL [π_θ || π_ref] =
-            #    π_ref(y_t | x, y_<t) / π_θ(y_t | x, y_<t) - log(π_ref(y_t | x, y_<t) / π_θ(y_t | x, y_<t)) - 1
-            #
-
-            log_ratio = ref_logprob - logprob
-            if isinstance(log_ratio, torch.Tensor):
-                kl = torch.exp(log_ratio) - log_ratio - 1
-            elif isinstance(log_ratio, np.ndarray):
-                kl = np.exp(log_ratio) - log_ratio - 1
-            else:
-                raise ValueError("Unsupported type for log_ratio.")
-            return kl
-
-        if estimation_type == "seq_control_variate":
-            log_ratio = ref_logprob - logprob
-            if isinstance(log_ratio, torch.Tensor):
-                prob_ratio = torch.exp(log_ratio.sum(dim=-1, keepdim=True))
-                kl = prob_ratio - log_ratio - 1
-            elif isinstance(log_ratio, np.ndarray):
-                prob_ratio = np.exp(log_ratio.sum(axis=-1, keepdims=True))
-                kl = prob_ratio - log_ratio - 1
-            else:
-                raise ValueError("Unsupported type for log_ratio.")
-            return kl
-
-        if estimation_type == "full":
-            # Flip is required due to this issue? :https://github.com/pytorch/pytorch/issues/57459
-            return F.kl_div(
-                ref_logprob, logprob, log_target=True, reduction="none"
-            ).sum(-1)
-
-        raise NotImplementedError
-
-    def _is_kl_penalty_enabled(self) -> bool:
-        """
-        Check if the KL penalty is enabled.
-        """
-        return ( 
-            not self.grpo_params.kl_penalty_loss_type is not None
-            and self.policy.reference is not None
-        )

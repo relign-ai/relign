@@ -53,7 +53,7 @@ def actor_critic_policy(
         critic_model_fn=critic_model_fn,
         actor_config=deepspeed_config,
         critic_config=deepspeed_config,
-        distributed_single_gpu=distributed_single_gpu,
+        distributed_state=distributed_single_gpu,
         project_root_dir=experiment_dir,
         seed=69
     )

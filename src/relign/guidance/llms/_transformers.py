@@ -15,8 +15,16 @@ class Transformers(LLM):
 
     llm_name: str = "transformers"
 
-    def __init__(self, model=None, tokenizer=None, caching=True, token_healing=True, acceleration=True, \
-                 temperature=0.0, device=None, **kwargs):
+    def __init__(
+            self, 
+            model=None, 
+            tokenizer=None, 
+            caching=True, 
+            token_healing=True, 
+            acceleration=True, \
+            temperature=0.0, 
+            device=None, 
+            **kwargs):
         super().__init__()
 
         # fill in default model value

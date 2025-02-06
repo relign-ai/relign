@@ -865,16 +865,14 @@ class OpenAISession(LLMSession):
 
                     out = await self.llm.caller(**call_args)
 
-                except (
-                    OpenAIRateLimitError,
-                    OpenAIAPIError,
-                    OpenAITimeout,
-                    OpenAIAPIConnectionError,
-                ) as exp:
-                    print(exp)
+                except (OpenAIRateLimitError, OpenAIAPIError, OpenAITimeout, OpenAIAPIConnectionError) as exp:
+                    import logging
+                    import traceback
+                    logging.error("Error during OpenAI API call: %s\nTraceback: %s\nCall Args: %s",
+                                str(exp), traceback.format_exc(), call_args)
                     await asyncio.sleep(3)
                     try_again = True
-                    fail_count += 1
+                    fail_count += 1 
 
                 if not try_again:
                     break

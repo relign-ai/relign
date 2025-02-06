@@ -453,8 +453,10 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         vllm_server, guidance_llm_kwargs = vllm_init_fn()
         target_device_index = self._get_device_index()
 
+        #initialize the guidance_llm with the right server settings
+        self.inference_strategy._init_guidance_llm(**guidance_llm_kwargs)
         results = self.inference_strategy.generate(dataset_shard)
-         
+
         # Convert the results to a list before saving 
         episodes = []
         for row in results:
@@ -533,7 +535,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
                     "timing/episode_generation/vllm_start": time.time() - t0,
                 }
             )
-
+            logger.info(f"SERVER URL {server_url}")
             return self.vllm_server, {
                 "api_base": server_url,
                 "model": hf_ckpt_path_or_model,

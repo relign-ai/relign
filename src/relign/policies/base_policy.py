@@ -20,9 +20,9 @@ logger = get_logger(__name__)
 
 
 class CriticForwardOutput(NamedTuple):
-    initial_poilicy_raw_output: CausalLMOutput 
+    initial_poilicy_raw_output: CausalLMOutput
     policy_raw_output: CausalLMOutput
-    values: torch.Tensor 
+    values: torch.Tensor
 
 
 class ActorForwardOutput(NamedTuple):
@@ -35,6 +35,7 @@ class BasePolicy:
     """
     A policy takes an observation and returns an action.
     """
+
     def __init__(
         self,
         seed: int,
@@ -53,10 +54,9 @@ class BasePolicy:
         fp16: bool = False,
         bf16: bool = False,
         bf16_full_eval: bool = False,
-        total_num_training_steps: int = 10, #TODO: Get this from the trainer? 
+        total_num_training_steps: int = 10,  # TODO: Get this from the trainer?
         global_batch_size: int = 1,
-        warmup_steps: int = 0
-        
+        warmup_steps: int = 0,
     ):
         self.seed = seed
         self.project_root_dir = project_root_dir
@@ -79,23 +79,23 @@ class BasePolicy:
         self.warmup_steps = warmup_steps
 
         # I have a feeling we should get these from the trainer somehow
-        self.total_num_training_steps = total_num_training_steps 
+        self.total_num_training_steps = total_num_training_steps
         self.global_batch_size = global_batch_size
 
     @abstractmethod
-    def predict(self, episodes: EpisodeDataset): #TODO Define response type
+    def predict(self, episodes: EpisodeDataset):  # TODO Define response type
         """
         Predict an action from an observation.
         """
         pass
 
-    @abstractmethod 
+    @abstractmethod
     def forward(
-            self,
-            input_ids: torch.Tensor,
-            attention_masks: torch.Tensor,
-            labels: torch.Tensor,
-        ) -> ActorForwardOutput:
+        self,
+        input_ids: torch.Tensor,
+        attention_masks: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> ActorForwardOutput:
         """
         Forward pass of the policy.
         """
@@ -109,7 +109,7 @@ class BasePolicy:
         self.cloud_logger = cloud_logger
 
     def _init_checkpoint_dir(self):
-        self.checkpoint_dir = (self.project_root_dir / "policy")
+        self.checkpoint_dir = self.project_root_dir / "policy"
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self._validate_checkpoint_format()
 
@@ -125,33 +125,35 @@ class BasePolicy:
     def get_checkpoint_format(self) -> str:
         return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
 
+    @abstractmethod
+    def checkpoint(self):
+       NotImplementedError("checkpoint method is not implemented yet.") 
 
 class DeepSpeedPolicy(BasePolicy):
     """
     solely uses DeepSpeed (ds) for training and ditched the Accelerate library. The accelerate library does not support two models in a single
     training loop, which becomes problematic in policies that use multiple models (actor-critic)
     """
+
     def __init__(
-        self,
-        distributed_state: PartialState,
-        cache_ds_engines: bool = False,
-        **kwargs
-    ):      
-        super().__init__(**kwargs) 
+        self, distributed_state: PartialState, cache_ds_engines: bool = False, **kwargs
+    ):
+        super().__init__(**kwargs)
         self.distributed_state = distributed_state
         self.cache_ds_engines = cache_ds_engines
-    
+
     def create_optimizer(
         self,
         model: PreTrainedModel,
         weight_decay: float = 0.0,
     ) -> Union[Optimizer, DummyOptim]:
         from accelerate.utils import DummyOptim
+
         optim_params = get_optimizer_grouped_parameters(model, weight_decay)
         optim = DummyOptim(optim_params)
         optim.param_groups = {}
         return optim
-    
+
     def create_lr_scheduler(
         self,
         optim: Optimizer,
@@ -185,7 +187,7 @@ class DeepSpeedPolicy(BasePolicy):
         lr_scheduler: Optional[LRScheduler] = None,
     ) -> DeepSpeedEngine:
         """
-        Helper function to convert prertrained model to deepspeed engine. 
+        Helper function to convert prertrained model to deepspeed engine.
         """
         kwargs = {
             "model": model,
@@ -199,17 +201,10 @@ class DeepSpeedPolicy(BasePolicy):
         engine, *_ = deepspeed.initialize(**kwargs)
         return engine
 
-    def _destroy_engines(self):
-        """ Destorys the engines after use (if not caches)"""
-        if self.cache_ds_engines:
-            return
-        for engine in self.engines:
-            self._destroy_ds_engine(engine)
-
     def _destroy_ds_engine(self, ds_engine: DeepSpeedEngine):
         if self.cache_ds_engines:
             return
-        
+
         def delete_attr(obj, a_name):
             if hasattr(obj, a_name):
                 delattr(obj, a_name)
@@ -288,9 +283,7 @@ class DeepSpeedPolicy(BasePolicy):
         )
         config.fill_only("gradient_clipping", self.max_grad_norm, "max_grad_norm")
 
-    def _patch_ds_config_for_dtype(
-        self, config: HfTrainerDeepSpeedConfig
-    ) -> None:
+    def _patch_ds_config_for_dtype(self, config: HfTrainerDeepSpeedConfig) -> None:
         assert not self.fp16, "FP16 is not supported for now"
         config.fill_only(
             "bf16.enabled", (self.bf16 or self.bf16_full_eval), "bf16|bf16_full_eval"
@@ -345,13 +338,8 @@ class DeepSpeedPolicy(BasePolicy):
                 )
 
     def _is_main_process(self) -> bool:
-        """ Deal with the distributed state"""
+        """Deal with the distributed state"""
         return self.distributed_state.is_main_process
-    
-
-
-
-
 
 
 def get_optimizer_grouped_parameters(

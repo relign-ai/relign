@@ -12,7 +12,6 @@ from relign.utils.config import load_deepspeed_config
 def vllm_server():
     return VLLMServer()
 
-
 @pytest.fixture
 def distributed_state_cpu():
     from datetime import timedelta
