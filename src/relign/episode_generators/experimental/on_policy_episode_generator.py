@@ -1,33 +1,22 @@
 import json
 import time
 import uuid
+import evaluate
 from pathlib import Path
 from typing import Any, Dict, List, Union, Optional, Tuple
 
+import numpy as np
+import torch
 import torch.cuda
 from accelerate.utils import release_memory
 from datasets import Dataset, concatenate_datasets
 
+from relign.episode_generators.experimental import BaseEpisodeGenerator, BaseEpisodeGeneratorArgs, Episode
 from relign.utils.gpu import get_gpu_memory, wait_for_memory_release
 from relign.common.vllm_server import compute_vllm_stats
 from relign.utils.logging import get_logger
-
-import evaluate
-import numpy as np
-import torch
-from datasets import Dataset
-
-from relign.episode_generators.experimental.base_episode_generator import BaseEpisodeGeneratorArgs
-from relign.episode_generators.experimental.base_episode_generator import Episode
-
-from relign.episode_generators.episode_generator_with_reward_function import RewardFunction
-from relign.tasks.base_task import BaseTask
 from relign.episode_generators.tree_episode_generator import TreeEpisodeUtils
-from relign.tasks import Task, GSM8K
-from relign.tasks.math import MATH
-from relign.tokenization import Tokenizer
 from relign.utils.logging import get_logger 
-from relign.episode_generators.base_episode_generator import BaseEpisodeGenerator
 
 logger = get_logger(__name__)
 
@@ -41,15 +30,32 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator, TreeEpisodeUtils):
 
     def __init__(
         self,
-        base_args: BaseEpisodeGeneratorArgs,
+        base_args: BaseEpisodeGeneratorArgs = None,
+        initial_model_name_or_path: Optional[str] = None,
         reasoning_step_delimiter: Optional[str] = None,
         answer_prefix: Optional[str] = None,
         max_sequence_length: Optional[int] = None,
         tokenization_check_query_reconstruction: bool = True,
         tokenization_check_response_reconstruction: bool = True,
+        **kwargs,
     ):
+
+        # Ideally the base_args should be passed to the super class, but for backwards compatibility
+        # if it is not provided we try to get the values from the kwargs
+        if base_args is None:
+            try:
+                base_args_fields = {field.name for field in BaseEpisodeGeneratorArgs.__dataclass_fields__.values()}
+                filtered_kwargs = {k: v for k, v in kwargs.items() if k in base_args_fields}
+                base_args = BaseEpisodeGeneratorArgs(**filtered_kwargs)
+            except Exception as e:
+                raise ValueError(
+                    f"Failed initializing a '{self.__class__.__name__}' object. Either provide a BaseEpisodeGeneratorArgs 
+                    object or all the required arguments: {e}"
+                )
+
         super().__init__(base_args)
 
+        self.initial_model_name_or_path = initial_model_name_or_path
         self.max_sequence_length = max_sequence_length
         self.reasoning_step_delimiter = reasoning_step_delimiter
         self.answer_prefix = answer_prefix
@@ -66,11 +72,6 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator, TreeEpisodeUtils):
             )
         except Exception as e:
             self._bleu_metric = None
-
-        # TODO remove
-        assert hasattr(
-            self.task, "split_solution_into_intermediate_steps"
-        ), f"Task {self.task} does not have a method `split_solution_into_intermediate_steps`."
 
 
     #----------------- Abstract Function Implementations -----------------#
@@ -103,11 +104,13 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator, TreeEpisodeUtils):
             )
 
         device_index = self._get_device_index()
-        gpu_memory_usage_before_mb = get_gpu_memory()[device_index]
 
-        from deepspeed.runtime.utils import see_memory_usage
-
-        see_memory_usage("Before generating episodes", force=True)
+        if device_index is not None:
+            gpu_memory_usage_before_mb = get_gpu_memory()[device_index] 
+            from deepspeed.runtime.utils import see_memory_usage
+            see_memory_usage("Before generating episodes", force=True)
+        else:
+            gpu_memory_usage_before_mb = -1
 
         if iteration is None:
             self._log_on_main(
@@ -191,6 +194,9 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator, TreeEpisodeUtils):
             hf_ckpt_path_or_model = self.initial_model_name_or_path
         else:
             hf_ckpt_path_or_model = str(latest_policy_path)
+        
+        if hf_ckpt_path_or_model is None:
+            raise ValueError(f"({self.__class__.__name__}) Either initial_model_name_or_path or latest_policy_path must be provided.")
 
         vllm_init_fn = self._get_vllm_init_fn(
             results_dir=results_dir,
@@ -457,6 +463,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator, TreeEpisodeUtils):
         return -1
         # indices = self.task.split_solution_into_intermediate_steps(response_text)
         # return len(indices) - 1, indices
+
 
     def _tokenize_query_and_response(
         self, 

@@ -48,7 +48,7 @@ class Episode:
                 self.response_token_ids
             ), "process_rewards have to be the same length as the response token ids" 
 
-
+# TODO: either remove or implement?
 class EpisodeGeneratorStrategy(ABC):
     def __call__(self, paths):
         raise NotImplementedError
@@ -281,6 +281,7 @@ class DebugEpisodeGenerator(BaseEpisodeGenerator):
 
 
 
+# TODO: Remove? Not used anywhere
 class EpisodeGeneratorInference(BaseEpisodeGenerator):
     """
     Generate episode by querying the model and generating actions (i.e., reasoning steps)

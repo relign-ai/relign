@@ -3,15 +3,14 @@ import argparse
 from pathlib import Path
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModel
 from omegaconf import OmegaConf
+from relign.guidance.llms import OpenAIVLLM 
 
 from relign.tasks import GSM8K
 from relign.policies.actor_critic_policy import ActorCriticPolicy
 from relign.policies.base_critic import PretrainedModelValueHead
 from relign.algorithms.train_loop import TrainLoop 
 from relign.algorithms.ppo.trainer import PPOTrainer
-from relign.episode_generators.experimental import OnPolicyEpisodeGenerator, BaseEpisodeGeneratorArgs
-
-
+from relign.episode_generators.experimental import OnPolicyEpisodeGenerator
 
 from relign.inference.cot_inference_strategy import COTInferenceStrategy
 from relign.inference.tree_inference.expansion import EfficientIIDExpander
@@ -87,6 +86,14 @@ def ppo_gsm(cfg,  local_rank: int = -1):
     """
 
     # ---- Chain of thought Strategy --- #
+    guidance_llm_cls = OpenAIVLLM
+    guidance_llm_kwargs = {
+        "api_key": 'EMPTY',
+        "max_calls_per_min": 1e6,
+        "caching": False,
+        "max_retries": 10,
+    }
+
     cot_inference_strategy = COTInferenceStrategy(
         samples=n_rollouts_per_sample,
         question_field='query',
@@ -95,7 +102,8 @@ def ppo_gsm(cfg,  local_rank: int = -1):
         max_concurrent_programs=max_concurrent_programs,
         answer_extractor=answer_extractor,
         node_expander=node_expander,
-        guidance_llm=mock_guidance,
+        guidance_llm_cls=guidance_llm_cls,
+        guidance_llm_kwargs=guidance_llm_kwargs,
         max_depth=4,
         result_dir=Path(experiment_dir) / "chain_of_thoughts",
     )
@@ -103,7 +111,6 @@ def ppo_gsm(cfg,  local_rank: int = -1):
     # ----------- Episode Generator ------------#
     vllm_server = VLLMServer()
     episode_generator = OnPolicyEpisodeGenerator
-
     episode_generator_kwargs = {
         "tokenizer": tokenizer,
         "num_episodes_per_iteration": n_episodes_per_iteration,

@@ -20,7 +20,7 @@ from relign.episode_generators.base_episode_generator import (
     Episode,
 )
 from relign.inference.base_inference_strategy import InferenceStrategy
-from relign.tasks.base_task import Task
+from relign.tasks.base_task import BaseTask
 
 from relign.utils.logging import get_logger
 
@@ -37,7 +37,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         inference_strategy_cls: InferenceStrategy,
         inference_strategy_kwargs: Dict[str, Any],
         vllm_server: VLLMServer,
-        task: Task,
+        task: BaseTask,
         seed: int,
         initial_model_name_or_path: str,
         vllm_gpu_memory_utilization: Union[float, str] = 0.9,

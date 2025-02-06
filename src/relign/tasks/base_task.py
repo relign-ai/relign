@@ -102,10 +102,10 @@ class BaseTask(ABC):
     # used externally as well
 
 
-    def map_datasets_fields(data_source: DatasetDict, 
-                            field_map: Dict[str, str], 
-                            remove_mapped_fields: bool, 
-                            hf_num_proc: int) -> DatasetDict:
+    def _map_datasets_fields(self, data_source: DatasetDict, 
+                             field_map: Dict[str, str], 
+                             remove_mapped_fields: bool, 
+                             hf_num_proc: int) -> DatasetDict:
         """
         Maps the fields of the datasets in the given DatasetDict according to the provided field map.
 
@@ -125,6 +125,8 @@ class BaseTask(ABC):
             )
 
         def map_fields(example):
+            if example is None or field_map is None:
+                return example
             return {field_map[k]: v for k, v in example.items()}
 
         data_source = data_source.map(
@@ -132,16 +134,16 @@ class BaseTask(ABC):
             desc="Mapping fields",
             num_proc=hf_num_proc,
             remove_columns=(
-                list(field_map.keys()) if remove_mapped_fields else None
+                list(field_map.keys()) if remove_mapped_fields and field_map is not None else None
             ),
         )
 
         data_source = data_source.map(
-            lambda idx: {"_treetune__idx": idx},
+            lambda _, idx: {"_treetune__idx": idx},
             with_indices=True,
             num_proc=hf_num_proc,
             desc="Adding idx column",
         )
-
+        
         return data_source
     

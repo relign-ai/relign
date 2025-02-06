@@ -116,6 +116,12 @@ class BaseRunner(ABC):
         self.algorithm.learn()
 
     def _create_cloud_logger(self):
+
+        
+        
+        # TODO remove
+        return None        
+
         try:
             import wandb
         except ImportError:
@@ -130,11 +136,8 @@ class BaseRunner(ABC):
             else:
                 mode = None
 
-            settings = wandb.Settings()
-            # settings.update(
-            #     _save_requirements=True,
-            #     _disable_meta=False,
-            # )
+            settings = wandb.Settings(_save_requirements=True, _disable_meta=False)
+
             wandb.init(
                 config={"seed": self.seed},
                 project="relign-01",

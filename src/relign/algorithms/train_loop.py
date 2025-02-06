@@ -57,6 +57,7 @@ class TrainLoop():
         Evaluates every 'eval_freq' rounds.
         Checkpoints every 'checkpoint_freq' rounds.
         """
+        # breakpoint()
         current_policy_path = None
         for iteration in tqdm(range(self.num_iterations)):
             # Collect rollouts under the current policy.
@@ -92,14 +93,15 @@ class TrainLoop():
         # for now we just generate it in the main process
         # Feth the epiode path on all the devices
         episode_path = self.episode_generator.get_episode_checkpoint_path(iteration)
-
+        
         # compute the epiosdes on the main process in non-distirbuted envirnoments
         if not self.episode_generator.supports_distributed:
             if self.distributed_state.is_main_process:
                 episode_path = self.episode_generator.generate(
                     iteration=iteration,
-                    altest_policy_path=current_policy_path
+                    latest_policy_path=current_policy_path
                 )
+                breakpoint()
         else:
             episodes = self.episode_generator.generate(
                 iteration=iteration, 

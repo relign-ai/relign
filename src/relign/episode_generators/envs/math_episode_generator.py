@@ -12,7 +12,7 @@ from relign.episode_generators.episode_generator_with_reward_function import(
     EpisodeGeneratorWithRewardFunction,
     RewardFunction,
 )
-from relign.tasks import Task, GSM8K
+from relign.tasks import BaseTask, GSM8K
 from relign.tasks.math import MATH
 from relign.tokenization import Tokenizer
 from relign.utils.logging import get_logger 
@@ -23,7 +23,7 @@ class MATHRewardFunction(RewardFunction):
     def __init__(
         self,
         tokenizer: Tokenizer,
-        math_task: Task,
+        math_task: BaseTask,
         penalize_unfinished_response: bool = False,
         unfinished_response_penalty: float = -1.0,
         timeout: Optional[int] = None,

@@ -20,7 +20,7 @@ from relign.episode_generators.path_aggregators import PathAggregator
 from relign.episode_generators.path_filters import PathFilter, SuccessfulPathFilter
 from relign.episode_generators.path_post_processors import PathPostProcessor
 from relign.inference import InferenceStrategy
-from relign.tasks import Task
+from relign.tasks import BaseTask
 from relign.tokenization import Tokenizer
 
 logger = logging.get_logger(__name__)
@@ -156,7 +156,7 @@ class TreeEpisodeGenerator(BaseEpisodeGenerator, TreeEpisodeUtils):
         tokenizer: Tokenizer,
         distributed_state: PartialState,
         inference_strategy: InferenceStrategy,
-        task: Task,
+        task: BaseTask,
         episode_strategy: EpisodeGeneratorStrategy,
         num_episodes_per_iteration: int,
         # During tree generation, we early stop expanding a node if the model reaches the final answer.
@@ -278,7 +278,7 @@ class TreeEpisodeGenerator(BaseEpisodeGenerator, TreeEpisodeUtils):
     def convert_to_episode(
         self,
         episode_strategy: TreeEpisodeGeneratorStrategy,
-        task: Task,
+        task: BaseTask,
         tokenizer: Tokenizer,
         tree_inference_result_instance: Dict[str, Any],
         repeat_early_stopped_paths: bool = False,
@@ -481,7 +481,7 @@ class TreeEpisodeGeneratorForMath(TreeEpisodeGenerator):
     def convert_to_episode(
         self,
         episode_strategy: TreeEpisodeGeneratorStrategy,
-        task: Task,
+        task: BaseTask,
         tokenizer: Tokenizer,
         tree_inference_result_instance: Dict[str, Any],
         repeat_early_stopped_paths: bool = False,

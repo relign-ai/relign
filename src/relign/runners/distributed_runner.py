@@ -8,7 +8,8 @@ import torch
 from relign.runners.base_runner import BaseRunner
 from relign.policies.base_policy import BasePolicy
 from relign.algorithms.base_trainer import BaseTrainer
-from relign.episode_generators.base_episode_generator import BaseEpisodeGenerator
+#from relign.episode_generators.base_episode_generator import BaseEpisodeGenerator
+from relign.episode_generators.experimental import BaseEpisodeGenerator 
 from relign.algorithms.train_loop import TrainLoop
 from relign.policies.base_actor import DeepSpeedPolicy
 

@@ -63,10 +63,10 @@ class GSM8K(BaseTask):
     ) -> DatasetDict:
 
         data_source = self._load_data_source()
-        datasets = self.map_datasets_fields(data_source, 
-                                self.field_map, 
-                                self.remove_mapped_fields, 
-                                self.hf_num_proc)
+        datasets = self._map_datasets_fields(data_source, 
+                                             self.field_map, 
+                                             self.remove_mapped_fields, 
+                                             self.hf_num_proc)
 
         datasets = datasets.map(
             self._preprocess_example, num_proc=4, desc="Preprocessing examples"

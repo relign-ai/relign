@@ -1,29 +1,26 @@
 import random
+import shutil
+import tempfile
+import torch
+from typing import Optional, Union, List, Dict, Any, Tuple, Callable
 from abc import ABC
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from abc import ABC, abstractmethod
-import shutil
-import tempfile
-from typing import Optional, Union, List, Dict, Any, Tuple, Callable
 
 import torch.cuda
+import wandb
 from accelerate.utils import release_memory
+from accelerate import PartialState
 from datasets import Dataset, concatenate_datasets
-
-from relign.utils.gpu import get_gpu_memory, wait_for_memory_release
-from relign.utils.py_utils import find_n_free_ports
-from relign.common.vllm_server import VLLMServer
 
 from relign.inference.base_inference_strategy import InferenceStrategy
 from relign.tasks.base_task import BaseTask
-
-from accelerate import PartialState, release_memory
-from datasets import Dataset
-import wandb
-
+from relign.utils.gpu import get_gpu_memory, wait_for_memory_release
+from relign.utils.py_utils import find_n_free_ports
+from relign.common.vllm_server import VLLMServer
 from relign.inference.base_inference_strategy import InferenceStrategy
-from relign.common.vllm_server import VLLMServer, compute_vllm_stats
+from relign.common.vllm_server import VLLMServer
 from relign.utils.py_utils import find_n_free_ports
 from relign.tasks.base_task import BaseTask
 from relign.common.dataset import EpisodeDataset
@@ -69,12 +66,12 @@ class BaseEpisodeGeneratorArgs:
     """
     TODO: Document the use and effect of each argument
     """
-
     task: BaseTask
     tokenizer: Tokenizer
     vllm_server: VLLMServer
     inference_strategy: InferenceStrategy
 
+    policy_path: Optional[str] = None 
     vllm_gpu_memory_utilization: Union[float, str] = 0.9
     vllm_min_available_gpu_memory_mb: Optional[int] = None
     wait_until_memory_release: bool = False
@@ -109,6 +106,9 @@ class BaseEpisodeGenerator(ABC):
         self,
         args: BaseEpisodeGeneratorArgs,
     ):
+
+        self._logger = logger
+
         for k, v in asdict(args).items():
             setattr(self, k, v)
 
@@ -421,6 +421,9 @@ class BaseEpisodeGenerator(ABC):
     
     def _get_device_index(self) -> int:
         """Returns a valid device index either from self.distributed_state.device.index or using torch.cuda.current_device()."""
+        if not torch.cuda.is_available():
+            return None
+
         device = self.distributed_state.device
         return device.index if device.index is not None else torch.cuda.current_device()
 
