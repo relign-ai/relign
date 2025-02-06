@@ -148,7 +148,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
     # ----------- Trainer ---------------#
     ppo_trainer_class = PPOTrainer
     ppo_trainer_kwargs = {
-        "target_batch_size": 8,
+        "target_batch_size": 8, 
         "gradient_accumulation_steps": 2,
         "dataloader_num_workers": 2,
         "dataloader_pin_memory": False,

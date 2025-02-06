@@ -12,11 +12,17 @@ from relign.episode_generators.envs.math_episode_generator import (
     MathEpisodeGenerator,
     MATHRewardFunction,
 )
+from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor
+from relign.inference.cot_inference_strategy import COTInferenceStrategy
+from relign.inference.tree_inference.expansion import EfficientIIDExpander
+from relign.inference.tree_inference.answer_extraction import (
+    IdentityAnswerExtractor,
+)
 
 # For actor critic methods, we need a Distributed Runner
 from relign.runners.distributed_runner import DistributedRunner
 from relign.common.vllm_server import VLLMServer
-
+from relign.guidance.llms import OpenAIVLLM 
 
 def grpo_gsm(cfg, local_rank: int = -1):
     ds_config = cfg.deepspeed
@@ -51,22 +57,18 @@ def grpo_gsm(cfg, local_rank: int = -1):
     )
 
     # -------- Inference Strategy --------#
-    from relign.inference.cot_inference_strategy import COTInferenceStrategy
-    from relign.inference.tree_inference.expansion import EfficientIIDExpander
-    from relign.inference.tree_inference.answer_extraction import (
-        IdentityAnswerExtractor,
-    )
-
-    n_episodes_per_iteration = 5000
+    n_episodes_per_iteration = 50
     n_rollouts_per_sample = 10  # Effective group size
     max_concurrent_programs = 1
     max_concurrent_generations = 1
-    n_epiodes_per_iteration = n_episodes_per_iteration / n_rollouts_per_sample
-
-    from relign.guidance.llms._mock import Mock
-    from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor
-
-    mock_guidance = Mock()
+    
+    guidance_llm_cls = OpenAIVLLM
+    guidance_llm_kwargs = {
+        "api_key": 'EMPTY',
+        "max_calls_per_min": 1e6,
+        "caching": False,
+        "max_retries": 10,
+    }
 
     # ---------- Node Expanders---------- #
     answer_extractor = IdentityAnswerExtractor(node_key_name="text")
@@ -105,7 +107,8 @@ def grpo_gsm(cfg, local_rank: int = -1):
         max_concurrent_programs=max_concurrent_programs,
         answer_extractor=answer_extractor,
         node_expander=node_expander,
-        guidance_llm=mock_guidance,
+        guidance_llm_cls=guidance_llm_cls,
+        guidance_llm_kwargs=guidance_llm_kwargs,
         max_depth=2,
         result_dir=Path(experiment_dir) / "chain_of_thoughts",
     )
@@ -138,7 +141,8 @@ def grpo_gsm(cfg, local_rank: int = -1):
     # ----------- Trainer ---------------#
     ppo_trainer_class = GRPOTrainer
     ppo_trainer_kwargs = {
-        "per_device_batch_size": 16,
+        "target_batch_size": 8, 
+        "gradient_accumulation_steps": 2,
         "dataloader_num_workers": 2,
         "dataloader_pin_memory": False,
     }
@@ -147,7 +151,7 @@ def grpo_gsm(cfg, local_rank: int = -1):
     algorithm_cls = TrainLoop
     algorithm_kwargs = {
         "num_iterations": 500,
-        "num_episodes_per_iteration": 1,
+        "num_episodes_per_iteration": n_episodes_per_iteration,
         "verbose": 1,
         "evaluation_freq": 10,
         "checkpoint_freq": 10,

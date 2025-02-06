@@ -186,7 +186,26 @@ class GRPOTrainer(BaseTrainer):
             disable=not self._is_main_process()
         ):
             for _, batch in enumerate(dataloader_iter):
+                is_grad_acc_boundary = (
+                    self.policy.actor.is_gradient_accumulation_boundary()
+                )
                 self._step(batch)
+
+                metrics = self._step(batch)
+                # self._update_metrics(running_metrics, accumulated_metrics, metrics)
+                if is_grad_acc_boundary:
+                    self.state.global_step += 1
+                    # self.state.epoch = epoch + (step + 1) / steps_in_epoch
+                    progress_bar.update(1)
+
+                    should_log = self.state.global_step % self.logging_steps == 0
+                    if should_log:
+                        # self._log_training_metrics(
+                        #     global_step_last_logged,
+                        #     accumulated_metrics,
+                        #     progress_bar,
+                        # )
+                        global_step_last_logged = self.state.global_step
 
     def _hydrate_log_probs(
         self, 
