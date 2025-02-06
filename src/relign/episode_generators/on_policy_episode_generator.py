@@ -3,6 +3,7 @@ import random
 import shutil
 import tempfile
 import time
+import logging
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional, Union, List, Dict, Any, Tuple, Callable
@@ -337,6 +338,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
             results_root_dir=results_dir,
             iteration=iteration,
             gpu_memory_usage_before_mb=gpu_memory_usage_before_mb,
+            seed=seed,
         )
 
         for result in infer_results:
@@ -437,6 +439,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         results_root_dir: Path,
         iteration: int,
         gpu_memory_usage_before_mb: int,
+        seed: int,
     ):
         """
         Potentially start a vLLM server and run inference to generate results needed for episode generation.
@@ -456,41 +459,46 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         vllm_server, guidance_llm_kwargs = vllm_init_fn()
         target_device_index = self._get_device_index()
 
-        # initialize the inference strategy class with updates result dir 
-        self.inference_strategy_cls(
-            self.inference_strategy_kwargs,
-            results_dir=results_root_dir,
-            seed=seed,
-            cloud_logger=None,
-            log_level=(
-                logging.WARNING if not self.distributed_state.is_local_main_process else None
+        # Try to run infernece, if the code fails in here, clean up
+        results = None
+        try:
+            # initialize the inference strategy class with updates result dir 
+            self.inference_strategy = self.inference_strategy_cls(
+                **self.inference_strategy_kwargs,
+                result_dir=results_root_dir,
+                seed=seed,
+                cloud_logger=None,
+                log_level=(
+                    logging.WARNING if not self.distributed_state.is_local_main_process else None
+                )
             )
-        )
 
-        #initialize the guidance_llm with the right server settings
-        self.inference_strategy._init_guidance_llm(**guidance_llm_kwargs)
-        results = self.inference_strategy.generate(dataset_shard)
+            #initialize the guidance_llm with the right server settings
+            self.inference_strategy._init_guidance_llm(**guidance_llm_kwargs)
+            results = self.inference_strategy.generate(dataset_shard)
+        
+            # Convert the results to a list before saving 
+            episodes = []
+            for row in results:
+                episode = dict(row)  # copy all fields from row
+                episode["iteration"] = iteration
+                episodes.append(episode)
 
-        # Convert the results to a list before saving 
-        episodes = []
-        for row in results:
-            episode = dict(row)  # copy all fields from row
-            episode["iteration"] = iteration
-            episodes.append(episode)
-
-        episode_ds = Dataset.from_list(episodes)
-        episode_ds.save_to_disk(str(infer_result_path))
-
-        vllm_server.stop_server()
-        del results
-        del vllm_server
-        release_memory()
-
-        self.vllm_cleanup(
-            target_gpu_index=target_device_index, # or can i just use self.distributed_state.device.index here? even if there are multiple ?
-            gpu_memory_usage_before_mb=gpu_memory_usage_before_mb,
-        )
-        release_memory()
+            episode_ds = Dataset.from_list(episodes)
+            episode_ds.save_to_disk(str(infer_result_path))
+        finally: 
+            
+            logger.info(f"Cleaning up vllm server.. Device:{target_device_index}")
+            vllm_server.stop_server()
+            if results is not None:
+                del results
+            del vllm_server
+            release_memory()
+            self.vllm_cleanup(
+                target_gpu_index=target_device_index, # or can i just use self.distributed_state.device.index here? even if there are multiple ?
+                gpu_memory_usage_before_mb=gpu_memory_usage_before_mb,
+            )
+            release_memory()
 
         results = Dataset.load_from_disk(str(results_root_dir / "results_ds"))
         return results

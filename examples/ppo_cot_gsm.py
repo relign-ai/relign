@@ -63,10 +63,13 @@ def ppo_gsm(cfg, local_rank: int = -1):
         timeout=1,
     )
 
-    n_episodes_per_iteration = 50 
-    n_rollouts_per_sample = 1
-    max_concurrent_programs = 30 
-    max_concurrent_generations = 40 
+    num_iterations = 100
+    num_epoch_per_iterations = 3
+    gradient_accumulation_steps = 1
+    n_episodes_per_iteration = 568 
+    n_rollouts_per_sample = 2
+    max_concurrent_programs = 128 
+    max_concurrent_generations = 128 
 
     guidance_llm_cls = OpenAIVLLM
     guidance_llm_kwargs = {
@@ -115,7 +118,6 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "guidance_llm_cls": guidance_llm_cls,
         "guidance_llm_kwargs": guidance_llm_kwargs,
         "max_depth": 2,
-        "result_dir": Path(experiment_dir) / "chain_of_thoughts",
     }
 
     # ----------- Episode Generator ------------#
@@ -150,8 +152,9 @@ def ppo_gsm(cfg, local_rank: int = -1):
     # ----------- Trainer ---------------#
     ppo_trainer_class = PPOTrainer
     ppo_trainer_kwargs = {
-        "target_batch_size": 64, 
-        "gradient_accumulation_steps": 1,
+        "target_batch_size": 32, 
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "num_epochs_per_iteration": num_epoch_per_iterations,
         "dataloader_num_workers": 4,
         "dataloader_pin_memory": False,
     }
@@ -159,7 +162,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
     # ----------- Algorithm--------------#
     algorithm_cls = TrainLoop
     algorithm_kwargs = {
-        "num_iterations": 100,
+        "num_iterations": num_iterations,
         "num_episodes_per_iteration": n_episodes_per_iteration,
         "verbose": 1,
         "evaluation_freq": 10,
