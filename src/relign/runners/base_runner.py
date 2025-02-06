@@ -131,10 +131,10 @@ class BaseRunner(ABC):
                 mode = None
 
             settings = wandb.Settings()
-            settings.update(
-                _save_requirements=True,
-                _disable_meta=False,
-            )
+            # settings.update(
+            #     _save_requirements=True,
+            #     _disable_meta=False,
+            # )
             wandb.init(
                 config={"seed": self.seed},
                 project="relign-01",

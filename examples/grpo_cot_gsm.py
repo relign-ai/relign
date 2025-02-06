@@ -110,7 +110,7 @@ def grpo_gsm(cfg, local_rank: int = -1):
         guidance_llm_cls=guidance_llm_cls,
         guidance_llm_kwargs=guidance_llm_kwargs,
         max_depth=2,
-        result_dir=Path(experiment_dir) / "chain_of_thoughts",
+        result_dir=Path(experiment_dir) /""/ "chain_of_thoughts",
     )
 
     # ----------- Episode Generator ------------#
@@ -142,7 +142,7 @@ def grpo_gsm(cfg, local_rank: int = -1):
     ppo_trainer_class = GRPOTrainer
     ppo_trainer_kwargs = {
         "target_batch_size": 8, 
-        "gradient_accumulation_steps": 2,
+        "gradient_accumulation_steps": 1,
         "dataloader_num_workers": 2,
         "dataloader_pin_memory": False,
     }

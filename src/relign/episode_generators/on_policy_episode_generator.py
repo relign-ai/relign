@@ -33,7 +33,8 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
 
     def __init__(
         self,
-        inference_strategy: InferenceStrategy,
+        inference_strategy_cls: InferenceStrategy,
+        inference_strategy_kwargs: Dict[str, Any],
         vllm_server: VLLMServer,
         task: Task,
         seed: int,
@@ -64,7 +65,8 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         super().__init__(**kwargs)
         self._logger = logger
 
-        self.inference_strategy = inference_strategy
+        self.inference_strategy_cls= inference_strategy_cls
+        self.inference_strategy_kwargs = inference_strategy_kwargs
         self.vllm_server = vllm_server
         self.task = task
         self.dataset_split = dataset_split
@@ -449,9 +451,21 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
             seed (int):
                 The seed for this process to use for inference.
         """
+
         infer_result_path = results_root_dir / "results_ds"
         vllm_server, guidance_llm_kwargs = vllm_init_fn()
         target_device_index = self._get_device_index()
+
+        # initialize the inference strategy class with updates result dir 
+        self.inference_strategy_cls(
+            self.inference_strategy_kwargs,
+            results_dir=results_root_dir,
+            seed=seed,
+            cloud_logger=None,
+            log_level=(
+                logging.WARNING if not self.distributed_state.is_local_main_process else None
+            )
+        )
 
         #initialize the guidance_llm with the right server settings
         self.inference_strategy._init_guidance_llm(**guidance_llm_kwargs)
