@@ -15,6 +15,7 @@ from datasets import Dataset, concatenate_datasets
 from relign.utils.gpu import get_gpu_memory, wait_for_memory_release
 from relign.utils.py_utils import find_n_free_ports
 from relign.common.vllm_server import VLLMServer, compute_vllm_stats
+
 from relign.episode_generators.base_episode_generator import (
     BaseEpisodeGenerator,
     Episode,
@@ -66,7 +67,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         super().__init__(**kwargs)
         self._logger = logger
 
-        self.inference_strategy_cls= inference_strategy_cls
+        self.inference_strategy_cls = inference_strategy_cls
         self.inference_strategy_kwargs = inference_strategy_kwargs
         self.vllm_server = vllm_server
         self.task = task
@@ -206,9 +207,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         return device.index if device.index is not None else torch.cuda.current_device()
 
     def generate(
-        self, 
-        iteration: Optional[int] = None, 
-        latest_policy_path: Optional[Path] = None
+        self, iteration: Optional[int] = None, latest_policy_path: Optional[Path] = None
     ):
         """
         Generate episodes by sampling from the model.
@@ -238,7 +237,6 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         from deepspeed.runtime.utils import see_memory_usage
 
         see_memory_usage("Before generating episodes", force=True)
-
         if iteration is None:
             self._log_on_main(
                 "Iteration is None. Using 0 as the iteration.", level="warning"
@@ -331,7 +329,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
 
         metrics = {}
         t0 = time.time()
-        
+
         infer_results = self._run_inference(
             dataset_shard=dataset,
             vllm_init_fn=vllm_init_fn,
@@ -462,22 +460,24 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         # Try to run infernece, if the code fails in here, clean up
         results = None
         try:
-            # initialize the inference strategy class with updates result dir 
+            # initialize the inference strategy class with updates result dir
             self.inference_strategy = self.inference_strategy_cls(
                 **self.inference_strategy_kwargs,
                 result_dir=results_root_dir,
                 seed=seed,
                 cloud_logger=None,
                 log_level=(
-                    logging.WARNING if not self.distributed_state.is_local_main_process else None
-                )
+                    logging.WARNING
+                    if not self.distributed_state.is_local_main_process
+                    else None
+                ),
             )
 
-            #initialize the guidance_llm with the right server settings
+            # initialize the guidance_llm with the right server settings
             self.inference_strategy._init_guidance_llm(**guidance_llm_kwargs)
             results = self.inference_strategy.generate(dataset_shard)
-        
-            # Convert the results to a list before saving 
+
+            # Convert the results to a list before saving
             episodes = []
             for row in results:
                 episode = dict(row)  # copy all fields from row
@@ -486,8 +486,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
 
             episode_ds = Dataset.from_list(episodes)
             episode_ds.save_to_disk(str(infer_result_path))
-        finally: 
-            
+        finally:
             logger.info(f"Cleaning up vllm server.. Device:{target_device_index}")
             vllm_server.stop_server()
             if results is not None:
@@ -495,7 +494,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
             del vllm_server
             release_memory()
             self.vllm_cleanup(
-                target_gpu_index=target_device_index, # or can i just use self.distributed_state.device.index here? even if there are multiple ?
+                target_gpu_index=target_device_index,  # or can i just use self.distributed_state.device.index here? even if there are multiple ?
                 gpu_memory_usage_before_mb=gpu_memory_usage_before_mb,
             )
             release_memory()
@@ -571,7 +570,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         target_gpu_index: int,
     ):
         if self.wait_until_memory_release:
-            threshold_mb = ( gpu_memory_usage_before_mb * 1.1)  # Allow for 10% tolerance
+            threshold_mb = gpu_memory_usage_before_mb * 1.1  # Allow for 10% tolerance
             wait_for_memory_release(
                 target_gpu_index=target_gpu_index,
                 threshold_mb=threshold_mb,

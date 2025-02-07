@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Union, Dict
 from pathlib import Path
 from tqdm import tqdm
 from logging import Logger
@@ -12,12 +12,14 @@ from relign.common.dataset import EpisodeDataset
 from relign.utils.dataset import remove_null_columns
 from relign.eval.evaluator import Evaluator
 from relign.eval.analyzer import TaskPerformanceAnalyzer
+from relign.inference.inference_pipeline import InferencePipeline
 
 from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-class TrainLoop():
+
+class TrainLoop:
     def __init__(
         self,
         seed: int,
@@ -25,6 +27,8 @@ class TrainLoop():
         policy: BasePolicy,
         trainer: BaseTrainer,
         episode_generator: BaseEpisodeGenerator,
+        inference_pipeline_cls: InferencePipeline,
+        inference_pipeline_kwargs: Dict,
         distributed_state: PartialState,
         verbose: int = 0,
         num_iterations: int = 100,
@@ -46,6 +50,8 @@ class TrainLoop():
         self.policy = policy
         self.trainer = trainer
         self.episode_generator = episode_generator
+        self.inference_pipeline_cls = inference_pipeline_cls
+        self.inference_pipeline_kwargs = inference_pipeline_kwargs
         self.verbose = verbose
         self.num_iterations = num_iterations
         self.num_episodes_per_iteration = num_episodes_per_iteration
@@ -53,7 +59,7 @@ class TrainLoop():
         self.checkpoint_freq = checkpoint_freq
         self.distributed_state = distributed_state
 
-        #TODO: pass this instead
+        # TODO: pass this instead
         self.evaluator = Evaluator(
             project_root_dir=project_root_dir,
             analyzers=[
@@ -63,6 +69,8 @@ class TrainLoop():
                     task=self.episode_generator.task,
                 )
             ],
+            inference_pipeline_cls=self.inference_pipeline_cls,
+            inference_pipeline_kwargs=self.inference_pipeline_kwargs,
         )
 
     def learn(self):
@@ -75,8 +83,7 @@ class TrainLoop():
         for iteration in tqdm(range(self.num_iterations)):
             # Collect rollouts under the current policy.
             episodes = self._generate_episodes(
-                iteration=iteration, 
-                current_policy_path=current_policy_path
+                iteration=iteration, current_policy_path=current_policy_path
             )
 
             current_policy_path = self.trainer.step(episodes=episodes)
@@ -111,13 +118,11 @@ class TrainLoop():
         if not self.episode_generator.supports_distributed:
             if self.distributed_state.is_main_process:
                 episode_path = self.episode_generator.generate(
-                    iteration=iteration,
-                    altest_policy_path=current_policy_path
+                    iteration=iteration, altest_policy_path=current_policy_path
                 )
         else:
             episodes = self.episode_generator.generate(
-                iteration=iteration, 
-                latest_policy_path=current_policy_path 
+                iteration=iteration, latest_policy_path=current_policy_path
             )
             assert isinstance(episodes, Dataset)
             if self.distributed_state.is_main_process:
@@ -138,8 +143,10 @@ class TrainLoop():
 
     def _checkpoint(self, iteration: int):
         logger.info("Checkpointing models...")
-        self.trainer.policy.checkpoint(self.project_root_dir / "policy"/ "checkpoint"/ f"policy_{iteration}.pt")
-        #TODO: checkpoint other parts of the train state here
+        self.trainer.policy.checkpoint(
+            self.project_root_dir / "policy" / "checkpoint" / f"policy_{iteration}.pt"
+        )
+        # TODO: checkpoint other parts of the train state here
 
     @property
     def logger(self) -> Logger:

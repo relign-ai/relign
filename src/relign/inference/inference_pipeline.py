@@ -8,10 +8,10 @@ from typing import Optional, List
 from datasets import Dataset
 from wandb.sdk.wandb_run import Run
 
-from treetune.analyzers import Analyzer
-from relign.common import Registrable, Lazy, JsonDict, Params
-from relign.common.py_utils import need_to_minimize_stored_files
-from relign.inference_strategies.base_inference_strategy import InferenceStrategy
+from relign.common.types import JsonDict
+
+# from relign.common.py_utils import need_to_minimize_stored_files
+from relign.inference.base_inference_strategy import InferenceStrategy
 from relign.tasks.base_task import Task
 
 from relign.utils.logging import get_logger
@@ -20,25 +20,25 @@ from relign.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-class InferencePipeline(Registrable):
+class InferencePipeline:
     pass
 
 
-@InferencePipeline.register("vllm")
 class VLLMInferencePipeline(InferencePipeline):
     def __init__(
         self,
         inference_strategy_cls: InferenceStrategy,
+        inference_strategy_kwargs: List[JsonDict],
         task: Task,
         dataset_split: str,
         inference_name: Optional[str] = None,
-        exp_root: Optional[Path] = None,
+        exp_root_dir: Optional[Path] = None,
         dataset_portion: float = 1.0,
         dataset_shuffle_before_portion: bool = False,
         dataset_num_shards: int = 1,
         dataset_shard_index: int = 0,
         analyzers: Optional[List[JsonDict]] = None,
-        debug_mode: bool = False,
+        debug_mode: bool = True,
         cloud_logger: Optional[Run] = None,
         use_cache: Optional[bool] = None,
         enable_cloud_logging_during_inference: bool = True,
@@ -85,7 +85,7 @@ class VLLMInferencePipeline(InferencePipeline):
                 The prefix to use for metrics.
         """
         self.task = task
-        self.exp_root = exp_root
+        self.exp_root_dir = exp_root_dir
         self.dataset_split = dataset_split
         self.dataset_portion = dataset_portion
         self.dataset_shuffle_before_portion = dataset_shuffle_before_portion
@@ -97,14 +97,16 @@ class VLLMInferencePipeline(InferencePipeline):
         self.metrics_prefix = metrics_prefix
         self.inference_name = inference_name
         self.checkpoint_global_step = checkpoint_global_step
+        self.inference_strategy_cls = inference_strategy_cls
+        self.inference_strategy_kwrags = inference_strategy_kwargs
 
         if self.inference_name is not None:
             self.metrics_prefix = f"{self.inference_name}/{self.metrics_prefix}"
 
-        if self.exp_root is None:
+        if self.exp_root_dir is None:
             # Create a tmp directory
-            self.exp_root = Path("/tmp") / next(tempfile._get_candidate_names())
-            self.exp_root.mkdir(parents=True, exist_ok=True)
+            self.exp_root_dir = Path("/tmp") / next(tempfile._get_candidate_names())
+            self.exp_root_dir.mkdir(parents=True, exist_ok=True)
 
         if self.debug_mode:
             logger.info("Debug mode is on. Using 10 examples from the dataset.")
@@ -117,29 +119,28 @@ class VLLMInferencePipeline(InferencePipeline):
             f"Inference on {task.name} (split__shard__num_shards): {self.inference_job_id}"
         )
 
-        if need_to_minimize_stored_files():
-            self._cached_results_dir = (
-                Path(tempfile.mkdtemp()) / "inference_results" / self.inference_job_id
-            )
-            self._cached_results_dir.mkdir(parents=True, exist_ok=True)
+        # if need_to_minimize_stored_files():
+        #     self._cached_results_dir = (
+        #         Path(tempfile.mkdtemp()) / "inference_results" / self.inference_job_id
+        #     )
+        #     self._cached_results_dir.mkdir(parents=True, exist_ok=True)
 
         inference_strategy_kwargs = {"result_dir": self.get_result_dir()}
         if enable_cloud_logging_during_inference:
             inference_strategy_kwargs["cloud_logger"] = self.cloud_logger
 
-        logger.info(
-            f"Guidance LLM params: {inference_strategy._params.get('guidance_llm', {}).as_dict()}"
-        )
-        self.inference_strategy = inference_strategy_cls(
-            **inference_strategy_kwargs
-        )
+        # logger.info(
+        #     f"Guidance LLM params: {inference_strategy._params.get('guidance_llm', {}).as_dict()}"
+        # )
+
+        self.inference_strategy = inference_strategy_cls(**inference_strategy_kwargs)
         self.analyzers = analyzers
 
     def get_result_dir(self) -> Path:
         if hasattr(self, "_cached_results_dir"):
             return self._cached_results_dir
 
-        result_dir = self.exp_root / "inference_results" / self.inference_job_id
+        result_dir = self.exp_root_dir / "inference_results" / self.inference_job_id
         result_dir.mkdir(parents=True, exist_ok=True)
         return result_dir
 
@@ -168,7 +169,7 @@ class VLLMInferencePipeline(InferencePipeline):
         )
         logger.info(
             f"Sharded Dataset size: {len(dataset)} "
-            f"(shard {self.dataset_shard_index+1} / {self.dataset_num_shards})"
+            f"(shard {self.dataset_shard_index + 1} / {self.dataset_num_shards})"
         )
 
         results = self.inference_strategy.generate(dataset)

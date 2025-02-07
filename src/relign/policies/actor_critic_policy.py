@@ -11,7 +11,6 @@ from transformers import PreTrainedModel
 from transformers.integrations import HfTrainerDeepSpeedConfig
 from deepspeed import DeepSpeedEngine
 from deepspeed import comm as dist
-/late
 
 from relign.common.dataset import EpisodeDataset
 from relign.utils.logging import get_logger
@@ -74,10 +73,12 @@ class CriticForwardOutput(NamedTuple):
         # TODO: engine caching
         return engine
 
+
 @dataclass
 class Checkpoint:
     path: Path
     iteration: int
+
 
 class ActorCriticPolicy(ActorPolicy):
     """
@@ -107,7 +108,6 @@ class ActorCriticPolicy(ActorPolicy):
         only_return_unwrapped_model: bool = False,
         hf_checkpoint_path: Optional[Path] = None,
     ) -> Union[DeepSpeedEngine, PreTrainedModel]:
-
         if hasattr(self, "_critic_engine"):
             return self._critic_engine
 
@@ -336,21 +336,21 @@ class ActorCriticPolicy(ActorPolicy):
         self.destroy_critic_engine_if_not_cached()
         self.destroy_actor_engine_if_not_cached()
         self.destroy_reference_engine_if_not_cached()
-    
+
     def _load_checkpoint_to_ds_engines(
         self,
         checkpoint_path: Path,
     ) -> None:
         metrics = {}
         if self.actor is not None:
-           self.actor.load_checkpoint(str(checkpoint_path / "actor"))
+            self.actor.load_checkpoint(str(checkpoint_path / "actor"))
         if self.critic is not None:
             self.critic.load_checkpoint(str(checkpoint_path / "critic"))
         if len(metrics) > 0:
             self._cloud_log({**metrics, "train/global_step": self.state.global_step})
 
-    def load_latest_policy_path(self, project_root_dir: Optional[Path]=None)-> None:
-        """ loads both actor and critic from "policy/cache" folder """
+    def load_latest_policy_path(self, project_root_dir: Optional[Path] = None) -> None:
+        """loads both actor and critic from "policy/cache" folder"""
         if not project_root_dir:
             project_root_dir = self.project_root_dir
         self._load_checkpoint_to_ds_engines(project_root_dir / "policy" / "cache")
@@ -364,7 +364,7 @@ class ActorCriticPolicy(ActorPolicy):
         self.checkpoint_path_to_load = checkpoint_path
 
     def _save_hf_pretrained(self, engine: DeepSpeedEngine, path: Path) -> None:
-        """ Saves a huggingface model that can be used for inference"""
+        """Saves a huggingface model that can be used for inference"""
         if self._is_main_process():
             # Only save on the main process
             assert engine.zero_optimization_stage() < 3
@@ -374,9 +374,9 @@ class ActorCriticPolicy(ActorPolicy):
         dist.barrier()
 
     def save_checkpoint(self, checkpoint_path: Path) -> None:
-        """ 
-        saves both a hugginface model of the actor + critic and a 
-        deepspeed checkpoint which contains all the optimizer states 
+        """
+        saves both a hugginface model of the actor + critic and a
+        deepspeed checkpoint which contains all the optimizer states
         saves the actor in `checkpoint_path/actor` and the critic in `checkpoint_path/critic`
         """
         if self._is_main_process():
@@ -393,7 +393,7 @@ class ActorCriticPolicy(ActorPolicy):
             self._save_hf_pretrained(self.actor, checkpoint_path / "hf_pretrained")
             self.actor.save_checkpoint(str(checkpoint_path / "actor"))
 
-        if self.critic is not None: 
+        if self.critic is not None:
             self._save_hf_pretrained(
                 self.critic, checkpoint_path / "critic" / "hf_pretrained"
             )
@@ -401,6 +401,15 @@ class ActorCriticPolicy(ActorPolicy):
 
     def save_latest_policy_path(self) -> str:
         # Save both the actor and critic engine and return the path of the actor for inference
-        self._save_hf_pretrained(self.actor, self.project_root_dir / "policy" / "cache" / "critic" / "hf_pretrained")
-        self._save_hf_pretrained(self.critic, self.project_root_dir / "policy" / "cache" / "actor" / "hf_pretrained")
+        self._save_hf_pretrained(
+            self.actor,
+            self.project_root_dir / "policy" / "cache" / "critic" / "hf_pretrained",
+        )
+        self._save_hf_pretrained(
+            self.critic,
+            self.project_root_dir / "policy" / "cache" / "actor" / "hf_pretrained",
+        )
 
+        return Path(
+            self.project_root_dir / "policy" / "cache" / "actor" / "hf_pretrained"
+        )

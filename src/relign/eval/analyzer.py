@@ -7,34 +7,31 @@ from accelerate import PartialState
 from datasets import Dataset
 from wandb.sdk.wandb_run import Run
 
-from relign.utils.logging import get_logger 
+from relign.utils.logging import get_logger
 from relign.tasks import Task
 
 logger = get_logger(__name__)
 
 
-class Analyzer():
+class Analyzer:
     def __init__(
         self,
-        cloud_logger: Run,
-        runtime,
-        task: Task ,
+        task: Task,
         metrics_prefix: str = "",
+        cloud_logger: Optional[Run] = None,
         global_step: Optional[int] = None,
         plot_prefix: Optional[str] = None,
         project_root_dir: Optional[Path] = None,
         distributed_state: Optional[PartialState] = None,
-        
     ):
         self.cloud_logger = cloud_logger
-        self.runtime = runtime
         self.metrics_prefix = metrics_prefix
         self.global_step = global_step
         self.plot_prefix = plot_prefix
         self.project_root_dir = project_root_dir
         self.distributed_state = distributed_state
         self._local_log_obj = {}
-        self.task = task 
+        self.task = task
 
     def get_analysis_id(self) -> str:
         return self.metrics_prefix
@@ -48,7 +45,6 @@ class Analyzer():
     def log(self, obj):
         self._local_log_obj.update(obj)
 
-
     def get_analysis_root_dir(self) -> Path:
         analysis_id = self.get_analysis_id()
         base_dir = self.project_root_dir / "analysis"
@@ -56,7 +52,6 @@ class Analyzer():
         if analysis_id is not None and len(analysis_id) > 0:
             analysis_root /= analysis_id
         return analysis_root
-
 
     def log_metrics(self, metrics):
         # Log the metrics to the console
@@ -83,7 +78,6 @@ class Analyzer():
                 prefix += analysis_id + "/"
             metrics = {prefix + k: v for k, v in metrics.items()}
             self.cloud_logger.summary.update(metrics)
-
 
     def flush_local_log(self):
         analysis_root = self.get_analysis_root_dir()
@@ -121,36 +115,38 @@ class Analyzer():
 
 
 class TaskPerformanceAnalyzer(Analyzer):
-    """ Analyzer that compares evaluations of the model on the task."""
+    """Analyzer that compares evaluations of the model on the task."""
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.result_dir = self.runtime._get_result_dir()
 
-        assert self.result_dir is not None, "Result directory is not set."
-
-        if not self.result_dir.exists():
-            raise ValueError(f"Result directory {self.result_dir} does not exist.")
+        # TODO: skip this mechanism for now, just take the results from invernecece
+        # as agrument of the analyse method
+        # self.result_dir = self.runtime._get_result_dir()
+        # results_dir = None
+        # assert self.result_dir is not None, "Result directory is not set."
+        # if not self.result_dir.exists():
+        #     raise ValueError(f"Result directory {self.result_dir} does not exist.")
 
     def get_analysis_id(self) -> str:
         return super().get_analysis_id() + self.result_dir.name
 
-    def analyze(self):
+    def analyze(self, results: Dataset):
         super().analyze()
+        # logger.info(f"Analyzing {self.result_dir}...")
 
-        logger.info(f"Analyzing {self.result_dir}...")
+        # # Load the mutated dataset
+        # output_dataset = Dataset.load_from_disk(str(self.result_dir))
 
-        # Load the mutated dataset
-        output_dataset = Dataset.load_from_disk(str(self.result_dir))
+        assert "_treetune__candidate_answers" in results.features, (
+            "The dataset does not contain the candidate answers."
+        )
 
-        assert (
-            "_treetune__candidate_answers" in output_dataset.features
-        ), "The dataset does not contain the candidate answers."
-
-        predictions = output_dataset["_treetune__candidate_answers"]
-        references = output_dataset
-
+        predictions = results["_treetune__candidate_answers"]
+        references = results
         metrics = self.task.evaluate_predictions(
             predictions=predictions, references=references
         )
+
         self.log_metrics(metrics)
         return metrics

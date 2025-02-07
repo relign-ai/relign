@@ -27,7 +27,9 @@ dependencies = [
     "evaluate",
     "base58",
     "pylatexenc",
+    "mpi4py"
 ]
+
 
 [build-system]
 requires = ["setuptools", "wheel"]

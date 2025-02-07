@@ -9,7 +9,7 @@ from relign.policies.actor_critic_policy import ActorCriticPolicy
 from relign.policies.base_critic import PretrainedModelValueHead
 from relign.algorithms.train_loop import TrainLoop
 from relign.algorithms.ppo.trainer import PPOTrainer
-from relign.episode_generators.envs.math_episode_generator import(
+from relign.episode_generators.envs.math_episode_generator import (
     MathEpisodeGenerator,
     MATHRewardFunction,
 )
@@ -21,7 +21,7 @@ from relign.inference.tree_inference.answer_extraction import IdentityAnswerExtr
 # For actor critic methods, we need a Distributed Runner
 from relign.runners.distributed_runner import DistributedRunner
 from relign.common.vllm_server import VLLMServer
-from relign.guidance.llms import OpenAIVLLM 
+from relign.guidance.llms import OpenAIVLLM
 from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor
 
 
@@ -66,13 +66,13 @@ def ppo_gsm(cfg, local_rank: int = -1):
     num_iterations = 100
     num_epoch_per_iterations = 3
     gradient_accumulation_steps = 1
-    n_episodes_per_iteration = 568 
+    n_episodes_per_iteration = 568
     n_rollouts_per_sample = 2
-    max_concurrent_programs = 128 
-    max_concurrent_generations = 128 
+    max_concurrent_programs = 128
+    max_concurrent_generations = 128
     guidance_llm_cls = OpenAIVLLM
     guidance_llm_kwargs = {
-        "api_key": 'EMPTY',
+        "api_key": "EMPTY",
         "max_calls_per_min": 1e6,
         "caching": False,
         "max_retries": 10,
@@ -105,7 +105,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
     """
 
     # ---- Chain of thought Strategy --- #
-    cot_inference_strategy_cls = COTInferenceStrategy 
+    cot_inference_strategy_cls = COTInferenceStrategy
     cot_inference_strategy_kwargs = {
         "samples": n_rollouts_per_sample,
         "question_field": "query",
@@ -151,7 +151,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
     # ----------- Trainer ---------------#
     ppo_trainer_class = PPOTrainer
     ppo_trainer_kwargs = {
-        "target_batch_size": 32, 
+        "target_batch_size": 32,
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "num_epochs_per_iteration": num_epoch_per_iterations,
         "dataloader_num_workers": 4,
@@ -159,6 +159,15 @@ def ppo_gsm(cfg, local_rank: int = -1):
     }
 
     # ----------- Algorithm--------------#
+    # Define an inference pipeline for the evalution process
+    from relign.inference.inference_pipeline import InferencePipeline
+
+    inference_pipeline_kwrags = {
+        "inference_pipeline_cls": ...,
+        "inference_pipeline_kwargs": ...,
+        "project_root_dir": ...,
+    }
+
     algorithm_cls = TrainLoop
     algorithm_kwargs = {
         "num_iterations": num_iterations,
