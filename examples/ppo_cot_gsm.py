@@ -9,7 +9,7 @@ from relign.policies.actor_critic_policy import ActorCriticPolicy
 from relign.policies.base_critic import PretrainedModelValueHead
 from relign.algorithms.train_loop import TrainLoop
 from relign.algorithms.ppo.trainer import PPOTrainer
-from relign.episode_generators.envs.math_episode_generator import (
+from relign.episode_generators.envs.math_episode_generator import(
     MathEpisodeGenerator,
     MATHRewardFunction,
 )
@@ -70,7 +70,6 @@ def ppo_gsm(cfg, local_rank: int = -1):
     n_rollouts_per_sample = 2
     max_concurrent_programs = 128 
     max_concurrent_generations = 128 
-
     guidance_llm_cls = OpenAIVLLM
     guidance_llm_kwargs = {
         "api_key": 'EMPTY',

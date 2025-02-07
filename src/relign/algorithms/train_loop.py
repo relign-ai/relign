@@ -10,6 +10,8 @@ from relign.policies.base_policy import BasePolicy
 from relign.episode_generators.base_episode_generator import BaseEpisodeGenerator
 from relign.common.dataset import EpisodeDataset
 from relign.utils.dataset import remove_null_columns
+from relign.eval.evaluator import Evaluator
+from relign.eval.analyzer import TaskPerformanceAnalyzer
 
 from relign.utils.logging import get_logger
 
@@ -40,7 +42,7 @@ class TrainLoop():
         :param verbose: The verbosity level.
         """
         self.seed = seed
-        self.project_root_dir = (project_root_dir,)
+        self.project_root_dir = project_root_dir
         self.policy = policy
         self.trainer = trainer
         self.episode_generator = episode_generator
@@ -50,6 +52,18 @@ class TrainLoop():
         self.evaluation_freq = evaluation_freq
         self.checkpoint_freq = checkpoint_freq
         self.distributed_state = distributed_state
+
+        #TODO: pass this instead
+        self.evaluator = Evaluator(
+            project_root_dir=project_root_dir,
+            analyzers=[
+                TaskPerformanceAnalyzer(
+                    project_root_dir=project_root_dir,
+                    cloud_logger=None,
+                    task=self.episode_generator.task,
+                )
+            ],
+        )
 
     def learn(self):
         """
@@ -69,11 +83,11 @@ class TrainLoop():
 
         # Evalutate
         if iteration % self.evaluation_freq == 0:
-            self._evaluate()
+            self._evaluate(iteration=iteration)
 
         # Checkpoint
         if iteration % self.checkpoint_freq == 0:
-            self._checkpoint()
+            self._checkpoint(iteration=iteration)
 
     def _generate_episodes(
         self,
@@ -113,8 +127,14 @@ class TrainLoop():
         episode_dataset = Dataset.load_from_disk(episode_path)
         return episode_dataset
 
-    def _evaluate(self):
-        ...
+    def _evaluate(self, iteration: int):
+        self.evaluator.evaluate(
+            iteration=iteration,
+            tokenizer=self.trainer.tokenizer,
+            seed=self.seed,
+            latest_policy_path=None,
+            from_checkpoints=False,
+        )
 
     def _checkpoint(self, iteration: int):
         logger.info("Checkpointing models...")
