@@ -55,6 +55,8 @@ class GSM8K(Task):
         else:
             # Pick the last number
             pred_answer = pred_answer[-1].strip()
+            logger.info(f"predicted answer: {pred_answer}")
+            
             return pred_answer
 
     def extract_gold_answer_from_text(self, text: str) -> str:

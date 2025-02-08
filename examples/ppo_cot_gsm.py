@@ -1,4 +1,5 @@
 import hydra
+from textwrap import dedent
 import argparse
 from pathlib import Path
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModel
@@ -23,7 +24,7 @@ from relign.runners.distributed_runner import DistributedRunner
 from relign.common.vllm_server import VLLMServer
 from relign.guidance.llms import OpenAIVLLM
 from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor
-from relign.models.base_model import PreTrainedModelForCasualLM
+from relign.models.base_model import PreTrainedModelForCasualLM, DIPreTrainedTokenizer 
 
 
 def ppo_gsm(cfg, local_rank: int = -1):
@@ -31,15 +32,17 @@ def ppo_gsm(cfg, local_rank: int = -1):
     ds_config = OmegaConf.to_container(ds_config, resolve=True)
     experiment_name = "ppo-cot-rho1b-gsm"
     experiment_dir = "experiment"
-
+    initial_model_name = 'realtreetune/rho-1b-sft-GSM8K'
     # --------- Tokenizer --------------- #
-    tokenizer = AutoTokenizer.from_pretrained("realtreetune/rho-1b-sft-GSM8K")
+    tokenizer = DIPreTrainedTokenizer.from_di(
+        hf_model_name=initial_model_name,
+    )
 
     # ---------Model Defenition ---------#
     def actor_model_fn():
         # Load the base actor model from pretrained weights.
         return PreTrainedModelForCasualLM.from_di(
-            hf_model_name="realtreetune/rho-1b-sft-GSM8K",
+            hf_model_name=initial_model_name,
             pretrained_args={
                 "use_flash_attention_2": True,
             },
@@ -47,14 +50,16 @@ def ppo_gsm(cfg, local_rank: int = -1):
 
     def critic_model_fn():
         # Wrap the critic with the value head model.
-        critic_backbone = AutoModel.from_pretrained("realtreetune/rho-1b-sft-GSM8K")
+        critic_backbone = AutoModel.from_pretrained(initial_model_name)
         return PretrainedModelValueHead(
             pretrained_model=critic_backbone
         )  # critics need to be wrapped in a pretrained value head
 
+    
     # --------- Task Definition ----------#
+    answer_prefix = '\n####'
     task = GSM8K(
-        answer_prefix=None,
+        answer_prefix=answer_prefix,
         load_dataset_dict=True,
         dataset_dict_path="data/gsm8k",
         remove_calculator_expressions=True,
@@ -75,6 +80,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         num_episodes_per_iteration / num_rollouts_per_sample
     )
     num_iterations = 1000
+    sampling_temperature = 0.6
     num_epoch_per_iterations = 2
     gradient_accumulation_steps = 1
     max_concurrent_programs = 32
@@ -96,7 +102,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         branch_factor_strategy=ListBranchFactor(branch_factors=branch_factors),
         program=program,
         program_kwargs={
-            "temperature": 0.8,
+            "temperature": sampling_temperature,
             "max_tokens": 1024,
             "top_p": 0.9,
             "stop": '"\n\n\nProblem:"',
@@ -106,12 +112,13 @@ def ppo_gsm(cfg, local_rank: int = -1):
         model_context_size=2047,
     )
 
-    question_template = """
+    question_template = dedent("""\
     [MATH_TASK] Problem:
     {query}
 
     Solution:
-    """
+    """)
+
 
     # ---- Chain of thought Strategy --- #
     cot_inference_strategy_cls = COTInferenceStrategy
@@ -136,18 +143,22 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "num_episodes_per_iteration": num_episodes_per_iteration,
         "dataset_num_samples_per_iteration": int(num_dataset_samples_per_iteration),
         "reasoning_step_delimiter": "",
-        "wait_until_memory_release": True,
-        "answer_prefix": "\n\n # Answer\n",
+        "answer_prefix": '\n\n# Answer\n',
+        "append_bos_to_query": True,
+        "append_eos_to_response": True,
+        "dataset_shuffle_on_each_iteration": True,
         "max_sequence_length": 2048,
         "max_question_length": 1512,
         "reward_function": reward_function,
+        "fill_missing_episodes": True,
         "inference_strategy_cls": cot_inference_strategy_cls,
         "inference_strategy_kwargs": cot_inference_strategy_kwargs,
         "vllm_server": vllm_server,
         "vllm_gpu_memory_utilization": "auto",
+        "wait_until_memory_release": True,
         "task": task,
         "save_generations_every_n_iteration": 1,
-        "initial_model_name_or_path": "realtreetune/rho-1b-sft-GSM8K",
+        "initial_model_name_or_path": initial_model_name,
         "question_template": question_template,
     }
 
@@ -158,6 +169,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "critic_model_fn": critic_model_fn,
         "actor_config": ds_config,
         "critic_config": ds_config,
+        "temperature": sampling_temperature,
     }
 
     # ----------- Trainer ---------------#

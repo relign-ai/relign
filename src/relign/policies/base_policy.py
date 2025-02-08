@@ -41,7 +41,7 @@ class BasePolicy:
         seed: int,
         project_root_dir: Path = None,
         gradient_checkpointing: bool = False,
-        temperature: float = 0.7,
+        temperature: float = 0.6,
         weight_decay: float = 0.0,
         learning_rate: float = 1e-6,
         lr_scheduler_type: Optional[Union[SchedulerType, str]] = None,

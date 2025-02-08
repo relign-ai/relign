@@ -75,12 +75,12 @@ class PPOHParams:
     """
 
     adap_kl_ctrl: bool = True
-    init_kl_coef: Optional[float] = 0.2
+    init_kl_coef: Optional[float] = 0.05
     kl_penalty: Literal["kl", "abs", "mse", "full", "control_variate"] = "kl"
     kl_penalty_loss_type: Optional[Literal["kl", "abs", "mse", "control_variate"]] = (
         "control_variate"
     )
-    kl_penalty_loss_clip_max: float = 10000
+    kl_penalty_loss_clip_max: float = 10 
     kl_penalty_loss_clip_min: float = 0
     force_disable_kl_penalty: bool = False
     target: Optional[float] = 6.0
@@ -100,7 +100,7 @@ class PPOHParams:
     whiten_advantages: bool = True
     grayen_advantages: bool = False
     whiten_rewards: bool = False
-    temperature: float = 1.0
+    temperature: float = 0.6
 
     def __post_init__(self):
         assert self.temperature > 0, "Temperature should be positive."
@@ -531,13 +531,13 @@ class PPOTrainer(BaseTrainer):
 
         #  Compute the rewards, advantages, and returns
         with torch.no_grad():
-            if self._is_kl_penalty_enabled(
-                self.trainer_hparams.kl_penalty_loss_type, self.policy.reference
-            ):
+            if not self.trainer_hparams.force_disable_kl_penalty:
                 shifted_ref_logprobs = inputs[COLUMN_REF_SHIFTED_LOGPS]
             else:
                 shifted_ref_logprobs = None
 
+            assert shifted_ref_logprobs != None
+             
             rewards, _, _ = self._compute_rewards(
                 scores, shifted_actor_logprobs, shifted_ref_logprobs, attention_mask
             )
@@ -659,7 +659,7 @@ class PPOTrainer(BaseTrainer):
         """
         if (
             shifted_ref_logprobs is not None
-            and self.ppo_params.kl_penalty_loss_type is None
+            and self.trainer_hparams.kl_penalty_loss_type is None
         ):
             kl = self._compute_kl_penalty(
                 shifted_actor_logprobs,

@@ -42,6 +42,8 @@ class EpisodeGeneratorWithRewardFunction(OnPolicyEpisodeGenerator, TreeEpisodeUt
         self.reward_function = reward_function 
         self.append_bos_to_query = append_bos_to_query
         self.append_eos_to_response = append_eos_to_response
+        logger.info(f"append bos to query={self.append_bos_to_query}")
+        logger.info(f"append eos to resp= {self.append_eos_to_response}")
         self.tokenization_check_query_reconst = tokenization_check_query_reconstruction
         self.tokenization_check_response_reconst = (
             tokenization_check_response_reconstruction
@@ -178,7 +180,7 @@ class EpisodeGeneratorWithRewardFunction(OnPolicyEpisodeGenerator, TreeEpisodeUt
         Determine whether to append BOS to the query based on the tokenizer
         """
         #TODO: support auto 
-        if self.append_bos_to_query == "auto":
+        if self.append_bos_to_query != "auto":
             return self.append_bos_to_query
 
         if "llama" in self.tokenizer.name_or_path.lower():
@@ -193,7 +195,7 @@ class EpisodeGeneratorWithRewardFunction(OnPolicyEpisodeGenerator, TreeEpisodeUt
         """
         Determine whether to append EOS to the response based on the tokenizer
         """
-        if self.append_eos_to_response == "auto":
+        if self.append_eos_to_response != "auto":
             return self.append_eos_to_response
 
         if "llama" in self.tokenizer.name_or_path.lower():

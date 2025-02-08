@@ -127,13 +127,13 @@ class PPODataCollator:
             batch["labels"].append(labels)
 
             if has_advantages:
-                advantages = instance["advantages"]
-                # Advantages are the same length as the reponse_token_ids
-                advantages = (
-                    [0.0] * len(query_token_ids) + advantages + [0.0] * num_pad_at_end
+                adv_padded = (
+                    [0.0] * len(query_token_ids)
+                    + instance["advantages"]
+                    + [0.0] * num_pad_at_end
                 )
-                assert len(labels) == len(advantages)
-                batch["advantages"].append(instance["advantages"])
+                assert len(labels) == len(adv_padded)
+                batch["advantages"].append(adv_padded)
 
             if has_scores:
                 assert isinstance(instance["scores"], float)

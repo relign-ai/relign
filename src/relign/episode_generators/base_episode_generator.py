@@ -170,7 +170,7 @@ class BaseEpisodeGenerator:
 
             query_token_ids = episode["query_token_ids"]
             response_token_ids = episode["response_token_ids"]
-            reward = episode["reward"]
+            reward = episode["scores"]
 
             query_tokens = [
                 (
@@ -229,25 +229,6 @@ class BaseEpisodeGenerator:
 
         if log_to_cloud and self.cloud_log is not None:
             self.cloud_log({f"episodes/iteration_{iteration_idx:04}": table})
-
-
-# class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
-#     """
-#     Allow for a policy path (model weights) or
-#     pass down the current policy to infer from
-#     during episode generation.
-#     """
-
-#     def __init__(
-#         self,
-#         policy_path: str,
-#         **kwargs,
-#     ):
-#         super().__init__(**kwargs)
-#         self.policy_path = policy_path
-
-#     def set_policy_path(self, policy_path: str) -> None:
-#         self.policy_path = policy_path
 
 
 class DebugEpisodeGenerator(BaseEpisodeGenerator):

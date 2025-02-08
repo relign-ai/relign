@@ -80,6 +80,11 @@ class TrainLoop:
                 iteration=iteration, current_policy_path=current_policy_path
             )
 
+            self.episode_generator.log_episodes(
+                episodes, iteration, num_examples=3,
+                seed=self.seed, log_to_cloud = True
+            )
+
             current_policy_path = self.trainer.step(episodes=episodes)
 
             # Save the tokenizer inside the policy checkpoint

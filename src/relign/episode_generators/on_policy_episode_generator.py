@@ -403,7 +403,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
                     merged = merged.shuffle(seed=self.seed + iteration)
                     merged = merged.select(range(self.num_episodes_per_iteration))
                     logs = {f"episodes_metric/fill_missing_episodes": num_repeats}
-                    self._cloud_log({**logs, "train/global_iteration": iteration})
+                    self.cloud_log({**logs, "train/global_iteration": iteration})
                 else:
                     raise ValueError(
                         f"Number of episodes generated ({len(merged)}) is less than "
@@ -472,6 +472,8 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
             # initialize the guidance_llm with the right server settings
             self.inference_strategy._init_guidance_llm(**guidance_llm_kwargs)
             results = self.inference_strategy.generate(dataset_shard)
+
+            logging.info(f"obtained {len(results)} from inference strategy")
 
             # Convert the results to a list before saving
             episodes = []
@@ -581,9 +583,9 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
             # Saving generations is disabled
             return
 
-        if iteration != 0 and iteration % self.save_generations_every_n_iteration != 0:
-            # We only save generations every n iterations and the first iteration
-            return
+        # if iteration != 0 and iteration % self.save_generations_every_n_iteration != 0:
+        #     # We only save generations every n iterations and the first iteration
+        #     return
 
         temp_dir = Path(tempfile.mkdtemp())
 

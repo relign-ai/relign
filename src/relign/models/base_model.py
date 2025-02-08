@@ -1,7 +1,7 @@
 import torch
 from typing import Optional, Dict, Any
 from pathlib import Path
-from transformers import PreTrainedModel, AutoModel, AutoModelForCausalLM, AutoConfig
+from transformers import PreTrainedModel, AutoModel, AutoModelForCausalLM, AutoConfig, AutoTokenizer, PreTrainedTokenizerFast 
 from relign.common.types import JsonDict
 
 from relign.utils.py_utils import is_flash_attention_available
@@ -142,3 +142,19 @@ class PreTrainedModelForCasualLM(PreTrainedModel):
         logger.info(f"Finished loading {hf_model_name} into flash_attn model")
 
         return model
+
+class DIPreTrainedTokenizer:
+    @classmethod
+    def from_di(
+        cls, hf_model_name: str, pretrained_args: Optional[JsonDict] = None, **kwargs
+    ) -> PreTrainedTokenizerFast:
+        if pretrained_args is None:
+            pretrained_args = {}
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            hf_model_name, use_fast=True, **pretrained_args
+        )
+        return tokenizer
+
+
+

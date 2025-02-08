@@ -241,12 +241,12 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
                 f"Mean reward for all {len(episodes)} out episodes at iteration: {iteration} is {mean_reward}"
             )
             # Log up to 15 random responses
-            if all_collected_responses:
-                sample_size = min(15, len(all_collected_responses))
-                random_sample = random.sample(all_collected_responses, sample_size)
-                logger.info(f"Random {sample_size} responses from this iteration:")
-                for idx, resp in enumerate(random_sample, 1):
-                    logger.info(f"{idx}. {resp}")
+            # if all_collected_responses:
+            #     sample_size = min(15, len(all_collected_responses))
+            #     random_sample = random.sample(all_collected_responses, sample_size)
+            #     logger.info(f"Random {sample_size} responses from this iteration:")
+            #     for idx, resp in enumerate(random_sample, 1):
+            #         logger.info(f"{idx}. {resp}")
 
         return episodes
 

@@ -145,16 +145,6 @@ class BaseTrainer(ABC):
     def _is_main_process(self):
         return self.distributed_state.is_main_process
 
-    def _is_kl_penalty_enabled(
-        self,
-        kl_penalty_loss_type: Optional[str] = None,
-        policy_reference: Optional[BasePolicy] = None,
-    ) -> bool:
-        """
-        Check if the KL penalty is enabled.
-        """
-        return not kl_penalty_loss_type is not None and policy_reference is not None
-
     def _compute_kl_penalty(
         self,
         logprob: Union[torch.FloatTensor, np.ndarray],
