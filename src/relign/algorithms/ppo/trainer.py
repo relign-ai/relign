@@ -240,7 +240,7 @@ class PPOTrainer(BaseTrainer):
 
         self.state.iteration += 1
         progress_bar.close()
-        checkpoint_path = str(self.project_root_dir / "policy" / "cache")
+        checkpoint_path = self.project_root_dir / "policy" / "cache"
         latest_policy_path = self.policy.save_latest_policy_path(checkpoint_path)
         logger.info(f"Latest policy path: {latest_policy_path}")
 
