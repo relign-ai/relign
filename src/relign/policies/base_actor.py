@@ -30,6 +30,7 @@ class ActorPolicy(DeepSpeedPolicy):
         self.actor_config = actor_config
         self.enable_reference = enable_reference
         self.reference = None
+        self._actor_engine = None
 
     def _init_actor_model(
         self,
@@ -37,7 +38,7 @@ class ActorPolicy(DeepSpeedPolicy):
         only_return_unwrapped_model: bool = False,
     ) -> Union[DeepSpeedEngine, PreTrainedModel]:
 
-        if hasattr(self, "_actor_engine"):
+        if self._actor_engine is not None:
             return self._actor_engine
 
         logger.info("Creating the actor deepspeed engine...")
@@ -114,7 +115,6 @@ class ActorPolicy(DeepSpeedPolicy):
         # Decide whether to skip if we already have a cached engine
         if (
             (not force_reload)
-            and hasattr(self, "_actor_engine")
             and self._actor_engine is not None
         ):
             return  # already loaded
@@ -311,8 +311,7 @@ class ActorPolicy(DeepSpeedPolicy):
                 self.actor = None
 
             # Also clear the cached actor engine if it exists.
-            if hasattr(self, "_actor_engine"):
-                self._actor_engine = None
+            self._actor_engine = None
 
     def cache_initial_actor_state(self) -> None:
         """
@@ -507,9 +506,9 @@ class ActorPolicy(DeepSpeedPolicy):
         # elif estimation_type == ...
         return kl
 
-    
+
     def get_last_checkpoint(self, return_resumable_only: bool = False):
-        checkpoints = list(self.checkpoints_dir.iterdir())
+        checkpoints = list(self.checkpoint_dir.iterdir())
         checkpoints = [
             checkpoint
             for checkpoint in checkpoints

@@ -6,6 +6,7 @@ logging = get_logger(__name__)
 
 class TestEval:
     def test_evaluation_pipeline(
+        self,
         tokenizer,
         evaluator,
         actor_critic_policy,
@@ -23,4 +24,4 @@ class TestEval:
 
         assert eval_results is not None
 
-    def test_evaluation_analyzer(): ...
+    def test_evaluation_analyzer(self): ...

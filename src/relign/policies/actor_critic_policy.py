@@ -101,6 +101,8 @@ class ActorCriticPolicy(ActorPolicy):
 
         self.critic_model_fn = critic_model_fn
         self.critic_config = critic_config
+        self.critic = None
+        self._critic_engine = None
 
     def _init_critic_model(
         self,
@@ -108,7 +110,7 @@ class ActorCriticPolicy(ActorPolicy):
         only_return_unwrapped_model: bool = False,
         hf_checkpoint_path: Optional[Path] = None,
     ) -> Union[DeepSpeedEngine, PreTrainedModel]:
-        if hasattr(self, "_critic_engine"):
+        if self._critic_engine is not None:
             return self._critic_engine
 
         logger.info("Creating the critic deepspeed engine...")
@@ -289,7 +291,6 @@ class ActorCriticPolicy(ActorPolicy):
         # Decide whether to skip if we already have a cached engine
         if (
             (not force_reload)
-            and hasattr(self, "_critic_engine")
             and self._critic_engine is not None
         ):
             return  # already loaded
@@ -309,7 +310,7 @@ class ActorCriticPolicy(ActorPolicy):
         Destroys the critic engine to free memory if engine caching is disabled.
         """
         if not self.cache_ds_engines:
-            if getattr(self, "critic", None) is not None:
+            if self.critic is not None:
                 logger.info("Destroying critic engine to free memory.")
                 self._destroy_ds_engine(self.critic)
                 # If the engine provides a shutdown/cleanup method, call it.
@@ -326,8 +327,7 @@ class ActorCriticPolicy(ActorPolicy):
                 self.critic = None
 
             # Also clear the cached critic engine if it exists.
-            if hasattr(self, "_critic_engine"):
-                self._critic_engine = None
+            self._critic_engine = None
 
     def destroy_ds_engines(self) -> None:
         """
@@ -355,8 +355,11 @@ class ActorCriticPolicy(ActorPolicy):
             project_root_dir = self.project_root_dir
         self._load_checkpoint_to_ds_engines(project_root_dir / "policy" / "cache")
 
-    def load_checkpoint(self, checkpoint: Union[Checkpoint, Path]) -> None:
-        super().load_checkpoint(checkpoint)
+    def load_checkpoint(self, checkpoint: Union[Checkpoint, Path, str]) -> None:
+        if isinstance(checkpoint, str):
+            checkpoint = Path(checkpoint)
+
+        # super().load_checkpoint(checkpoint) # TODO: ActorPolicy does not have load_checkpoint
         checkpoint_path = (
             checkpoint if isinstance(checkpoint, Path) else checkpoint.path
         )
@@ -399,7 +402,7 @@ class ActorCriticPolicy(ActorPolicy):
             )
             self.critic.save_checkpoint(str(checkpoint_path / "critic"))
 
-    def save_latest_policy_path(self) -> str:
+    def save_latest_policy_path(self) -> Path:
         # Save both the actor and critic engine and return the path of the actor for inference
         self._save_hf_pretrained(
             self.actor,

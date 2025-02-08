@@ -50,3 +50,6 @@ runner_test/
 *.arrow
 wandb/
 
+# Pixi
+.pixi/
+
