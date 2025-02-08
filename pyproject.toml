@@ -27,7 +27,8 @@ dependencies = [
     "evaluate",
     "base58",
     "pylatexenc",
-    "mpi4py"
+    "mpi4py",
+    "flash-attn",
 ]
 
 

@@ -48,14 +48,10 @@ class BasePolicy:
         adam_beta1: float = 0.9,
         adam_beta2: float = 0.999,
         adam_epsilon: float = 1e-8,
-        per_device_train_batch_size: int = 16,
-        gradient_accumulation_steps: int = 1,
         max_grad_norm: float = 1.0,
         fp16: bool = False,
         bf16: bool = False,
         bf16_full_eval: bool = False,
-        total_num_training_steps: int = 10,  # TODO: Get this from the trainer?
-        global_batch_size: int = 1,
         warmup_steps: int = 0,
     ):
         self.seed = seed
@@ -70,17 +66,11 @@ class BasePolicy:
         self.adam_beta1 = adam_beta1
         self.adam_beta2 = adam_beta2
         self.adam_epsilon = adam_epsilon
-        self.per_device_train_batch_size = per_device_train_batch_size
-        self.gradient_accumulation_steps = gradient_accumulation_steps
         self.max_grad_norm = max_grad_norm
         self.fp16 = fp16
         self.bf16 = bf16
         self.bf16_full_eval = bf16_full_eval
         self.warmup_steps = warmup_steps
-
-        # I have a feeling we should get these from the trainer somehow
-        self.total_num_training_steps = total_num_training_steps
-        self.global_batch_size = global_batch_size
 
     @abstractmethod
     def predict(self, episodes: EpisodeDataset):  # TODO Define response type
@@ -127,7 +117,8 @@ class BasePolicy:
 
     @abstractmethod
     def checkpoint(self):
-       NotImplementedError("checkpoint method is not implemented yet.") 
+        NotImplementedError("checkpoint method is not implemented yet.")
+
 
 class DeepSpeedPolicy(BasePolicy):
     """
@@ -270,18 +261,24 @@ class DeepSpeedPolicy(BasePolicy):
     ) -> None:
         config.fill_only(
             "train_micro_batch_size_per_gpu",
-            self.per_device_train_batch_size,
+            self.per_device_batch_size,
             "per_device_train_batch_size",
         )
+        logger.info(f"patched train micro batch size to {self.per_device_batch_size}")
         config.fill_only(
             "gradient_accumulation_steps",
             self.gradient_accumulation_steps,
             "gradient_accumulation_steps",
         )
+        logger.info(
+            f" patched gradient accumulation steps to {self.gradient_accumulation_steps}"
+        )
         config.fill_only(
             "train_batch_size", global_batch_size, "train_batch_size (calculated)"
         )
+        logger.info(f"patche train batch size to {global_batch_size}")
         config.fill_only("gradient_clipping", self.max_grad_norm, "max_grad_norm")
+        logger.info(f" patched gradient clipping to {self.max_grad_norm}")
 
     def _patch_ds_config_for_dtype(self, config: HfTrainerDeepSpeedConfig) -> None:
         assert not self.fp16, "FP16 is not supported for now"

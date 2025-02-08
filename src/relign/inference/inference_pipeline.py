@@ -37,16 +37,14 @@ class VLLMInferencePipeline(InferencePipeline):
         dataset_shuffle_before_portion: bool = False,
         dataset_num_shards: int = 1,
         dataset_shard_index: int = 0,
-        analyzers: Optional[List[JsonDict]] = None,
         debug_mode: bool = True,
         cloud_logger: Optional[Run] = None,
         use_cache: Optional[bool] = None,
         enable_cloud_logging_during_inference: bool = True,
         seed: int = 42,
         metrics_prefix: str = "",
-        api_base_url: Optional[str] = None,
-        model_name: Optional[str] = None,
-        prompt_library: Optional[JsonDict] = None,
+        api_base: Optional[str] = None,
+        model: Optional[str] = None,
         checkpoint_global_step: Optional[int] = None,
     ):
         """
@@ -97,8 +95,10 @@ class VLLMInferencePipeline(InferencePipeline):
         self.metrics_prefix = metrics_prefix
         self.inference_name = inference_name
         self.checkpoint_global_step = checkpoint_global_step
+        self.model = model
         self.inference_strategy_cls = inference_strategy_cls
         self.inference_strategy_kwrags = inference_strategy_kwargs
+        self.api_base = api_base
 
         if self.inference_name is not None:
             self.metrics_prefix = f"{self.inference_name}/{self.metrics_prefix}"
@@ -119,28 +119,29 @@ class VLLMInferencePipeline(InferencePipeline):
             f"Inference on {task.name} (split__shard__num_shards): {self.inference_job_id}"
         )
 
-        # if need_to_minimize_stored_files():
-        #     self._cached_results_dir = (
-        #         Path(tempfile.mkdtemp()) / "inference_results" / self.inference_job_id
-        #     )
-        #     self._cached_results_dir.mkdir(parents=True, exist_ok=True)
-
         inference_strategy_kwargs = {"result_dir": self.get_result_dir()}
         if enable_cloud_logging_during_inference:
             inference_strategy_kwargs["cloud_logger"] = self.cloud_logger
 
-        # logger.info(
-        #     f"Guidance LLM params: {inference_strategy._params.get('guidance_llm', {}).as_dict()}"
-        # )
-
+        # Point the llm_guidance to the right serveri
+        logger.info(f"Using inference strategy: {inference_strategy_kwargs}")
         self.inference_strategy = inference_strategy_cls(**inference_strategy_kwargs)
-        self.analyzers = analyzers
+
+        if self.api_base is not None:
+            self.inference_strategy.init_guidance_llm(
+                **{
+                    "api_base": self.api_base,
+                    "model": self.model,
+                }
+            )
 
     def get_result_dir(self) -> Path:
         if hasattr(self, "_cached_results_dir"):
             return self._cached_results_dir
 
-        result_dir = self.exp_root_dir / "inference_results" / self.inference_job_id
+        result_dir = (
+            self.exp_root_dir / "eval_inference_results" / self.inference_job_id
+        )
         result_dir.mkdir(parents=True, exist_ok=True)
         return result_dir
 
@@ -173,7 +174,6 @@ class VLLMInferencePipeline(InferencePipeline):
         )
 
         results = self.inference_strategy.generate(dataset)
-
         return results
 
     def save_results_to_cloud(self, results: Dataset):
@@ -190,7 +190,6 @@ class VLLMInferencePipeline(InferencePipeline):
         shutil.make_archive(
             str(inference_results_zip.with_suffix("")), "zip", output_dir
         )
-
         # Then, upload the zip file to the cloud.
         self.cloud_logger.save(str(inference_results_zip.absolute()), policy="now")
 

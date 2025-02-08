@@ -12,8 +12,8 @@ from relign.tasks import Task
 from relign.eval.analyzer import Analyzer
 from relign.common.vllm_server import VLLMServer
 from relign.utils.logging import get_logger
-from relign.utils.gpu import get_gpu_memory
 from relign.utils.py_utils import find_n_free_ports
+from relign.utils.gpu import get_gpu_memory, wait_for_memory_release
 
 
 logger = get_logger(__name__)
@@ -26,14 +26,15 @@ class Evaluator:
         inference_pipeline_cls: InferencePipeline,
         inference_pipeline_kwargs: Optional[Dict],
         vllm_server: VLLMServer,
+        wait_until_memory_release: bool,
         distributed_state: PartialState,
         project_root_dir: Path,
         task: Task,
         vllm_gpu_memory_utilization: Union[float, str] = "auto",
         force_rerun: bool = False,
         every_n_checkpoints: int = 1,  # TODO: do we still need this?
-        cloud_logger: Optional[Callable] = None,
         analyzers=Optional[List[Analyzer]],
+        cloud_logger: Optional[Callable] = None,
         seed: int = 69,
     ):
         """
@@ -53,6 +54,7 @@ class Evaluator:
         self.distributed_state = distributed_state
         self.vllm_server = vllm_server
         self.vllm_gpu_memory_utilization = vllm_gpu_memory_utilization
+        self.wait_until_memory_release = wait_until_memory_release
         self.tokenizer = tokenizer
         self.task = task
         self.seed = seed
@@ -72,7 +74,6 @@ class Evaluator:
         """
         Main evaluation loop. Evaluates the latest policy path.
         """
-
         # TODO: Do batch evaluations on all the checkpints
         if not from_checkpoints:
             model_cpt_path = latest_policy_path
@@ -81,6 +82,8 @@ class Evaluator:
                 "Evaluation from checkpoints is not yet implemented"
             )
 
+        latest_policy_path = self._prepare_ckpt(latest_policy_path)
+
         # eval_dir_path = Path(self.evaluation_dir / model_cpt)
         eval_dir = Path(self.project_root_dir / "evals")
         eval_dir.mkdir(exist_ok=True)
@@ -88,10 +91,12 @@ class Evaluator:
         inference_result_dir.mkdir(exist_ok=True)
 
         process_index = self.distributed_state.process_index
+        target_device_index = self._get_device_index()
+        gpu_mem_usage_before_mb = get_gpu_memory()[target_device_index]
 
         vllm_init_fn = self._get_vllm_init_fn(
             results_dir=inference_result_dir,
-            hf_ckpt_path_or_model=latest_policy_path,
+            hf_ckpt_path_or_model=str(latest_policy_path),
             process_index=process_index,
             seed=self.seed,
         )
@@ -101,11 +106,11 @@ class Evaluator:
 
         try:
             # instantiate the infernce pipeline, with the correct inference
-            infer_pipeline = InferencePipeline(
-                **self.inference_pipeline_kwrags,
+            infer_pipeline = self.inference_pipeline_cls(
+                **self.inference_pipeline_kwargs,
                 **server_kwargs,
-                tokenizer=tokenizer,
                 use_cache=True,
+                cloud_logger=self.cloud_logger,
             )
 
             # Run the inference pipeline
@@ -115,15 +120,22 @@ class Evaluator:
         finally:
             # Stop the server
             vllm_server.stop_server()
+            del vllm_server
+            release_memory()
+            self.vllm_cleanup(
+                target_gpu_index=target_device_index,
+                gpu_memory_usage_before_mb=gpu_mem_usage_before_mb,
+            )
+            release_memory()
 
         analysis_results = []
 
         # Run analysis on inference results
-        # if self.analyzers is not None:
-        #     for analyzer in self.analyzers:
-        #         analysis = analyzer.analyze(results)
-        #         analysis_results.append(analysis)
-        #         self._log_analysis_metrics(analysis)
+        if self.analyzers is not None:
+            for analyzer in self.analyzers:
+                analysis = analyzer.analyze(results)
+                analysis_results.append(analysis)
+                self._log_analysis_metrics(analysis)
 
         return analysis_results
 
@@ -182,30 +194,42 @@ class Evaluator:
 
         return _init
 
-    # TODO: dont need this for the current impelmentation
-    # def _prepare_for_vllm(self, ckpt_dir: Path):
-    #     """Prepare the checkpoint directory for evaluation."""
-    #     # Use current working directory to create temporary ckpt path
-    #     output_dir = Path.cwd() / f"tmp_ckpt__{ckpt_dir.name}"
-    #     if output_dir.exists():
-    #         shutil.rmtree(output_dir)
-    #     output_dir.mkdir(exist_ok=True, parents=True)
+    def _prepare_ckpt(self, latest_policy_path: Path) -> Path:
+        """
+        Make sure the tokenizer is included in the latest_policy_path.
 
-    #     # Check if it already has hf_pretrained directory
-    #     hf_pretrained_dir = ckpt_dir / "hf_pretrained"
-    #     if hf_pretrained_dir.exists() and hf_pretrained_dir.is_dir():
-    #         for file in hf_pretrained_dir.iterdir():
-    #             (output_dir / file.name).symlink_to(file.absolute())
+        This method checks if latest_policy_path is already the correct directory
+        containing tokenizer files. If not, it creates or uses a subdirectory
+        called 'hf_pretrained' inside latest_policy_path and saves the tokenizer there.
+        This ensures that downstream processes (like the vLLM engine) can correctly load
+        the GPT2TokenizerFast tokenizer.
+        """
+        # Check if latest_policy_path is already a 'hf_pretrained' directory.
+        if latest_policy_path.name == "hf_pretrained":
+            hf_pretrained_dir = latest_policy_path
+            logger.info(
+                f"latest_policy_path is already a 'hf_pretrained' directory: {hf_pretrained_dir}"
+            )
+        else:
+            hf_pretrained_dir = latest_policy_path / "hf_pretrained"
+            logger.info(f"Using subdirectory for tokenizer files: {hf_pretrained_dir}")
 
-    #         if not (output_dir / "config.json").exists():
-    #             config = AutoConfig.from_pretrained(self.model.gg_params["hf_model_name"])
-    #             config.save_pretrained(output_dir)
+        # Create the directory if it doesn't exist
+        hf_pretrained_dir.mkdir(exist_ok=True, parents=True)
 
-    #         hf_tokenizer_files = [f for f in output_dir.glob("tokenizer*")]
-    #         if len(hf_tokenizer_files) == 0:
-    #             self.tokenizer.save_pretrained(output_dir)
+        # Look for existing tokenizer files (like tokenizer.json, vocab files, etc.)
+        tokenizer_files = list(hf_pretrained_dir.glob("tokenizer*"))
+        if not tokenizer_files:
+            logger.info(
+                f"No tokenizer files found in {hf_pretrained_dir}. Saving tokenizer there."
+            )
+            self.tokenizer.save_pretrained(hf_pretrained_dir)
+        else:
+            logger.info(
+                f"Tokenizer files already present in {hf_pretrained_dir}: {[f.name for f in tokenizer_files]}"
+            )
 
-    #         return output_dir
+        return latest_policy_path
 
     def _set_vllm_ports(self, seed: Optional[int] = None):
         """
@@ -229,3 +253,21 @@ class Evaluator:
         logger.info(
             f"Rank {self.distributed_state.process_index} using vLLM port {self._vllm_port}"
         )
+
+    def vllm_cleanup(
+        self,
+        gpu_memory_usage_before_mb: int,
+        target_gpu_index: int,
+    ):
+        if self.wait_until_memory_release:
+            threshold_mb = gpu_memory_usage_before_mb * 1.1  # Allow for 10% tolerance
+            wait_for_memory_release(
+                target_gpu_index=target_gpu_index,
+                threshold_mb=threshold_mb,
+            )
+            logger.info("GPU memory usage is below threshold. Continuing.")
+
+    def _get_device_index(self) -> int:
+        """Returns a valid device index either from self.distributed_state.device.index or using torch.cuda.current_device()."""
+        device = self.distributed_state.device
+        return device.index if device.index is not None else torch.cuda.current_device()

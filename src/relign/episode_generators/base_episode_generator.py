@@ -12,23 +12,30 @@ import wandb
 from relign.common.dataset import EpisodeDataset
 from relign.utils import logging
 from relign.tokenization.base_tokenizer import Tokenizer
+
 logger = logging.get_logger(__name__)
 
 """
 Episodes can be either generated via the policy interacting with some environment or via sampling from the model itself. 
 """
 
+
 @dataclass
 class Episode:
     """
     A single episode.
     """
+
     query_token_ids: List[int]
     response_token_ids: List[int]
-    scores: float # Final scores of the episode 
-    process_rewards: Optional[List[float]] = None # Process rewards for each token in the response
-    advantages: Optional[List[float]] = None # Advantages for each token in the response
-    group: Optional[int] = None # GRPO for grouped advantages/rewards
+    scores: float  # Final scores of the episode
+    process_rewards: Optional[List[float]] = (
+        None  # Process rewards for each token in the response
+    )
+    advantages: Optional[List[float]] = (
+        None  # Advantages for each token in the response
+    )
+    group: Optional[int] = None  # GRPO for grouped advantages/rewards
 
     def __post_init__(self):
         assert len(self.query_token_ids) > 0
@@ -39,14 +46,15 @@ class Episode:
             assert len(self.advantages) == len(
                 self.response_token_ids
             ), "advantages have to be the same length as the response token ids"
-        
-        
+
         if self.process_rewards is not None:
             if len(self.process_rewards) != len(self.response_token_ids):
-                print(f"[DEBUG] Token count mismatch: process_rewards length = {len(self.process_rewards)}; response_token_ids length = {len(self.response_token_ids)}")
+                print(
+                    f"[DEBUG] Token count mismatch: process_rewards length = {len(self.process_rewards)}; response_token_ids length = {len(self.response_token_ids)}"
+                )
             assert len(self.process_rewards) == len(
                 self.response_token_ids
-            ), "process_rewards have to be the same length as the response token ids" 
+            ), "process_rewards have to be the same length as the response token ids"
 
 
 class EpisodeGeneratorStrategy(ABC):
@@ -54,7 +62,7 @@ class EpisodeGeneratorStrategy(ABC):
         raise NotImplementedError
 
 
-class BaseEpisodeGenerator():
+class BaseEpisodeGenerator:
     can_precompute_episodes: bool = False
     supports_distributed: bool = False
 
@@ -72,7 +80,7 @@ class BaseEpisodeGenerator():
         self.num_episodes_per_iteration = num_episodes_per_iteration
         self.tokenizer = tokenizer
         self.project_root_dir = project_root_dir
-        
+
         if project_root_dir is not None:
             self._init_episode_dir()
 
@@ -80,29 +88,30 @@ class BaseEpisodeGenerator():
         """
         Instantiate the working directory for the episodes checkpoints
         """
-        self.episodes_checkpoint_dir = (self.project_root_dir / "episodes")
+        self.episodes_checkpoint_dir = self.project_root_dir / "episodes"
         print("espiode generator root dir", self.episodes_checkpoint_dir)
         self.episodes_checkpoint_dir.mkdir(exist_ok=True, parents=True)
- 
+
     def get_episode_checkpoint_path(self, iteration: int) -> Path:
         """
-        Sets the checkpoint directory based on the iteration 
+        Sets the checkpoint directory based on the iteration
         """
         if self.episodes_checkpoint_dir is None:
             raise ValueError("episodes_checkpoint_dir is not set")
 
-        return (self.episodes_checkpoint_dir / f"episodes_{str(iteration).zfill(4)}.json")
-    
+        return self.episodes_checkpoint_dir / f"episodes_{str(iteration).zfill(4)}.json"
+
     def checkpoint_episodes(self, episodes: EpisodeDataset, iteration: int) -> Path:
         """
         Saves the episodes to disk
         """
-        assert isinstance(episodes, EpisodeDataset), f"episodes have to be of type EpisodeDataset, not {type(episodes)}"
+        assert isinstance(
+            episodes, EpisodeDataset
+        ), f"episodes have to be of type EpisodeDataset, not {type(episodes)}"
         checkpoint_path = self.get_episode_checkpoint_path(iteration)
-        episodes.save_to_disk(checkpoint_path) 
+        episodes.save_to_disk(checkpoint_path)
         return checkpoint_path
 
-    
     def is_main_process(self) -> bool:
         return self.distributed_state.is_main_process
 
@@ -151,7 +160,7 @@ class BaseEpisodeGenerator():
         num_console_logs = min(num_examples, len(episodes))
         num_wandb_logs = min(num_examples_for_wandb, len(episodes))
         indices = rng.sample(range(len(episodes)), num_wandb_logs)
-
+        #
         for idx in indices:
             episode = episodes[idx]
             if not isinstance(episode, dict):
@@ -243,15 +252,13 @@ class DebugEpisodeGenerator(BaseEpisodeGenerator):
     """
     Generate episodes from a json file for debugging purposes.
     """
+
     def __init__(self, file_path: str, **kwargs):
         super().__init__(**kwargs)
         self.debug_data = json.load(open(file_path, "r"))
 
     def generate(
-        self, 
-        num_episodes_per_iteration: int, 
-        iteration: int, 
-        return_path: bool = False
+        self, num_episodes_per_iteration: int, iteration: int, return_path: bool = False
     ) -> Union[EpisodeDataset, Path]:
         episodes = []
         all_queries = self.debug_data["query"]
@@ -278,7 +285,6 @@ class DebugEpisodeGenerator(BaseEpisodeGenerator):
             return path
 
         return episodes_dataset
-
 
 
 class EpisodeGeneratorInference(BaseEpisodeGenerator):

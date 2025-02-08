@@ -23,6 +23,7 @@ from relign.runners.distributed_runner import DistributedRunner
 from relign.common.vllm_server import VLLMServer
 from relign.guidance.llms import OpenAIVLLM
 from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor
+from relign.models.base_model import PreTrainedModelForCasualLM
 
 
 def ppo_gsm(cfg, local_rank: int = -1):
@@ -36,8 +37,13 @@ def ppo_gsm(cfg, local_rank: int = -1):
 
     # ---------Model Defenition ---------#
     def actor_model_fn():
-        ## load gp2 as actor
-        return AutoModelForCausalLM.from_pretrained("realtreetune/rho-1b-sft-GSM8K")
+        # Load the base actor model from pretrained weights.
+        return PreTrainedModelForCasualLM.from_di(
+            hf_model_name="realtreetune/rho-1b-sft-GSM8K",
+            pretrained_args={
+                "use_flash_attention_2": True,
+            },
+        )
 
     def critic_model_fn():
         # Wrap the critic with the value head model.
@@ -63,13 +69,16 @@ def ppo_gsm(cfg, local_rank: int = -1):
         timeout=1,
     )
 
-    num_iterations = 100
-    num_epoch_per_iterations = 3
+    num_episodes_per_iteration = 568
+    num_rollouts_per_sample = 2
+    num_dataset_samples_per_iteration = (
+        num_episodes_per_iteration / num_rollouts_per_sample
+    )
+    num_iterations = 1000
+    num_epoch_per_iterations = 4
     gradient_accumulation_steps = 1
-    n_episodes_per_iteration = 568
-    n_rollouts_per_sample = 2
-    max_concurrent_programs = 128
-    max_concurrent_generations = 128
+    max_concurrent_programs = 32
+    max_concurrent_generations = 32
     guidance_llm_cls = OpenAIVLLM
     guidance_llm_kwargs = {
         "api_key": "EMPTY",
@@ -107,7 +116,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
     # ---- Chain of thought Strategy --- #
     cot_inference_strategy_cls = COTInferenceStrategy
     cot_inference_strategy_kwargs = {
-        "samples": n_rollouts_per_sample,
+        "samples": num_rollouts_per_sample,
         "question_field": "query",
         "question_template": question_template,
         "max_concurrent_generations": max_concurrent_generations,
@@ -124,7 +133,8 @@ def ppo_gsm(cfg, local_rank: int = -1):
     episode_generator = MathEpisodeGenerator
     episode_generator_kwargs = {
         "tokenizer": tokenizer,
-        "num_episodes_per_iteration": n_episodes_per_iteration,
+        "num_episodes_per_iteration": num_episodes_per_iteration,
+        "dataset_num_samples_per_iteration": int(num_dataset_samples_per_iteration),
         "reasoning_step_delimiter": "",
         "wait_until_memory_release": True,
         "answer_prefix": "\n\n # Answer\n",
@@ -134,6 +144,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "inference_strategy_cls": cot_inference_strategy_cls,
         "inference_strategy_kwargs": cot_inference_strategy_kwargs,
         "vllm_server": vllm_server,
+        "vllm_gpu_memory_utilization": "auto",
         "task": task,
         "initial_model_name_or_path": "realtreetune/rho-1b-sft-GSM8K",
         "question_template": question_template,
@@ -151,30 +162,54 @@ def ppo_gsm(cfg, local_rank: int = -1):
     # ----------- Trainer ---------------#
     ppo_trainer_class = PPOTrainer
     ppo_trainer_kwargs = {
-        "target_batch_size": 32,
+        "target_batch_size": 8,
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "num_epochs_per_iteration": num_epoch_per_iterations,
-        "dataloader_num_workers": 4,
+        "dataloader_num_workers": 2,
         "dataloader_pin_memory": False,
     }
 
     # ----------- Algorithm--------------#
     # Define an inference pipeline for the evalution process
-    from relign.inference.inference_pipeline import InferencePipeline
+    from relign.inference.inference_pipeline import VLLMInferencePipeline
 
-    inference_pipeline_kwrags = {
-        "inference_pipeline_cls": ...,
-        "inference_pipeline_kwargs": ...,
-        "project_root_dir": ...,
+    inference_pipeline_kwargs = {
+        "inference_strategy_cls": cot_inference_strategy_cls,
+        "inference_strategy_kwargs": cot_inference_strategy_kwargs,
+        "task": task,
+        "dataset_split": "validation",
+    }
+
+    from relign.eval.evaluator import Evaluator
+    from relign.eval.analyzer import TaskPerformanceAnalyzer
+
+    evaluator_cls = Evaluator
+    evaluator_kwargs = {
+        "task": task,
+        "tokenizer": tokenizer,
+        "inference_pipeline_cls": VLLMInferencePipeline,
+        "inference_pipeline_kwargs": inference_pipeline_kwargs,
+        "vllm_server": vllm_server,
+        "vllm_gpu_memory_utilization": "auto",
+        "wait_until_memory_release": True,
+        "force_rerun": False,
+        "every_n_checkpoints": 1,
+        "analyzers": [
+            TaskPerformanceAnalyzer(
+                task=task,
+                metrics_prefix="task_performance",
+            )
+        ],
     }
 
     algorithm_cls = TrainLoop
     algorithm_kwargs = {
         "num_iterations": num_iterations,
-        "num_episodes_per_iteration": n_episodes_per_iteration,
         "verbose": 1,
-        "evaluation_freq": 10,
+        "evaluation_freq": 1,
         "checkpoint_freq": 10,
+        "evaluator_cls": evaluator_cls,
+        "evaluator_kwargs": evaluator_kwargs,
     }
 
     # The main runner object

@@ -339,9 +339,6 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
             seed=seed,
         )
 
-        for result in infer_results:
-            logger.info(f"INFER RESUTLS {result}")
-
         metrics["timing/episode_generation/inference"] = time.time() - t0
         logger.info(f"Process {process_index} finished inference.")
 
@@ -350,7 +347,6 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         episodes = self._generate_episodes(infer_results, iteration)
         episodes_lst = [self._convert_to_dict(e) for e in episodes]
 
-        print("episodes_lst", episodes_lst)
         episodes_ds_shard = Dataset.from_list(episodes_lst)
         episodes_ds_shard.save_to_disk(
             temp_dir / f"episodes" / f"shard_{process_index:02d}"
@@ -526,7 +522,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
 
             remaining_mem_mb = (
                 total_mem_mb - allocated_mem_mb
-            ) * 0.9  # Allow for 10% tolerance
+            ) * 0.8  # Allow for 10% tolerance
             vllm_gpu_memory_utilization = round(remaining_mem_mb / total_mem_mb, 2)
 
             logger.info(
@@ -575,6 +571,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
                 target_gpu_index=target_gpu_index,
                 threshold_mb=threshold_mb,
             )
+            logger.info("GPU memory usage is below threshold. Continuing.")
 
     def _save_generations_to_cloud(self, generations_dir: Path, iteration: int):
         if self.cloud_logger is None or not self.is_main_process():

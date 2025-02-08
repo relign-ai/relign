@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from accelerate import Accelerator, PartialState
-from accelerate.utils import GradientAccumulationPlugin 
+from accelerate.utils import GradientAccumulationPlugin
 
 import torch
 import torch.nn.functional as F
@@ -17,7 +17,6 @@ from relign.policies.base_policy import BasePolicy
 from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
-
 
 
 class TrainerState:
@@ -49,6 +48,12 @@ class TrainerState:
 
     def __repr__(self):
         return f"TrainerState(global_step={self.global_step}, epoch={self.epoch}, iteration={self.iteration})"
+
+
+class BatchArgs:
+    """
+    A class to hold the batch arguments.
+    """
 
 
 class BaseTrainer(ABC):
@@ -255,13 +260,11 @@ class BaseTrainer(ABC):
             // self.global_batch_size
         )
         logger.info(f"Per device batch size: {self.per_device_batch_size}")
-        logger.info(
-            f"Gradient accumulation steps: {self.gradient_accumulation_steps}"
-        )
+        logger.info(f"Gradient accumulation steps: {self.gradient_accumulation_steps}")
         logger.info(f"Num of total processes: {self.distributed_state.num_processes}")
         logger.info(
             f"Global batch size (w. parallel, distributed & accumulation): {self.global_batch_size}"
         )
         logger.info(
             f"Total number of training steps (Gradient Updates): {self.total_num_training_steps}"
-        ) 
+        )

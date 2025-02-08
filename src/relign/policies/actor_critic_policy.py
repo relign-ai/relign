@@ -168,6 +168,13 @@ class ActorCriticPolicy(ActorPolicy):
         self._patch_ds_config_for_dtype(ds_config)
         self._patch_ds_config_for_bucket_size(ds_config, critic_model.config)
 
+        import json
+
+        logger.info(
+            "DS config after batch patching:\n%s",
+            json.dumps(ds_config.config, indent=2),
+        )
+
         engine = self._init_deepspeed_engine_for_training(
             critic_model,
             deepspeed_config=ds_config.config,
@@ -277,6 +284,10 @@ class ActorCriticPolicy(ActorPolicy):
 
     def init_critic_engine_if_needed(
         self,
+        global_batch_size: int,
+        per_device_batch_size: int,
+        gradient_accumulation_steps: int,
+        total_num_training_steps: int,
         critic_model_fn: Optional[Callable[[], PretrainedModelValueHead]] = None,
         force_reload: bool = False,
     ) -> None:
@@ -285,7 +296,10 @@ class ActorCriticPolicy(ActorPolicy):
         If 'force_reload' is True, or if no engine is cached, re-initialize.
         """
         logger.info("Initializing critic DeepSpeed engine...")
-
+        self.global_batch_isze = global_batch_size
+        self.per_device_batch_size = per_device_batch_size
+        self.gradient_accumulation_steps = gradient_accumulation_steps
+        self.total_num_training_steps = total_num_training_steps
         # Decide whether to skip if we already have a cached engine
         if (
             (not force_reload)
@@ -403,11 +417,11 @@ class ActorCriticPolicy(ActorPolicy):
         # Save both the actor and critic engine and return the path of the actor for inference
         self._save_hf_pretrained(
             self.actor,
-            self.project_root_dir / "policy" / "cache" / "critic" / "hf_pretrained",
+            self.project_root_dir / "policy" / "cache" / "actor" / "hf_pretrained",
         )
         self._save_hf_pretrained(
             self.critic,
-            self.project_root_dir / "policy" / "cache" / "actor" / "hf_pretrained",
+            self.project_root_dir / "policy" / "cache" / "critic" / "hf_pretrained",
         )
 
         return Path(

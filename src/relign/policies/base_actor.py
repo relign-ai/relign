@@ -36,7 +36,6 @@ class ActorPolicy(DeepSpeedPolicy):
         actor_model_fn: Callable[[], PreTrainedModel],
         only_return_unwrapped_model: bool = False,
     ) -> Union[DeepSpeedEngine, PreTrainedModel]:
-
         if hasattr(self, "_actor_engine"):
             return self._actor_engine
 
@@ -84,8 +83,12 @@ class ActorPolicy(DeepSpeedPolicy):
         self._patch_ds_config_for_batch_size(ds_config, self.global_batch_size)
         self._patch_ds_config_for_dtype(ds_config)
         self._patch_ds_config_for_bucket_size(ds_config, actor_model.config)
+        import json
 
-        logger.info("USED OPTIMZEER {optimizer}")
+        logger.info(
+            "DS config after batch patching:\n%s",
+            json.dumps(ds_config.config, indent=2),
+        )
 
         engine = self._init_deepspeed_engine_for_training(
             actor_model,
@@ -102,6 +105,10 @@ class ActorPolicy(DeepSpeedPolicy):
 
     def init_actor_engine_if_needed(
         self,
+        global_batch_size: int,
+        per_device_batch_size: int,
+        gradient_accumulation_steps: int,
+        total_num_training_steps: int,
         actor_model_fn: Optional[Callable[[], PreTrainedModel]] = None,
         force_reload: bool = False,
     ) -> None:
@@ -110,6 +117,11 @@ class ActorPolicy(DeepSpeedPolicy):
         If 'force_reload' is True, or if no engine is cached, re-initialize.
         """
         logger.info("Initializing actor DeepSpeed engine...")
+        # Set these from the trainer to the policy before engine start
+        self.global_batch_size = global_batch_size
+        self.per_device_batch_size = per_device_batch_size
+        self.gradient_accumulation_steps = gradient_accumulation_steps
+        self.total_num_training_steps = total_num_training_steps
 
         # Decide whether to skip if we already have a cached engine
         if (
@@ -507,7 +519,6 @@ class ActorPolicy(DeepSpeedPolicy):
         # elif estimation_type == ...
         return kl
 
-    
     def get_last_checkpoint(self, return_resumable_only: bool = False):
         checkpoints = list(self.checkpoints_dir.iterdir())
         checkpoints = [
@@ -532,7 +543,6 @@ class ActorPolicy(DeepSpeedPolicy):
 
         grad_acc_kwargs = {"num_steps": self.args.gradient_accumulation_steps}
         # grad_acc_kwargs["sync_with_dataloader"] = False
-
 
     def _create_accelerator_and_postprocess(self):
         grad_acc_kwargs = {"num_steps": self.args.gradient_accumulation_steps}

@@ -1,4 +1,5 @@
 from typing import Dict, Tuple, Union, Optional, Literal
+from pathlib import Path
 from dataclasses import dataclass
 import torch
 from torch.utils.data import Dataset
@@ -20,6 +21,7 @@ from relign.algorithms.ppo.data_collator import (
 )
 
 from relign.utils.logging import get_logger
+
 logger = get_logger(__name__)
 
 
@@ -71,6 +73,7 @@ class PPOHParams:
         temperature (float):
             The temperature used for sampling.
     """
+
     adap_kl_ctrl: bool = True
     init_kl_coef: Optional[float] = 0.2
     kl_penalty: Literal["kl", "abs", "mse", "full", "control_variate"] = "kl"
@@ -111,6 +114,7 @@ class PPOTrainer(BaseTrainer):
     PPO Trainer.
     Implementation of the PPO update rule.
     """
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # TODO: make this initialization more robust ( ideally we get it from a config file)
@@ -119,19 +123,31 @@ class PPOTrainer(BaseTrainer):
     def set_cloud_logger(self, cloud_log):
         self.cloud_log = cloud_log
 
-    def step(self, episodes: EpisodeDataset) -> None:
+    def step(self, episodes: EpisodeDataset) -> Path:
         """
         Performs a single update step using the dataset rollout under the current policy.
         Each update step can rum multiple epochs of optimization.
         """
-        self.policy.init_actor_engine_if_needed()
-        self.policy.init_critic_engine_if_needed()
+
+        # TODO: Make this one function in the policy
+        self.policy.init_actor_engine_if_needed(
+            global_batch_size=self.global_batch_size,
+            per_device_batch_size=self.per_device_batch_size,
+            gradient_accumulation_steps=self.gradient_accumulation_steps,
+            total_num_training_steps=self.total_num_training_steps,
+        )
+
+        self.policy.init_critic_engine_if_needed(
+            global_batch_size=self.global_batch_size,
+            per_device_batch_size=self.per_device_batch_size,
+            gradient_accumulation_steps=self.gradient_accumulation_steps,
+            total_num_training_steps=self.total_num_training_steps,
+        )
 
         if not self.policy.cache_ds_engines:
             # engines are not cached, need to laod the latest weights from checkpoin path
             logger.info(f"Loading latest policy from latest policy path")
             self.policy.load_latest_policy_path()
-
 
         # change to appropriate input structure
         episodes = self._hydrate_episodes(episodes)
@@ -169,6 +185,13 @@ class PPOTrainer(BaseTrainer):
         )
         progress_bar.update(self.state.global_step)
 
+        logger.info(f"Per device batch size: {self.per_device_batch_size}")
+        logger.info(f"Dataloder num workers: {self.dataloader_num_workers}")
+        logger.info(f"total_num_optimization_steps: {self.total_num_training_steps}")
+        logger.info(
+            f"num_optimization_steps_in_iteration:{num_optimization_steps_in_iteration}"
+        )
+
         # Set everything in train mode
         self.policy.actor.train()
         self.policy.critic.train()
@@ -188,7 +211,6 @@ class PPOTrainer(BaseTrainer):
         dist.barrier()
         for epoch in range(self.num_epochs_per_iteration):
             for step, batch in enumerate(dataloader_iter):
-
                 is_grad_acc_boundary = (
                     self.policy.actor.is_gradient_accumulation_boundary()
                 )
@@ -209,6 +231,9 @@ class PPOTrainer(BaseTrainer):
                         )
                         global_step_last_logged = self.state.global_step
 
+            dataloader_iter = iter(dataloader)
+        dist.barrier()
+
         self.state.iteration += 1
         progress_bar.close()
         latest_policy_path = self.policy.save_latest_policy_path()
@@ -218,12 +243,13 @@ class PPOTrainer(BaseTrainer):
         self.policy.destroy_ds_engines()
         release_memory()
         import gc
+
         gc.collect()
         torch.cuda.empty_cache()
 
         # return latest policy path
         return latest_policy_path
-        
+
     def _hydrate_episodes(self, episodes: Dataset) -> Dataset:
         """
         Takes the collated dataset and hydrates it with the
@@ -386,7 +412,6 @@ class PPOTrainer(BaseTrainer):
         self,
         inputs: Dict[str, torch.Tensor],
     ) -> Dict[str, Union[float, torch.Tensor]]:
-
         inputs = {k: v.to(self.policy.actor.device) for k, v in inputs.items()}
 
         # Turn this into a dataclass
@@ -653,7 +678,7 @@ class PPOTrainer(BaseTrainer):
         dist.barrier()
 
         def get_initial_value(
-            val: Union[float, torch.Tensor]
+            val: Union[float, torch.Tensor],
         ) -> Union[float, torch.Tensor]:
             if isinstance(val, torch.Tensor):
                 return torch.tensor(0.0, dtype=val.dtype, device=val.device)
