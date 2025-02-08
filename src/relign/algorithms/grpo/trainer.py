@@ -12,19 +12,20 @@ from tqdm import tqdm
 
 from relign.common.deepspeed_utils import prepare_data_loader_for_inference
 from relign.common.dataset import EpisodeDataset
-from relign.algorithms.base_trainer import BaseTrainer 
-from relign.utils.trainer import prepare_data_loader_for_training 
+from relign.algorithms.base_trainer import BaseTrainer
+from relign.utils.trainer import prepare_data_loader_for_training
 
 from relign.algorithms.grpo.data_collator import (
-    GRPODataCollator, 
+    GRPODataCollator,
     GroupedBatchSampler,
     COLUMN_ACTOR_SHIFTED_LOGPS,
-    COLUMN_REF_SHIFTED_LOGPS
+    COLUMN_REF_SHIFTED_LOGPS,
 )
 
 from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
 
 @dataclass
 class GRPOParams:
@@ -74,6 +75,7 @@ class GRPOParams:
         temperature (float):
             The temperature used for sampling.
     """
+
     adap_kl_ctrl: bool = True
     init_kl_coef: Optional[float] = 0.2
     kl_penalty: Literal["kl", "abs", "mse", "full", "control_variate"] = "kl"
@@ -114,12 +116,9 @@ class GRPOTrainer(BaseTrainer):
     PPO Trainer.
     Impelmentation of the PPO update rule.
     """
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # Keep a snapshot of the actor's initial state
-        self.policy.init_actor_engine_if_needed()
-        self.policy.cache_initial_actor_state()
-        self.policy.destroy_actor_engine_if_not_cached()
         self.grpo_params = GRPOParams(**kwargs.get("grpo_params", {}))
 
     def step(self, episodes: EpisodeDataset) -> None:
@@ -134,18 +133,18 @@ class GRPOTrainer(BaseTrainer):
         dataloader = DataLoader(
             episodes,
             batch_sampler=GroupedBatchSampler(
-                episodes, 
-                group_column='group',
+                episodes,
+                group_column="group",
                 groups_per_step=1,
-            ), 
+            ),
             collate_fn=GRPODataCollator(),
             num_workers=self.dataloader_num_workers,
-            pin_memory=self.dataloader_pin_memory
+            pin_memory=self.dataloader_pin_memory,
         )
 
         # dataloader = prepare_data_loader_for_training(
-        #     episodes, 
-        #     per_device_batch_size=self.per_device_batch_size, 
+        #     episodes,
+        #     per_device_batch_size=self.per_device_batch_size,
         #     seed=self.seed,
         #     drop_last=False,
         #     data_loader_kwargs={
@@ -181,9 +180,9 @@ class GRPOTrainer(BaseTrainer):
         self.policy.actor.train()
 
         for epoch in tqdm(
-            range(self.num_epochs_per_iteration), 
-            desc="Epoch", 
-            disable=not self._is_main_process()
+            range(self.num_epochs_per_iteration),
+            desc="Epoch",
+            disable=not self._is_main_process(),
         ):
             for _, batch in enumerate(dataloader_iter):
                 is_grad_acc_boundary = (
@@ -208,10 +207,8 @@ class GRPOTrainer(BaseTrainer):
                         global_step_last_logged = self.state.global_step
 
     def _hydrate_log_probs(
-        self, 
-        episodes: Dataset, 
-        column_name: str = COLUMN_ACTOR_SHIFTED_LOGPS
-    )-> Dataset:
+        self, episodes: Dataset, column_name: str = COLUMN_ACTOR_SHIFTED_LOGPS
+    ) -> Dataset:
         """
         Compute logprobs under the current (actor) policy and add them to the dataset.
         """
@@ -233,16 +230,13 @@ class GRPOTrainer(BaseTrainer):
 
         list_of_log_probs = []
         for inputs in tqdm(
-            data_loader, 
-            desc="Computing log probs", 
-            disable=not self._is_main_process()
+            data_loader, desc="Computing log probs", disable=not self._is_main_process()
         ):
             with torch.no_grad():
-                assert torch.all(inputs["attention_mask"][:, 0] == 1), \
-                    "Expected first token to be unmasked (attention_mask=1)."
-                assert (
-                    inputs["input_ids"].shape[0] == self.per_device_batch_size
-                ), (
+                assert torch.all(
+                    inputs["attention_mask"][:, 0] == 1
+                ), "Expected first token to be unmasked (attention_mask=1)."
+                assert inputs["input_ids"].shape[0] == self.per_device_batch_size, (
                     f"We expect on all processes to have the same batch size of "
                     f"{self.per_device_batch_size}."
                 )
@@ -252,7 +246,7 @@ class GRPOTrainer(BaseTrainer):
 
                 seq_lengths = inputs["attention_mask"].sum(dim=1).detach().clone()
                 seq_lengths = seq_lengths.unsqueeze(1)  # Shape: (batch_size,
-                
+
                 # Forward pass on actor to get log probabilities for each token
                 outputs = self.policy.forward_actor(
                     input_ids=inputs["input_ids"],
@@ -266,7 +260,9 @@ class GRPOTrainer(BaseTrainer):
                 # Check that seq_lengths is indeed on CUDA
                 seq_lengths = seq_lengths.to(self.policy.actor.device)
                 seq_lengths = gather(seq_lengths).cpu()
-                logps = pad_across_processes(logps, dim=1, pad_index=0.0, pad_first=False)
+                logps = pad_across_processes(
+                    logps, dim=1, pad_index=0.0, pad_first=False
+                )
                 logps = gather(logps).cpu()
 
                 assert (
@@ -277,9 +273,9 @@ class GRPOTrainer(BaseTrainer):
                 # Convert 2D tensors to a list of lists
                 logps_seq_lengths = seq_lengths - 1
                 for i, seq_len in enumerate(logps_seq_lengths.squeeze().tolist()):
-                    assert seq_len <= logps.shape[1], (
-                        f"seq_len={seq_len} is out of bounds for logps dim={logps.shape[1]}"
-                    )
+                    assert (
+                        seq_len <= logps.shape[1]
+                    ), f"seq_len={seq_len} is out of bounds for logps dim={logps.shape[1]}"
                     list_of_log_probs.append(logps[i, :seq_len].tolist())
 
         # Remove any extra log probs that were added due to global padding
@@ -289,14 +285,12 @@ class GRPOTrainer(BaseTrainer):
         with self.distributed_state.main_process_first():
             episodes = episodes.add_column(name=column_name, column=list_of_log_probs)
 
-        return episodes 
+        return episodes
 
     def _hydrate_reference_log_probs(
-        self, 
-        episodes: Dataset, 
-        column_name: str = COLUMN_REF_SHIFTED_LOGPS 
+        self, episodes: Dataset, column_name: str = COLUMN_REF_SHIFTED_LOGPS
     ) -> Dataset:
-        logger.info('Computing refrence model logprobs')
+        logger.info("Computing refrence model logprobs")
 
         self.policy.init_reference_engine_if_needed()
 
@@ -310,29 +304,28 @@ class GRPOTrainer(BaseTrainer):
                 "pin_memory": self.dataloader_pin_memory,
             },
         )
-        
-        self.policy.reference.eval()# put the referenc emodel in non-training mode
+
+        self.policy.reference.eval()  # put the referenc emodel in non-training mode
         dist.barrier()
 
         ref_log_probs_list = []
         for inputs in tqdm(
-            data_loader, 
-            desc="Computing reference log probs", 
-            disable=not self._is_main_process()  
+            data_loader,
+            desc="Computing reference log probs",
+            disable=not self._is_main_process(),
         ):
             with torch.no_grad():
-                     # Asume every sequence is padded from the right
+                # Asume every sequence is padded from the right
                 # noinspection DuplicatedCode
                 assert torch.all(inputs["attention_mask"][:, 0] == 1)
-                assert (
-                    inputs["input_ids"].shape[0]
-                    == self.per_device_batch_size
-                ), (
+                assert inputs["input_ids"].shape[0] == self.per_device_batch_size, (
                     f"We expect on all processes to have the same batch size of "
                     f"{self.per_device_batch_size}."
                 )
 
-                inputs = {k: v.to(self.policy.reference.device) for k, v in inputs.items()}
+                inputs = {
+                    k: v.to(self.policy.reference.device) for k, v in inputs.items()
+                }
 
                 # Compute the sequence lengths as we need to extract
                 # the log probs of the non-padded tokens
@@ -367,10 +360,12 @@ class GRPOTrainer(BaseTrainer):
                     assert seq_len <= logps.shape[1]
                     ref_log_probs_list.append(logps[i, :seq_len].tolist())
 
-        ref_log_probs_list = ref_log_probs_list[: len(episodes)] # remove any extra log probs that were added due to global paddingS
+        ref_log_probs_list = ref_log_probs_list[
+            : len(episodes)
+        ]  # remove any extra log probs that were added due to global paddingS
 
         with self.distributed_state.main_process_first():
-                episodes = episodes.add_column(name=column_name, column=ref_log_probs_list)
+            episodes = episodes.add_column(name=column_name, column=ref_log_probs_list)
 
         return episodes
 
@@ -386,7 +381,6 @@ class GRPOTrainer(BaseTrainer):
         self,
         inputs: Dict[str, torch.Tensor],
     ) -> Dict[str, Union[float, torch.Tensor]]:
-    
         # noinspection DuplicatedCode
         inputs = {k: v.to(self.policy.actor.device) for k, v in inputs.items()}
 
@@ -395,21 +389,25 @@ class GRPOTrainer(BaseTrainer):
         attention_mask = inputs["attention_mask"]  # Shape: (batch_size, max_seq_len)
         labels = inputs["labels"]  # Shape: (batch_size, max_seq_len)
         scores = inputs["scores"]  # Shape: (batch_size,)
-        groups = inputs["group"] # Shape: (batch_size,) 
+        groups = inputs["group"]  # Shape: (batch_size,)
 
-        shifted_labels = labels[ ..., 1: ].contiguous()  # Shape: (batch_size, max_seq_len-1)
+        shifted_labels = labels[
+            ..., 1:
+        ].contiguous()  # Shape: (batch_size, max_seq_len-1)
         shifted_labels_mask = (shifted_labels != -100).to(
             attention_mask.dtype
         )  # Shape: (batch_size, max_seq_len-1)
 
         # Note that this is the log probability of the actor model
         # in the beginning of this iteration (aka the old log probs)
-        shifted_actor_logprobs = inputs[COLUMN_ACTOR_SHIFTED_LOGPS]  # Shape: (batch_size, max_seq_len-1)
+        shifted_actor_logprobs = inputs[
+            COLUMN_ACTOR_SHIFTED_LOGPS
+        ]  # Shape: (batch_size, max_seq_len-1)
         assert shifted_actor_logprobs.shape == shifted_labels_mask.shape
 
         #  Compute the rewards, advantages, and returns
         with torch.no_grad():
-            #TODO: add KL Penalty Here
+            # TODO: add KL Penalty Here
             if self._is_kl_penalty_enabled():
                 shifted_ref_logprobs = inputs[COLUMN_REF_SHIFTED_LOGPS]
             else:
@@ -417,7 +415,7 @@ class GRPOTrainer(BaseTrainer):
 
             # Shape of rewards: (batch_size, max_seq_len-1)
             mean_rewards, std_rewards, unique_ids, per_token_kl = self._compute_rewards(
-                scores=scores, 
+                scores=scores,
                 groups=groups,
                 shifted_actor_logprobs=shifted_actor_logprobs,
                 shifted_ref_logprobs=shifted_ref_logprobs,
@@ -431,18 +429,17 @@ class GRPOTrainer(BaseTrainer):
                     unique_ids=unique_ids,
                     mean_rewards=mean_rewards,
                     std_rewards=std_rewards,
-                    per_token_kl=per_token_kl, 
+                    per_token_kl=per_token_kl,
                     shifted_actor_log_probs=shifted_actor_logprobs,
                     shifted_labels_mask=shifted_labels_mask,
-                    attention_mask=attention_mask
+                    attention_mask=attention_mask,
                 )
             else:
                 precomputed_advantages = inputs["advantages"]
-                advantages = precomputed_advantages[:, 1:] 
+                advantages = precomputed_advantages[:, 1:]
 
             assert advantages.shape == shifted_actor_logprobs.shape
             # assert rewards.shape == shifted_actor_logprobs.shape
-
 
         model_inputs = {
             "input_ids": input_ids,
@@ -461,7 +458,7 @@ class GRPOTrainer(BaseTrainer):
 
         self.policy.actor.backward(actor_loss)
         self.policy.actor.step()
-        
+
         # Get rid of actor's activations to free up memory
         actor_loss = actor_loss.detach().clone()
         release_memory()
@@ -497,14 +494,14 @@ class GRPOTrainer(BaseTrainer):
             and self.grpo_params.kl_penalty_loss_type is None
         ):
             per_token_kl = self._compute_kl_penalty(
-                shifted_actor_logprobs, 
+                shifted_actor_logprobs,
                 shifted_ref_logprobs,
                 trainer_hparams=self.grpo_params,
             )
         else:
             # KL penalty is not part of the reward
             per_token_kl = None
-        
+
         # 1) Identify each unique group and get index mapping
         unique_ids, group_idx = torch.unique(groups, return_inverse=True)
         num_groups = unique_ids.size(0)
@@ -537,7 +534,7 @@ class GRPOTrainer(BaseTrainer):
         mean_rewards: torch.FloatTensor,
         std_rewards: torch.FloatTensor,
         per_token_kl: torch.FloatTensor,
-        groups: torch.LongTensor, #(batch_size,1)
+        groups: torch.LongTensor,  # (batch_size,1)
         shifted_actor_log_probs: Optional[torch.FloatTensor] = None,
         shifted_labels_mask: torch.LongTensor = None,
         attention_mask: torch.LongTensor = None,
@@ -551,20 +548,23 @@ class GRPOTrainer(BaseTrainer):
         Returns:
             `torch.FloatTensor`: The advantages of the group, (`group`, `group_size`, `max_seq_len-1`)
         """
-        group_advantages = torch.zeros_like(rewards)  
+        group_advantages = torch.zeros_like(rewards)
         for i, group in enumerate(groups):
-            group_advantages[i] = rewards[i] - mean_rewards[unique_ids == group] /(std_rewards[unique_ids == group] + 1e-4)
+            group_advantages[i] = rewards[i] - mean_rewards[unique_ids == group] / (
+                std_rewards[unique_ids == group] + 1e-4
+            )
 
+        last_non_masked_indices = torch.cumsum(attention_mask, dim=1)[:, -1] - 1
 
-        last_non_masked_indices = (
-            torch.cumsum(attention_mask, dim=1)[:, -1] -1
-        )
-
-        last_non_masked_label_indices = last_non_masked_indices -1 #contains the last indic for each row fow which 
+        last_non_masked_label_indices = (
+            last_non_masked_indices - 1
+        )  # contains the last indic for each row fow which
         # we have to set the advantees to the group advante . i.e., for each row, assign its row advante from column 0 to the last index
         advantages = torch.zeros_like(per_token_kl)
-        advantages[torch.arange(advantages.size(0)), last_non_masked_label_indices] += group_advantages
+        advantages[torch.arange(advantages.size(0)), last_non_masked_label_indices] += (
+            group_advantages
+        )
         advantages -= per_token_kl
-        
-        assert advantages.shape == shifted_actor_log_probs.shape 
+
+        assert advantages.shape == shifted_actor_log_probs.shape
         return advantages.detach()

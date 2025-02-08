@@ -78,7 +78,7 @@ class PPOHParams:
     init_kl_coef: Optional[float] = 0.2
     kl_penalty: Literal["kl", "abs", "mse", "full", "control_variate"] = "kl"
     kl_penalty_loss_type: Optional[Literal["kl", "abs", "mse", "control_variate"]] = (
-        None
+        "control_variate"
     )
     kl_penalty_loss_clip_max: float = 10000
     kl_penalty_loss_clip_min: float = 0
@@ -117,8 +117,7 @@ class PPOTrainer(BaseTrainer):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # TODO: make this initialization more robust ( ideally we get it from a config file)
-        self.ppo_hparams = PPOHParams(**kwargs.get("ppo_hparams", {}))
+        self.trainer_hparams = PPOHParams(**kwargs.get("ppo_hparams", {}))
 
     def set_cloud_logger(self, cloud_log):
         self.cloud_log = cloud_log
@@ -128,6 +127,8 @@ class PPOTrainer(BaseTrainer):
         Performs a single update step using the dataset rollout under the current policy.
         Each update step can rum multiple epochs of optimization.
         """
+        #
+        episodes = self._hydrate_ref_log_probs(episodes)
 
         # TODO: Make this one function in the policy
         self.policy.init_actor_engine_if_needed(
@@ -151,6 +152,9 @@ class PPOTrainer(BaseTrainer):
 
         # change to appropriate input structure
         episodes = self._hydrate_episodes(episodes)
+        episodes = self._rescale_and_clip_scores(episodes)
+        kls = self._log_episodes_metrics(episodes)
+
         dataloader = prepare_data_loader_for_training(
             episodes,
             per_device_batch_size=self.per_device_batch_size,
@@ -236,7 +240,8 @@ class PPOTrainer(BaseTrainer):
 
         self.state.iteration += 1
         progress_bar.close()
-        latest_policy_path = self.policy.save_latest_policy_path()
+        checkpoint_path = str(self.project_root_dir / "policy" / "cache")
+        latest_policy_path = self.policy.save_latest_policy_path(checkpoint_path)
         logger.info(f"Latest policy path: {latest_policy_path}")
 
         # destroy engines and release memory
@@ -256,6 +261,7 @@ class PPOTrainer(BaseTrainer):
         logprobs and values under the current policy parameters.
         These will be the baseline logprobs and values i.e., pi_old(a|s)
         """
+
         episodes = self._hydrate_log_probs(episodes)
         episodes = self._hydrate_values(episodes)
         return episodes
@@ -408,6 +414,94 @@ class PPOTrainer(BaseTrainer):
 
         return episodes
 
+    def _hydrate_ref_log_probs(
+        self, episodes: Dataset, column_name: str = COLUMN_REF_SHIFTED_LOGPS
+    ) -> Dataset:
+        logger.info("Computing refrence model logprobs")
+
+        self.policy.init_reference_engine_if_needed(
+            self.global_batch_size,
+            self.per_device_batch_size,
+            self.gradient_accumulation_steps,
+            self.total_num_training_steps,
+        )
+
+        ## update the episodes
+        data_loader = prepare_data_loader_for_inference(
+            episodes,
+            per_device_batch_size=self.per_device_batch_size,
+            data_loader_kwargs={
+                "collate_fn": PPODataCollator(),
+                "num_workers": self.dataloader_num_workers,
+                "pin_memory": self.dataloader_pin_memory,
+            },
+        )
+
+        self.policy.reference.eval()  # put the referenc emodel in non-training mode
+        dist.barrier()
+
+        ref_log_probs_list = []
+        for inputs in tqdm(
+            data_loader,
+            desc="Computing reference log probs",
+            disable=not self._is_main_process(),
+        ):
+            with torch.no_grad():
+                # Asume every sequence is padded from the right
+                # noinspection DuplicatedCode
+                assert torch.all(inputs["attention_mask"][:, 0] == 1)
+                assert inputs["input_ids"].shape[0] == self.per_device_batch_size, (
+                    f"We expect on all processes to have the same batch size of "
+                    f"{self.per_device_batch_size}."
+                )
+
+                inputs = {
+                    k: v.to(self.policy.reference.device) for k, v in inputs.items()
+                }
+
+                # Compute the sequence lengths as we need to extract
+                # the log probs of the non-padded tokens
+                seq_lengths = inputs["attention_mask"].sum(dim=1).detach().clone()
+                seq_lengths = seq_lengths.unsqueeze(1)  # Shape: (batch_size, 1)
+
+                # Compute the log probabilities for each token
+                outputs = self.policy.forward_reference(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    labels=inputs["labels"],
+                    return_all_logp=True,
+                )
+
+                logps = outputs.all_logp.detach()
+                assert logps.shape[1] == inputs["input_ids"].shape[1] - 1
+
+                seq_lengths = seq_lengths.to(self.policy.reference.device)
+                seq_lengths = gather(seq_lengths).cpu()
+                logps = gather(
+                    pad_across_processes(logps, dim=1, pad_index=0.0, pad_first=False)
+                ).cpu()
+
+                assert (
+                    logps.shape[0]
+                    == inputs["input_ids"].shape[0] * dist.get_world_size()
+                )
+
+                # Convert 2d tensors to a list of lists
+                logps_seq_lengths = seq_lengths - 1
+                for i, seq_len in enumerate(logps_seq_lengths.squeeze().tolist()):
+                    assert seq_len <= logps.shape[1]
+                    ref_log_probs_list.append(logps[i, :seq_len].tolist())
+
+        ref_log_probs_list = ref_log_probs_list[
+            : len(episodes)
+        ]  # remove any extra log probs that were added due to global paddingS
+
+        with self.distributed_state.main_process_first():
+            episodes = episodes.add_column(name=column_name, column=ref_log_probs_list)
+
+        self.policy.destroy_reference_engine_if_not_cached()
+        return episodes
+
     def _step(
         self,
         inputs: Dict[str, torch.Tensor],
@@ -438,7 +532,7 @@ class PPOTrainer(BaseTrainer):
         #  Compute the rewards, advantages, and returns
         with torch.no_grad():
             if self._is_kl_penalty_enabled(
-                self.ppo_hparams.kl_penalty_loss_type, self.policy.reference
+                self.trainer_hparams.kl_penalty_loss_type, self.policy.reference
             ):
                 shifted_ref_logprobs = inputs[COLUMN_REF_SHIFTED_LOGPS]
             else:
@@ -479,6 +573,28 @@ class PPOTrainer(BaseTrainer):
         )
 
         self.policy.actor.backward(actor_loss)
+
+        # Log gradient norms on actor parameters (especially normalization layers)
+        logger.debug("[_step] Actor backward call done. Checking gradient norms...")
+        if hasattr(self.policy.actor, "module"):
+            for name, param in self.policy.actor.module.named_parameters():
+                # Only check norm layers or group norm if you want to single them out:
+                if "norm" in name.lower():
+                    if param.grad is not None:
+                        grad_norm_val = param.grad.detach().norm().item()
+                        if grad_norm_val == 0.0:
+                            logger.warning(
+                                f"[_step] Actor param '{name}' has ZERO grad norm!"
+                            )
+                        else:
+                            logger.debug(
+                                f"[_step] Actor param '{name}' grad norm: {grad_norm_val:.6f}"
+                            )
+                    else:
+                        logger.debug(
+                            f"[_step] Actor param '{name}' grad is None (no gradient)"
+                        )
+
         self.policy.actor.step()
         # Get rid of actor's activations to free up memory
         actor_loss = actor_loss.detach().clone()
@@ -491,7 +607,7 @@ class PPOTrainer(BaseTrainer):
             shifted_labels_mask=shifted_labels_mask,
             old_valid_values=valid_values,
             returns=returns,
-            trainer_params=self.ppo_hparams,
+            trainer_params=self.trainer_hparams,
         )
 
         self.policy.critic.backward(critic_loss)
@@ -548,7 +664,6 @@ class PPOTrainer(BaseTrainer):
             kl = self._compute_kl_penalty(
                 shifted_actor_logprobs,
                 shifted_ref_logprobs,
-                trainer_hparams=self.ppo_hparams,
             )
             non_score_rewards = -self.kl_ctl.value * kl
         else:

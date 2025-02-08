@@ -43,7 +43,7 @@ class BasePolicy:
         gradient_checkpointing: bool = False,
         temperature: float = 0.7,
         weight_decay: float = 0.0,
-        learning_rate: float = 5e-5,
+        learning_rate: float = 1e-6,
         lr_scheduler_type: Optional[Union[SchedulerType, str]] = None,
         adam_beta1: float = 0.9,
         adam_beta2: float = 0.999,

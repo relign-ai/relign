@@ -72,11 +72,13 @@ class BaseEpisodeGenerator:
         distributed_state: PartialState = None,
         num_episodes_per_iteration: int = None,
         project_root_dir: Optional[Path] = None,
-        cloud_logger: Optional[Any] = None,
+        cloud_log: Optional[Any] = None,
+        cloud_save: Optional[Any] = None,
         seed: int = 69,
     ):
         self.distributed_state = distributed_state
-        self.cloud_logger = cloud_logger
+        self.cloud_log = cloud_log
+        self.cloud_save = cloud_save
         self.num_episodes_per_iteration = num_episodes_per_iteration
         self.tokenizer = tokenizer
         self.project_root_dir = project_root_dir
@@ -225,8 +227,8 @@ class BaseEpisodeGenerator:
 
             logger.info("-" * 100)
 
-        if log_to_cloud and self.cloud_logger is not None:
-            self.cloud_logger.log({f"episodes/iteration_{iteration_idx:04}": table})
+        if log_to_cloud and self.cloud_log is not None:
+            self.cloud_log({f"episodes/iteration_{iteration_idx:04}": table})
 
 
 # class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):

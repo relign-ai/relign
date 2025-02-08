@@ -75,7 +75,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         num_episodes_per_iteration / num_rollouts_per_sample
     )
     num_iterations = 1000
-    num_epoch_per_iterations = 4
+    num_epoch_per_iterations = 2
     gradient_accumulation_steps = 1
     max_concurrent_programs = 32
     max_concurrent_generations = 32
@@ -146,6 +146,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "vllm_server": vllm_server,
         "vllm_gpu_memory_utilization": "auto",
         "task": task,
+        "save_generations_every_n_iteration": 1,
         "initial_model_name_or_path": "realtreetune/rho-1b-sft-GSM8K",
         "question_template": question_template,
     }

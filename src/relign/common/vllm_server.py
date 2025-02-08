@@ -243,7 +243,6 @@ class VLLMServer:
 
         find_and_kill_process(self.port)
         launch_func()
-        logger.info(f"Server started with PID {self.process.pid} on port {self.port}")
 
         if wait_for_response:
             if not self._wait_for_server(
@@ -259,7 +258,6 @@ class VLLMServer:
         return server_url
 
     def _launch_process(self, gpu_idx: int, hf_ckpt_path_or_model: str, log_path: str):
-        logger.info("Launching vLLM server")
         # The command arguments:
         command = (
             f"{self.script_path}"

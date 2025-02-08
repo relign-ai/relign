@@ -1,19 +1,26 @@
+import json
 import os
 import shutil
-from typing import Dict, Any, Union, Optional
+from typing import Dict, Any, Union, Optional, List
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from accelerate import Accelerator, PartialState
 from accelerate.utils import GradientAccumulationPlugin
 
+
+from datasets import Dataset
 import torch
 import torch.nn.functional as F
 import numpy as np
 from accelerate import PartialState
 
 from relign.policies.base_policy import BasePolicy
-
+from relign.algorithms.ppo.data_collator import (
+    COLUMN_REF_SHIFTED_LOGPS,
+    COLUMN_ACTOR_SHIFTED_LOGPS,
+    COLUMN_VALUES,
+)
 from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -119,6 +126,7 @@ class BaseTrainer(ABC):
         self._cloud_log = cloud_log
         # self._create_accelerator_and_postprocess()
         self.deepspeed_plugin = None
+        self.trainer_hparams = None  # gets overwritten in trainer implementations
 
     def _init_trainer_dir(self):
         self.trainer_dir = self.project_root_dir / "trainer"
@@ -152,7 +160,6 @@ class BaseTrainer(ABC):
         logprob: Union[torch.FloatTensor, np.ndarray],
         ref_logprob: Union[torch.FloatTensor, np.ndarray],
         estimation_type: Optional[str] = None,
-        trainer_hparams: Optional[Dict[str, Any]] = None,
     ) -> Union[torch.FloatTensor, np.ndarray]:
         """
         Compute the per-token KL penalty between the log probabilities of the actor and the reference model.
@@ -168,7 +175,7 @@ class BaseTrainer(ABC):
         """
 
         if estimation_type is None:
-            estimation_type = trainer_hparams.kl_penalty
+            estimation_type = self.trainer_hparams.kl_penalty
 
         if estimation_type == "kl":
             return logprob - ref_logprob
@@ -268,3 +275,174 @@ class BaseTrainer(ABC):
         logger.info(
             f"Total number of training steps (Gradient Updates): {self.total_num_training_steps}"
         )
+
+    def _rescale_and_clip_scores(self, episodes: Dataset) -> Dataset:
+        bias_correction = None
+        scale_factor = None
+        if self.trainer_hparams.use_score_scaling:
+            assert "scores" in episodes.column_names, "Scores should be provided."
+            scores = torch.tensor(episodes["scores"], dtype=torch.float32)
+            scores_mean, scores_std = self.running_scores.update(scores)
+            scale_factor = scores_std + torch.finfo(scores.dtype).eps
+            if self.trainer_hparams.use_score_norm:  # todo: weird name, right?
+                bias_correction = -scores_mean
+
+        clip = self.trainer_hparams.score_clip
+
+        def transform_reward(example: Dict[str, Any]) -> Dict[str, Any]:
+            score = example["scores"]
+            if bias_correction is not None:
+                score = score + bias_correction
+            if scale_factor is not None:
+                score = score / scale_factor
+
+            if clip is not None:
+                score = torch.clip(torch.tensor(score).float(), -clip, clip)
+
+            return {
+                "scores": (
+                    score.item() if isinstance(score, torch.Tensor) else float(score)
+                )
+            }
+
+        if "scores" in episodes.column_names and any(
+            val is not None for val in [bias_correction, scale_factor, clip]
+        ):
+            episodes = episodes.map(
+                transform_reward,
+                num_proc=self.distributed_state.num_processes,
+                desc="Rescaling and clipping scores (if needed)",
+            )
+
+        return episodes
+
+    def _log_episodes_metrics(self, episodes: Dataset) -> Optional[float]:
+        """
+        Log scores, advantages, logprobs, and values of the episodes.
+
+        Args:
+            episodes (Dataset): The episodes dataset.
+
+        Returns:
+            Optional[float]: The KL from reference policy
+        """
+        if len(episodes) == 0:
+            return
+
+        def compute_seq_logp(
+            episode: Dict[str, Any], logprobs_w_query: List[float]
+        ) -> float:
+            query_len = len(episode["query_token_ids"])
+            logprobs = logprobs_w_query[query_len - 1 :]
+            seq_logprob = sum(logprobs)
+            return seq_logprob
+
+        scores = []
+        response_lengths = []
+        advantages = []
+        ref_logprobs = []
+        actor_logprobs = []
+        critic_values = []
+        kls = []
+        control_variate_kls = []
+        for e in episodes:
+            scores.append(e["scores"])
+            response_lengths.append(len(e["response_token_ids"]))
+            if "advantages" in e:
+                advantages += e["advantages"]
+            if COLUMN_REF_SHIFTED_LOGPS in e:
+                ref_logprobs.append(compute_seq_logp(e, e[COLUMN_REF_SHIFTED_LOGPS]))
+            if COLUMN_ACTOR_SHIFTED_LOGPS in e:
+                actor_logprobs.append(
+                    compute_seq_logp(e, e[COLUMN_ACTOR_SHIFTED_LOGPS])
+                )
+            if COLUMN_REF_SHIFTED_LOGPS in e and COLUMN_ACTOR_SHIFTED_LOGPS in e:
+                actor_lp = np.array(e[COLUMN_ACTOR_SHIFTED_LOGPS])
+                ref_lp = np.array(e[COLUMN_REF_SHIFTED_LOGPS])
+                kl = self._compute_kl_penalty(actor_lp, ref_lp).sum()
+                kls.append(kl)
+
+                # This is unbiased & low variance
+                control_variate_kl = self._compute_kl_penalty(
+                    actor_lp,
+                    ref_lp,
+                    estimation_type="control_variate",
+                ).sum()
+                control_variate_kls.append(control_variate_kl)
+
+            if COLUMN_VALUES in e:
+                values = e[COLUMN_VALUES]
+                values_without_query = values[
+                    len(e["query_token_ids"]) - 1 : -1
+                ]  # Skip the last token (</s>)
+                if len(values_without_query) == 0:
+                    logger.warning(
+                        f"Empty values for episode: {json.dumps(e, indent=2)}"
+                    )
+                critic_values += values_without_query
+
+        scores = np.array(scores)
+        response_lengths = np.array(response_lengths)
+        actor_logprobs = np.array(actor_logprobs)
+        metrics = {
+            "scores/mean": np.mean(scores),
+            "scores/std": np.std(scores),
+            "scores/dist": scores,
+            "response_lengths/mean": np.mean(response_lengths),
+            "response_lengths/std": np.std(response_lengths),
+            "response_lengths/dist": response_lengths,
+            "actor_logprobs/sum": np.mean(actor_logprobs),
+            "actor_logprobs/normalized_by_response_len": np.mean(
+                actor_logprobs / response_lengths
+            ),
+            "actor_logprobs/dist": actor_logprobs,
+        }
+
+        if len(kls) > 0:
+            kls = np.array(kls)
+            metrics["kls/mean"] = np.mean(kls)
+            metrics["kls/dist"] = kls
+            kls = float(metrics["kls/mean"])
+        else:
+            kls = None
+
+        if len(control_variate_kls) > 0:
+            control_variate_kls = np.array(control_variate_kls)
+            metrics["kls/crtl_var__mean"] = np.mean(control_variate_kls)
+            metrics["kls/crtl_var__dist"] = control_variate_kls
+
+        if len(advantages) > 0:
+            advantages = np.array(advantages)
+            metrics["advantages/mean"] = np.mean(advantages)
+            metrics["advantages/std"] = np.std(advantages)
+            metrics["advantages/dist"] = advantages
+
+        if len(ref_logprobs) > 0:
+            ref_logprobs = np.array(ref_logprobs)
+            metrics["ref_logprobs/sum"] = np.mean(ref_logprobs)
+            metrics["ref_logprobs/normalized_by_response_len"] = np.mean(
+                ref_logprobs / response_lengths
+            )
+            metrics["ref_logprobs/dist"] = ref_logprobs
+
+        if len(critic_values) > 0:
+            critic_values = np.array(critic_values)
+            metrics["critic_values/mean"] = np.mean(critic_values)
+            metrics["critic_values/std"] = np.std(critic_values)
+            metrics["critic_values/dist"] = critic_values
+
+        non_array_metrics = {
+            k: v for k, v in metrics.items() if not isinstance(v, np.ndarray)
+        }
+        logger.info(f"Episode Metrics: {non_array_metrics}")
+
+        logs = {f"episodes_metric/{k}": v for k, v in metrics.items()}
+        self._cloud_log(
+            {
+                **logs,
+                "train/global_step": self.state.global_step,
+                "train/global_iteration": self.state.iteration,
+            }
+        )
+
+        return kls

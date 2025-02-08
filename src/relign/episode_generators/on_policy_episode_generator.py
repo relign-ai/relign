@@ -296,7 +296,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         # Save to disk so that it's memory efficient. Note that this is done on all processes.
         # to avoid any issues with distributed environment and funkiness of HF Datasets.
         inp_ds_path = temp_dir / f"input_dataset__{process_index}"
-        dataset.save_to_disk(inp_ds_path)
+        dataset.save_to_disk(str(inp_ds_path))
         del dataset
 
         # The same dataset is loaded on all processes
@@ -349,7 +349,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
 
         episodes_ds_shard = Dataset.from_list(episodes_lst)
         episodes_ds_shard.save_to_disk(
-            temp_dir / f"episodes" / f"shard_{process_index:02d}"
+            str(temp_dir / f"episodes" / f"shard_{process_index:02d}")
         )
 
         del episodes_ds_shard
@@ -374,7 +374,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
             logger.info(f"vLLM Stats: {vllm_stats}")
             metrics.update(vllm_stats)
 
-        self._cloud_log(metrics)
+        self.cloud_log(metrics)
 
         # Concatenate all episodes shards
         self.distributed_state.wait_for_everyone()
@@ -410,7 +410,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
                         f"num_episodes_per_iteration ({self.num_episodes_per_iteration})"
                     )
 
-            merged.save_to_disk(temp_dir / "episodes" / "merged")
+            merged.save_to_disk(str(temp_dir / "episodes" / "merged"))
             del merged
             release_memory()
 
@@ -444,7 +444,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
             vllm_init_fn (Callable[[], Tuple[VLLMServer, Dict[str, Any]]]):
                 A function that initializes the vLLM server and returns the server object and the server URL.
             results_root_dir (Path):
-                The directory to save the results to (this is unique for each process).
+                The directory to save the results to (this is unique for ea
             seed (int):
                 The seed for this process to use for inference.
         """
@@ -547,7 +547,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
                 log_path=vllm_log_path,
                 timeout=800,
             )
-            self._cloud_log(
+            self.cloud_log(
                 {
                     "timing/episode_generation/vllm_start": time.time() - t0,
                 }
@@ -574,7 +574,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
             logger.info("GPU memory usage is below threshold. Continuing.")
 
     def _save_generations_to_cloud(self, generations_dir: Path, iteration: int):
-        if self.cloud_logger is None or not self.is_main_process():
+        if self.cloud_log is None or not self.is_main_process():
             return
 
         if self.save_generations_every_n_iteration is None:
@@ -593,7 +593,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
             format="zip",
             root_dir=generations_dir,
         )
-        self.cloud_logger.save(str(generations.absolute()), policy="now")
+        self.cloud_save(str(generations.absolute()), policy="now")
 
     def _filter_init_dataset(self, dataset: Dataset) -> Dataset:
         if self.max_question_length is None:
@@ -649,6 +649,6 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
 
         return asdict(episode_obj)
 
-    def _cloud_log(self, *args, **kwargs):
-        if self.is_main_process() and self.cloud_logger is not None:
-            self.cloud_logger.log(*args, **kwargs)
+    # def _cloud_log(self, *args, **kwargs):
+    #     if self.is_main_process() and self.cloud_logger is not None:
+    #         self.cloud_logger.log(*args, **kwargs)

@@ -130,10 +130,10 @@ class TrainLoop:
             )
             assert isinstance(episodes, Dataset)
             if self.distributed_state.is_main_process:
-                remove_null_columns(episodes).save_to_disk(episode_path)
+                remove_null_columns(episodes).save_to_disk(str(episode_path))
 
         self.distributed_state.wait_for_everyone()
-        episode_dataset = Dataset.load_from_disk(episode_path)
+        episode_dataset = Dataset.load_from_disk(str(episode_path))
         return episode_dataset
 
     def _evaluate(self, iteration: int, current_policy_path: Path):
