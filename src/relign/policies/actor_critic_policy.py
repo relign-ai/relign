@@ -422,28 +422,28 @@ class ActorCriticPolicy(ActorPolicy):
         We will append '/actor/hf_pretrained' and '/critic/hf_pretrained'
         accordingly here.
         """
+        if self._is_main_process():
+            # Path to store the HF version of the actor
+            actor_hf_pretrained_path = checkpoint_path / "actor" / "hf_pretrained"
+            # Path to store the HF version of the critic
+            critic_hf_pretrained_path = checkpoint_path / "critic" / "hf_pretrained"
 
-        # Path to store the HF version of the actor
-        actor_hf_pretrained_path = checkpoint_path / "actor" / "hf_pretrained"
-        # Path to store the HF version of the critic
-        critic_hf_pretrained_path = checkpoint_path / "critic" / "hf_pretrained"
-
-        # Save the HF-pretrained actor weights
-        self._save_hf_pretrained(
-            self.actor,
-            actor_hf_pretrained_path,
-        )
-
-        # If the DeepSpeed engines are not cached, we also save the critic HF weights,
-        # as well as engine checkpoints for both the actor and critic.
-        if not self.cache_ds_engines:
+            # Save the HF-pretrained actor weights
             self._save_hf_pretrained(
-                self.critic,
-                critic_hf_pretrained_path,
+                self.actor,
+                actor_hf_pretrained_path,
             )
-            # Actually save the full engine state for both
-            self.actor.save_checkpoint(str(checkpoint_path / "actor"))
-            self.critic.save_checkpoint(str(checkpoint_path / "critic"))
 
-        # Return the path of the (actor) HF pretrained directory for inference
-        return actor_hf_pretrained_path
+            # If the DeepSpeed engines are not cached, we also save the critic HF weights,
+            # as well as engine checkpoints for both the actor and critic.
+            if not self.cache_ds_engines:
+                self._save_hf_pretrained(
+                    self.critic,
+                    critic_hf_pretrained_path,
+                )
+                # Actually save the full engine state for both
+                self.actor.save_checkpoint(str(checkpoint_path / "actor"))
+                self.critic.save_checkpoint(str(checkpoint_path / "critic"))
+
+            # Return the path of the (actor) HF pretrained directory for inference
+            return actor_hf_pretrained_path
