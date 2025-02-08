@@ -18,15 +18,24 @@ from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-class ForwardOutput(NamedTuple):
-    initial_poilicy_raw_output: CausalLMOutput 
+
+class CriticForwardOutput(NamedTuple):
+    initial_poilicy_raw_output: CausalLMOutput
     policy_raw_output: CausalLMOutput
-    values: torch.Tensor 
+    values: torch.Tensor
+
+
+class ActorForwardOutput(NamedTuple):
+    logits: Optional[torch.Tensor] = None
+    sequence_logp: Optional[torch.Tensor] = None
+    all_logp: Optional[torch.Tensor] = None
+
 
 class BasePolicy:
     """
     A policy takes an observation and returns an action.
     """
+
     def __init__(
         self,
         seed: int,
@@ -39,16 +48,11 @@ class BasePolicy:
         adam_beta1: float = 0.9,
         adam_beta2: float = 0.999,
         adam_epsilon: float = 1e-8,
-        per_device_train_batch_size: int = 16,
-        gradient_accumulation_steps: int = 1,
         max_grad_norm: float = 1.0,
         fp16: bool = False,
         bf16: bool = False,
         bf16_full_eval: bool = False,
-        total_num_training_steps: int = 10, #TODO: Get this from the trainer? 
-        global_batch_size: int = 1,
-        warmup_steps: int = 0
-        
+        warmup_steps: int = 0,
     ):
         self.seed = seed
         self.project_root_dir = project_root_dir
@@ -62,32 +66,26 @@ class BasePolicy:
         self.adam_beta1 = adam_beta1
         self.adam_beta2 = adam_beta2
         self.adam_epsilon = adam_epsilon
-        self.per_device_train_batch_size = per_device_train_batch_size
-        self.gradient_accumulation_steps = gradient_accumulation_steps
         self.max_grad_norm = max_grad_norm
         self.fp16 = fp16
         self.bf16 = bf16
         self.bf16_full_eval = bf16_full_eval
         self.warmup_steps = warmup_steps
 
-        # I have a feeling we should get these from the trainer somehow
-        self.total_num_training_steps = total_num_training_steps 
-        self.global_batch_size = global_batch_size
-
     @abstractmethod
-    def predict(self, episodes: EpisodeDataset): #TODO Define response type
+    def predict(self, episodes: EpisodeDataset):  # TODO Define response type
         """
         Predict an action from an observation.
         """
         pass
 
-    @abstractmethod 
+    @abstractmethod
     def forward(
-            self,
-            input_ids: torch.Tensor,
-            attention_masks: torch.Tensor,
-            labels: torch.Tensor,
-        ) -> ForwardOutput:
+        self,
+        input_ids: torch.Tensor,
+        attention_masks: torch.Tensor,
+        labels: torch.Tensor,
+    ) -> ActorForwardOutput:
         """
         Forward pass of the policy.
         """
@@ -101,7 +99,7 @@ class BasePolicy:
         self.cloud_logger = cloud_logger
 
     def _init_checkpoint_dir(self):
-        self.checkpoint_dir = (self.project_root_dir / "policy")
+        self.checkpoint_dir = self.project_root_dir / "policy"
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self._validate_checkpoint_format()
 
@@ -117,34 +115,35 @@ class BasePolicy:
     def get_checkpoint_format(self) -> str:
         return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
 
+    @abstractmethod
+    def checkpoint(self):
+        NotImplementedError("checkpoint method is not implemented yet.")
+
 
 class DeepSpeedPolicy(BasePolicy):
     """
     solely uses DeepSpeed (ds) for training and ditched the Accelerate library. The accelerate library does not support two models in a single
     training loop, which becomes problematic in policies that use multiple models (actor-critic)
     """
+
     def __init__(
-        self,
-        distributed_state: PartialState,
-        cache_ds_engines: bool = False,
-        **kwargs
-    ):      
-        super().__init__(**kwargs) 
+        self, distributed_state: PartialState, cache_ds_engines: bool = False, **kwargs
+    ):
+        super().__init__(**kwargs)
         self.distributed_state = distributed_state
         self.cache_ds_engines = cache_ds_engines
 
-    
     def create_optimizer(
         self,
         model: PreTrainedModel,
         weight_decay: float = 0.0,
     ) -> Union[Optimizer, DummyOptim]:
         from accelerate.utils import DummyOptim
+
         optim_params = get_optimizer_grouped_parameters(model, weight_decay)
         optim = DummyOptim(optim_params)
         optim.param_groups = {}
         return optim
-    
 
     def create_lr_scheduler(
         self,
@@ -159,7 +158,6 @@ class DeepSpeedPolicy(BasePolicy):
             num_warmup_steps=warmup_steps,
             num_training_steps=num_training_steps,
         )
-
 
     def _init_deepspeed_engine_for_inference(
         self,
@@ -180,7 +178,7 @@ class DeepSpeedPolicy(BasePolicy):
         lr_scheduler: Optional[LRScheduler] = None,
     ) -> DeepSpeedEngine:
         """
-        Helper function to convert prertrained model to deepspeed engine. 
+        Helper function to convert prertrained model to deepspeed engine.
         """
         kwargs = {
             "model": model,
@@ -194,17 +192,10 @@ class DeepSpeedPolicy(BasePolicy):
         engine, *_ = deepspeed.initialize(**kwargs)
         return engine
 
-    def _destroy_engines(self):
-        """ Destorys the engines after use (if not caches)"""
-        if self.cache_ds_engines:
-            return
-        for engine in self.engines:
-            self._destroy_ds_engine(engine)
-
     def _destroy_ds_engine(self, ds_engine: DeepSpeedEngine):
         if self.cache_ds_engines:
             return
-        
+
         def delete_attr(obj, a_name):
             if hasattr(obj, a_name):
                 delattr(obj, a_name)
@@ -219,7 +210,7 @@ class DeepSpeedPolicy(BasePolicy):
 
         ds_engine.empty_partition_cache()
         ds_engine.destroy()  # todo(milad): why deeospeed has these globals
-    
+
     def _patch_ds_config_for_optimizer(
         self,
         config: HfTrainerDeepSpeedConfig,
@@ -270,22 +261,26 @@ class DeepSpeedPolicy(BasePolicy):
     ) -> None:
         config.fill_only(
             "train_micro_batch_size_per_gpu",
-            self.per_device_train_batch_size,
+            self.per_device_batch_size,
             "per_device_train_batch_size",
         )
+        logger.info(f"patched train micro batch size to {self.per_device_batch_size}")
         config.fill_only(
             "gradient_accumulation_steps",
             self.gradient_accumulation_steps,
             "gradient_accumulation_steps",
         )
+        logger.info(
+            f" patched gradient accumulation steps to {self.gradient_accumulation_steps}"
+        )
         config.fill_only(
             "train_batch_size", global_batch_size, "train_batch_size (calculated)"
         )
+        logger.info(f"patche train batch size to {global_batch_size}")
         config.fill_only("gradient_clipping", self.max_grad_norm, "max_grad_norm")
+        logger.info(f" patched gradient clipping to {self.max_grad_norm}")
 
-    def _patch_ds_config_for_dtype(
-        self, config: HfTrainerDeepSpeedConfig
-    ) -> None:
+    def _patch_ds_config_for_dtype(self, config: HfTrainerDeepSpeedConfig) -> None:
         assert not self.fp16, "FP16 is not supported for now"
         config.fill_only(
             "bf16.enabled", (self.bf16 or self.bf16_full_eval), "bf16|bf16_full_eval"
@@ -340,13 +335,8 @@ class DeepSpeedPolicy(BasePolicy):
                 )
 
     def _is_main_process(self) -> bool:
-        """ Deal with the distributed state"""
+        """Deal with the distributed state"""
         return self.distributed_state.is_main_process
-    
-
-
-
-
 
 
 def get_optimizer_grouped_parameters(

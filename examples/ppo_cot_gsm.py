@@ -1,6 +1,5 @@
 import hydra
 import argparse
-import torch
 from pathlib import Path
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModel
 from omegaconf import OmegaConf
@@ -8,31 +7,43 @@ from omegaconf import OmegaConf
 from relign.tasks import GSM8K
 from relign.policies.actor_critic_policy import ActorCriticPolicy
 from relign.policies.base_critic import PretrainedModelValueHead
-from relign.algorithms.on_policy_algorithm import OnPolicyAlgorithm
+from relign.algorithms.train_loop import TrainLoop
 from relign.algorithms.ppo.trainer import PPOTrainer
-from relign.episode_generators.math_episode_generator import(
+from relign.episode_generators.envs.math_episode_generator import (
     MathEpisodeGenerator,
     MATHRewardFunction,
 )
 
+from relign.inference.cot_inference_strategy import COTInferenceStrategy
+from relign.inference.tree_inference.expansion import EfficientIIDExpander
+from relign.inference.tree_inference.answer_extraction import IdentityAnswerExtractor
+
 # For actor critic methods, we need a Distributed Runner
 from relign.runners.distributed_runner import DistributedRunner
 from relign.common.vllm_server import VLLMServer
+from relign.guidance.llms import OpenAIVLLM
+from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor
+from relign.models.base_model import PreTrainedModelForCasualLM
 
 
-def ppo_gsm(cfg,  local_rank: int = -1):
+def ppo_gsm(cfg, local_rank: int = -1):
     ds_config = cfg.deepspeed
     ds_config = OmegaConf.to_container(ds_config, resolve=True)
-    experiment_name = "rho gsm finetune"
-    experiment_dir  = "experiment"
-    
+    experiment_name = "ppo-cot-rho1b-gsm"
+    experiment_dir = "experiment"
+
     # --------- Tokenizer --------------- #
     tokenizer = AutoTokenizer.from_pretrained("realtreetune/rho-1b-sft-GSM8K")
 
     # ---------Model Defenition ---------#
     def actor_model_fn():
-        ## load gp2 as actor
-        return AutoModelForCausalLM.from_pretrained("realtreetune/rho-1b-sft-GSM8K")
+        # Load the base actor model from pretrained weights.
+        return PreTrainedModelForCasualLM.from_di(
+            hf_model_name="realtreetune/rho-1b-sft-GSM8K",
+            pretrained_args={
+                "use_flash_attention_2": True,
+            },
+        )
 
     def critic_model_fn():
         # Wrap the critic with the value head model.
@@ -58,21 +69,23 @@ def ppo_gsm(cfg,  local_rank: int = -1):
         timeout=1,
     )
 
-    # -------- Inference Strategy --------#
-    from relign.inference.cot_inference_strategy import COTInferenceStrategy
-    from relign.inference.tree_inference.expansion import EfficientIIDExpander
-    from relign.inference.tree_inference.answer_extraction import (IdentityAnswerExtractor)
-    from relign.guidance.llms._openai_vllm import OpenAIVLLM
-
-    n_episodes_per_iteration = 1
-    n_rollouts_per_sample = 1
-    max_concurrent_programs = 1
-    max_concurrent_generations = 1
-    n_epiodes_per_iteration = n_episodes_per_iteration / n_rollouts_per_sample
-    
-    from relign.guidance.llms._mock import Mock
-    from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor 
-    mock_guidance = Mock()
+    num_episodes_per_iteration = 568
+    num_rollouts_per_sample = 2
+    num_dataset_samples_per_iteration = (
+        num_episodes_per_iteration / num_rollouts_per_sample
+    )
+    num_iterations = 1000
+    num_epoch_per_iterations = 4
+    gradient_accumulation_steps = 1
+    max_concurrent_programs = 32
+    max_concurrent_generations = 32
+    guidance_llm_cls = OpenAIVLLM
+    guidance_llm_kwargs = {
+        "api_key": "EMPTY",
+        "max_calls_per_min": 1e6,
+        "caching": False,
+        "max_retries": 10,
+    }
 
     # ---------- Node Expanders---------- #
     answer_extractor = IdentityAnswerExtractor(node_key_name="text")
@@ -101,33 +114,37 @@ def ppo_gsm(cfg,  local_rank: int = -1):
     """
 
     # ---- Chain of thought Strategy --- #
-    cot_inference_strategy = COTInferenceStrategy(
-        samples=n_rollouts_per_sample,
-        question_field='query',
-        question_template=question_template,
-        max_concurrent_generations=max_concurrent_generations,
-        max_concurrent_programs=max_concurrent_programs,
-        answer_extractor=answer_extractor,
-        node_expander=node_expander,
-        guidance_llm=mock_guidance,
-        max_depth=4,
-        result_dir=Path(experiment_dir) / "chain_of_thoughts",
-    )
+    cot_inference_strategy_cls = COTInferenceStrategy
+    cot_inference_strategy_kwargs = {
+        "samples": num_rollouts_per_sample,
+        "question_field": "query",
+        "question_template": question_template,
+        "max_concurrent_generations": max_concurrent_generations,
+        "max_concurrent_programs": max_concurrent_programs,
+        "answer_extractor": answer_extractor,
+        "node_expander": node_expander,
+        "guidance_llm_cls": guidance_llm_cls,
+        "guidance_llm_kwargs": guidance_llm_kwargs,
+        "max_depth": 2,
+    }
 
     # ----------- Episode Generator ------------#
     vllm_server = VLLMServer()
     episode_generator = MathEpisodeGenerator
     episode_generator_kwargs = {
         "tokenizer": tokenizer,
-        "num_episodes_per_iteration": n_episodes_per_iteration,
-        "reasoning_step_delimiter": '',
+        "num_episodes_per_iteration": num_episodes_per_iteration,
+        "dataset_num_samples_per_iteration": int(num_dataset_samples_per_iteration),
+        "reasoning_step_delimiter": "",
         "wait_until_memory_release": True,
         "answer_prefix": "\n\n # Answer\n",
         "max_sequence_length": 2048,
         "max_question_length": 1512,
         "reward_function": reward_function,
-        "inference_strategy": cot_inference_strategy,
+        "inference_strategy_cls": cot_inference_strategy_cls,
+        "inference_strategy_kwargs": cot_inference_strategy_kwargs,
         "vllm_server": vllm_server,
+        "vllm_gpu_memory_utilization": "auto",
         "task": task,
         "initial_model_name_or_path": "realtreetune/rho-1b-sft-GSM8K",
         "question_template": question_template,
@@ -145,19 +162,54 @@ def ppo_gsm(cfg,  local_rank: int = -1):
     # ----------- Trainer ---------------#
     ppo_trainer_class = PPOTrainer
     ppo_trainer_kwargs = {
-        "per_device_batch_size": 10,
-        "dataloader_num_workers": 1,
+        "target_batch_size": 8,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "num_epochs_per_iteration": num_epoch_per_iterations,
+        "dataloader_num_workers": 2,
         "dataloader_pin_memory": False,
     }
 
     # ----------- Algorithm--------------#
-    algorithm_cls = OnPolicyAlgorithm
+    # Define an inference pipeline for the evalution process
+    from relign.inference.inference_pipeline import VLLMInferencePipeline
+
+    inference_pipeline_kwargs = {
+        "inference_strategy_cls": cot_inference_strategy_cls,
+        "inference_strategy_kwargs": cot_inference_strategy_kwargs,
+        "task": task,
+        "dataset_split": "validation",
+    }
+
+    from relign.eval.evaluator import Evaluator
+    from relign.eval.analyzer import TaskPerformanceAnalyzer
+
+    evaluator_cls = Evaluator
+    evaluator_kwargs = {
+        "task": task,
+        "tokenizer": tokenizer,
+        "inference_pipeline_cls": VLLMInferencePipeline,
+        "inference_pipeline_kwargs": inference_pipeline_kwargs,
+        "vllm_server": vllm_server,
+        "vllm_gpu_memory_utilization": "auto",
+        "wait_until_memory_release": True,
+        "force_rerun": False,
+        "every_n_checkpoints": 1,
+        "analyzers": [
+            TaskPerformanceAnalyzer(
+                task=task,
+                metrics_prefix="task_performance",
+            )
+        ],
+    }
+
+    algorithm_cls = TrainLoop
     algorithm_kwargs = {
-        "num_iterations": 1,
-        "num_episodes_per_iteration": 5,
+        "num_iterations": num_iterations,
         "verbose": 1,
-        "evaluation_freq": 10,
+        "evaluation_freq": 1,
         "checkpoint_freq": 10,
+        "evaluator_cls": evaluator_cls,
+        "evaluator_kwargs": evaluator_kwargs,
     }
 
     # The main runner object
@@ -175,7 +227,7 @@ def ppo_gsm(cfg,  local_rank: int = -1):
         algorithm_kwargs=algorithm_kwargs,
     )
 
-    # Start train run 
+    # Start train run
     runner.run()
 
 
@@ -183,10 +235,11 @@ def main():
     parser = argparse.ArgumentParser(description="Deepspeed training")
     parser.add_argument("--local_rank", type=int, default=-1)
     args, unknown = parser.parse_known_args()
-     
+
     hydra.initialize(config_path="../configs", version_base=None)
     cfg = hydra.compose(config_name="config")
     ppo_gsm(cfg=cfg, local_rank=args.local_rank)
+
 
 if __name__ == "__main__":
     main()

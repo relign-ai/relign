@@ -275,26 +275,30 @@ class EfficientIIDExpander(NodeExpander):
         tokenizer: Optional[Tokenizer] = None,
         **kwargs,
     ):
+        """
+        Can request multiple child samples in a single request. 
+        Split up results into multiple nodes and reutnrs them 
+        """
         super().__init__(**kwargs)
 
         if "logprobs" in program_kwargs:
             program_kwargs["logprobs"] = 0
-            # logger.warning(
-            #     "logprobs will be set to 0 as it's not supported. Please remove logprobs from program_kwargs."
-            # )
+            logger.warning(
+                "logprobs will be set to 0 as it's not supported. Please remove logprobs from program_kwargs."
+            )
         else:
             program_kwargs["logprobs"] = 0
 
         if "num_samples" in program_kwargs:
             program_kwargs.pop("num_samples")
-            # logger.warning(
-            #     "num_samples will be set by the branch_factor_strategy. "
-            #     "Please remove num_samples from program_kwargs."
-            # )
+            logger.warning(
+                "num_samples will be set by the branch_factor_strategy. "
+                "Please remove num_samples from program_kwargs."
+            )
 
         if "stop_regex" in program_kwargs:
             program_kwargs.pop("stop_regex")
-            # logger.warning("stop_regex is not supported. Please use `stop`")
+            logger.warning("stop_regex is not supported. Please use `stop`")
 
         self.num_expansion_rounds = num_expansion_rounds
         self.program_kwargs = program_kwargs
@@ -314,7 +318,11 @@ class EfficientIIDExpander(NodeExpander):
             assert self.tokenizer is not None, "tokenizer must be provided"
 
     async def _sample_node(
-        self, prefix: str, depth: int, branch_factor: int, seed: Optional[int] = None
+        self, 
+        prefix: str, 
+        depth: int, 
+        branch_factor: int, 
+        seed: Optional[int] = None
     ) -> List[Node]:
         program_kwargs = self.program_kwargs.copy()
 

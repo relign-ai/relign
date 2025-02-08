@@ -57,7 +57,8 @@ class TreeInferenceStrategy(InferenceStrategy):
         question_template: str,
         node_expander: NodeExpander,
         answer_extractor: AnswerExtractor,
-        guidance_llm: GuidanceLLM,
+        guidance_llm_cls: GuidanceLLM,
+        guidance_llm_kwargs: Dict[str, Any],
         question_field: str = "question",
         max_concurrent_programs: int = 128,
         max_concurrent_generations: int = 2048,
@@ -78,10 +79,9 @@ class TreeInferenceStrategy(InferenceStrategy):
         self.max_concurrent_programs = max_concurrent_programs
         self.max_concurrent_generations = max_concurrent_generations
 
-        # TODO: we need to find a better way do to lazy loading.
+        self.guidance_llm_cls = guidance_llm_cls
+        self.guidance_llm_kwargs = guidance_llm_kwargs
 
-        # self.guidance_llm_lazy = guidance_llm
-        self.guidance_llm = guidance_llm
         self.question_field = question_field
         self.no_cache = no_cache
 
@@ -98,6 +98,11 @@ class TreeInferenceStrategy(InferenceStrategy):
         self.answer_extractor.set_seed(seed)
         if hasattr(self.node_expander, "set_answer_extractor"):
             self.node_expander.set_answer_extractor(self.answer_extractor)
+
+    def _init_guidance_llm(self, **server_init_kwargs) -> GuidanceLLM:
+        self.guidance_llm = self.guidance_llm_cls(
+            **self.guidance_llm_kwargs, **server_init_kwargs
+        )
 
     def generate(self, dataset: Dataset) -> Dataset:
         """

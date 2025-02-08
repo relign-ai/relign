@@ -1,19 +1,22 @@
-from typing import Dict, Any
+import os
+import shutil
+from typing import Dict, Any, Union, Optional
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
+from accelerate import Accelerator, PartialState
+from accelerate.utils import GradientAccumulationPlugin
 
+import torch
+import torch.nn.functional as F
+import numpy as np
 from accelerate import PartialState
 
 from relign.policies.base_policy import BasePolicy
-from relign.common.buffer import Buffer
-from relign.common.dataset import EpisodeDataset
 
+from relign.utils.logging import get_logger
 
-@dataclass
-class Checkpoint:
-    path: Path
-    iteration: int
+logger = get_logger(__name__)
 
 
 class TrainerState:
@@ -47,22 +50,31 @@ class TrainerState:
         return f"TrainerState(global_step={self.global_step}, epoch={self.epoch}, iteration={self.iteration})"
 
 
+class BatchArgs:
+    """
+    A class to hold the batch arguments.
+    """
+
+
 class BaseTrainer(ABC):
     def __init__(
         self,
         seed: int,
         project_root_dir: Path,
         policy: BasePolicy,
-        per_device_batch_size: int,
         dataloader_num_workers: int,
         dataloader_pin_memory: bool,
         distributed_state: PartialState,
         gradient_accumulation_steps: int = 1,
-        num_epochs_per_iteration: int = 1,
+        num_epochs_per_iteration: int = 8,
         num_iterations: int = 1,
-        num_epochs: int = 1,
+        num_episodes_per_iteration: int = 1,
         gamma: int = 1,
-        lam = 0.95,
+        lam=0.95,
+        logging_steps: int = 5,
+        per_device_batch_size: Optional[int] = None,
+        target_batch_size: Optional[int] = None,
+        cloud_log: Optional[Any] = None,
     ):
         """
         Main Trainer object.
@@ -92,12 +104,21 @@ class BaseTrainer(ABC):
         self.dataloader_pin_memory = dataloader_pin_memory
         self.distributed_state = distributed_state
         self.state = TrainerState()
+
         self.gradient_accumulation_steps = gradient_accumulation_steps
         self.num_epochs_per_iteration = num_epochs_per_iteration
         self.num_iterations = num_iterations
-        self.num_epochs = num_epochs
+        self.target_batch_size = target_batch_size
+        self.num_episodes_per_iteration = num_episodes_per_iteration
+
+        self._compute_batch_size_and_steps()
+
         self.gamma = gamma
         self.lam = lam
+        self.logging_steps = logging_steps
+        self._cloud_log = cloud_log
+        # self._create_accelerator_and_postprocess()
+        self.deepspeed_plugin = None
 
     def _init_trainer_dir(self):
         self.trainer_dir = self.project_root_dir / "trainer"
@@ -116,39 +137,134 @@ class BaseTrainer(ABC):
     def _is_main_process(self):
         return self.distributed_state.is_main_process
 
-
-class OnPolicyTrainer(BaseTrainer):
-    def __init__(self, **kwargs):
-        super().__init__(
-            **kwargs,
-        )
-
-    @abstractmethod
-    def step(self, episodes: EpisodeDataset) -> None:
-        """
-        Update method of the on policy trainer, which we will give a list of episodes to do a
-        multi-epoch optimization on.
-        """
-        pass
-
-
-class OffPolicyTrainer(BaseTrainer):
-    """
-    For Off policy algorithms.
-    """
-
-    def __init__(
+    def _is_kl_penalty_enabled(
         self,
-        **kwargs,
-    ):
-        super().__init__(
-            **kwargs,
-        )
+        kl_penalty_loss_type: Optional[str] = None,
+        policy_reference: Optional[BasePolicy] = None,
+    ) -> bool:
+        """
+        Check if the KL penalty is enabled.
+        """
+        return not kl_penalty_loss_type is not None and policy_reference is not None
 
-    @abstractmethod
-    def step(self, buffer: Buffer) -> None:
+    def _compute_kl_penalty(
+        self,
+        logprob: Union[torch.FloatTensor, np.ndarray],
+        ref_logprob: Union[torch.FloatTensor, np.ndarray],
+        estimation_type: Optional[str] = None,
+        trainer_hparams: Optional[Dict[str, Any]] = None,
+    ) -> Union[torch.FloatTensor, np.ndarray]:
         """
-        In the off policy trainer update step we pass in a buffer from which we
-        can sample episodes during a training step.
+        Compute the per-token KL penalty between the log probabilities of the actor and the reference model.
+
+        Args:
+            logprob (`Union[torch.FloatTensor, np.ndarray]`):
+                Log probabilities of the actor, shape (`batch_size`, T)
+            ref_logprob (`Union[torch.FloatTensor, np.ndarray]`):
+                Log probabilities of the reference model, shape (`batch_size`, T)
+
+        Returns:
+            `Union[torch.FloatTensor, np.ndarray]`: KL penalty, shape (`batch_size`, `T`)
         """
-        pass
+
+        if estimation_type is None:
+            estimation_type = trainer_hparams.kl_penalty
+
+        if estimation_type == "kl":
+            return logprob - ref_logprob
+
+        if estimation_type == "abs":
+            return (logprob - ref_logprob).abs()
+
+        if estimation_type == "mse":
+            return 0.5 * (logprob - ref_logprob).square()
+
+        if estimation_type == "control_variate":
+            # Compute the per-token approximate KL penalty between the log probabilities of the actor
+            # and the reference model as suggested by Schulman in http://joschu.net/blog/kl-approx.html
+            #
+            # D_KL [π_θ || π_ref] =
+            #    π_ref(y_t | x, y_<t) / π_θ(y_t | x, y_<t) - log(π_ref(y_t | x, y_<t) / π_θ(y_t | x, y_<t)) - 1
+            #
+
+            log_ratio = ref_logprob - logprob
+            if isinstance(log_ratio, torch.Tensor):
+                kl = torch.exp(log_ratio) - log_ratio - 1
+            elif isinstance(log_ratio, np.ndarray):
+                kl = np.exp(log_ratio) - log_ratio - 1
+            else:
+                raise ValueError("Unsupported type for log_ratio.")
+            return kl
+
+        if estimation_type == "seq_control_variate":
+            log_ratio = ref_logprob - logprob
+            if isinstance(log_ratio, torch.Tensor):
+                prob_ratio = torch.exp(log_ratio.sum(dim=-1, keepdim=True))
+                kl = prob_ratio - log_ratio - 1
+            elif isinstance(log_ratio, np.ndarray):
+                prob_ratio = np.exp(log_ratio.sum(axis=-1, keepdims=True))
+                kl = prob_ratio - log_ratio - 1
+            else:
+                raise ValueError("Unsupported type for log_ratio.")
+            return kl
+
+        if estimation_type == "full":
+            # Flip is required due to this issue? :https://github.com/pytorch/pytorch/issues/57459
+            return F.kl_div(
+                ref_logprob, logprob, log_target=True, reduction="none"
+            ).sum(-1)
+
+        raise NotImplementedError
+
+    def _compute_batch_size_and_steps(self):
+        if self.target_batch_size is not None:
+            if (
+                self.per_device_batch_size is None
+                and self.gradient_accumulation_steps is None
+            ):
+                raise ValueError(
+                    "Either per_device_train_batch_size or gradient_accumulation_steps "
+                    "should be provided."
+                )
+            if (
+                self.per_device_batch_size is not None
+                and self.gradient_accumulation_steps is not None
+            ):
+                raise ValueError(
+                    "Only one of per_device_train_batch_size or gradient_accumulation_steps "
+                    "should be provided."
+                )
+
+            if self.per_device_batch_size is not None:
+                self.gradient_accumulation_steps = (
+                    self.target_batch_size
+                    // self.per_device_batch_size
+                    // self.distributed_state.num_processes
+                )
+            elif self.gradient_accumulation_steps is not None:
+                self.per_device_batch_size = (
+                    self.target_batch_size
+                    // self.gradient_accumulation_steps
+                    // self.distributed_state.num_processes
+                )
+
+        self.global_batch_size = (
+            self.per_device_batch_size
+            * self.gradient_accumulation_steps
+            * self.distributed_state.num_processes
+        )
+        self.total_num_training_steps = (
+            self.num_iterations
+            * self.num_epochs_per_iteration
+            * self.num_episodes_per_iteration
+            // self.global_batch_size
+        )
+        logger.info(f"Per device batch size: {self.per_device_batch_size}")
+        logger.info(f"Gradient accumulation steps: {self.gradient_accumulation_steps}")
+        logger.info(f"Num of total processes: {self.distributed_state.num_processes}")
+        logger.info(
+            f"Global batch size (w. parallel, distributed & accumulation): {self.global_batch_size}"
+        )
+        logger.info(
+            f"Total number of training steps (Gradient Updates): {self.total_num_training_steps}"
+        )

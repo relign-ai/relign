@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
 Outputs some information on CUDA-enabled devices on your computer,
 including current memory usage.

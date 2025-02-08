@@ -1,0 +1,73 @@
+{
+  "citation": "",
+  "description": "",
+  "features": {
+    "question": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "answer": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "_treetune__idx": {
+      "dtype": "int64",
+      "_type": "Value"
+    },
+    "answer_without_calculator": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "problem": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "solution": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "query": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "_solution": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "_final_answer": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "_treetune__reasoning_tree": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "_treetune__candidate_answers": {
+      "feature": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "_type": "Sequence"
+    },
+    "_treetune__candidate_logprobs": {
+      "feature": {
+        "dtype": "null",
+        "_type": "Value"
+      },
+      "_type": "Sequence"
+    },
+    "_treetune__candidate_num_tokens": {
+      "feature": {
+        "dtype": "null",
+        "_type": "Value"
+      },
+      "_type": "Sequence"
+    },
+    "iteration": {
+      "dtype": "int64",
+      "_type": "Value"
+    }
+  },
+  "homepage": "",
+  "license": ""
+}

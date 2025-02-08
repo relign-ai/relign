@@ -16,6 +16,7 @@ build/
 dist/
 out/
 outputs/
+*output/
 experiment/
 data/
 
@@ -34,7 +35,6 @@ data/
 uv.lock
 
 
-
 # Python
 __pycache__/
 *.py[cod]
@@ -48,3 +48,5 @@ runner_test/
 
 #experiments/ testts
 *.arrow
+wandb/
+

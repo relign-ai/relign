@@ -1,4 +1,7 @@
 from abc import abstractmethod
+from typing import Union 
+from pathlib import Path
+import json
 
 import numpy as np
 import torch
@@ -25,6 +28,7 @@ class BaseCritic(nn.Module):
         """
         pass
 
+
 class PretrainedModelValueHead(BaseCritic):
     def __init__(
             self,
@@ -38,12 +42,10 @@ class PretrainedModelValueHead(BaseCritic):
         self.value_head = nn.Linear(hidden_size, 1, bias=True)
         self._init_value_head()
 
-
     def _init_value_head(self):
         hidden_size = self.pretrained_model.config.hidden_size
         nn.init.normal_(self.value_head.weight, std=1 / np.sqrt(hidden_size + 1))
         nn.init.constant_(self.value_head.bias, val=0.0)
-
 
     def forward(self, *args, **kwargs):
         """
@@ -67,5 +69,39 @@ class PretrainedModelValueHead(BaseCritic):
         value = value.squeeze(-1)
 
         return value
+
+
+    def save_pretrained(self, save_directory: Union[str, Path], safe_serialization: bool = False) -> None:
+        """
+        Save the model weights and configuration in a Hugging Face compatible format.
+
+        Args:
+            save_directory (Union[str, Path]): The directory to which the model will be saved.
+            safe_serialization (bool): (Unused for now; maintained for compatibility.)
+        """
+        # Convert to Path if needed and create the directory
+        if isinstance(save_directory, str):
+            save_directory = Path(save_directory)
+        save_directory.mkdir(parents=True, exist_ok=True)
+
+        # Save the model's state dict
+        model_save_path = save_directory / "pytorch_model.bin"
+        torch.save(self.state_dict(), model_save_path)
+        print(f"Model state dict saved to {model_save_path}")
+
+        # Optionally, save configuration if available
+        if hasattr(self, "config"):
+            # Support both config classes (with .to_dict()) or simple dictionaries
+            if hasattr(self.config, "to_dict"):
+                config_dict = self.config.to_dict()
+            elif isinstance(self.config, dict):
+                config_dict = self.config
+            else:
+                config_dict = {"config": self.config}
+
+            config_save_path = save_directory / "config.json"
+            with config_save_path.open("w") as f:
+                json.dump(config_dict, f, indent=2)
+            print(f"Model configuration saved to {config_save_path}")
 
 

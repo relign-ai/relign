@@ -1,10 +1,9 @@
-import copy
 import json
-import logging
 import random
 import shutil
 import tempfile
 import time
+import logging
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional, Union, List, Dict, Any, Tuple, Callable
@@ -16,6 +15,7 @@ from datasets import Dataset, concatenate_datasets
 from relign.utils.gpu import get_gpu_memory, wait_for_memory_release
 from relign.utils.py_utils import find_n_free_ports
 from relign.common.vllm_server import VLLMServer, compute_vllm_stats
+
 from relign.episode_generators.base_episode_generator import (
     BaseEpisodeGenerator,
     Episode,
@@ -23,9 +23,10 @@ from relign.episode_generators.base_episode_generator import (
 from relign.inference.base_inference_strategy import InferenceStrategy
 from relign.tasks.base_task import Task
 
-from relign.utils import logging
+from relign.utils.logging import get_logger
 
-logger = logging.get_logger(__name__)
+
+logger = get_logger(__name__)
 
 
 class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
@@ -34,7 +35,8 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
 
     def __init__(
         self,
-        inference_strategy: InferenceStrategy,
+        inference_strategy_cls: InferenceStrategy,
+        inference_strategy_kwargs: Dict[str, Any],
         vllm_server: VLLMServer,
         task: Task,
         seed: int,
@@ -65,7 +67,8 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         super().__init__(**kwargs)
         self._logger = logger
 
-        self.inference_strategy = inference_strategy
+        self.inference_strategy_cls = inference_strategy_cls
+        self.inference_strategy_kwargs = inference_strategy_kwargs
         self.vllm_server = vllm_server
         self.task = task
         self.dataset_split = dataset_split
@@ -136,8 +139,6 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
             f"Rank {self.distributed_state.process_index} using vLLM port {self._vllm_port}"
         )
 
-    
-
     def _log_on_main(self, msg, level="info"):
         if self.is_main_process() and self._logger is not None:
             getattr(self._logger, level)(msg)
@@ -200,9 +201,13 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
                     if self.dataset_shuffle_on_each_iteration:
                         self._orig_ds = self._orig_ds.shuffle(seed=self.seed)
 
+    def _get_device_index(self) -> int:
+        """Returns a valid device index either from self.distributed_state.device.index or using torch.cuda.current_device()."""
+        device = self.distributed_state.device
+        return device.index if device.index is not None else torch.cuda.current_device()
+
     def generate(
-        self, iteration: Optional[int] = None, 
-        latest_policy_path: Optional[Path] = None
+        self, iteration: Optional[int] = None, latest_policy_path: Optional[Path] = None
     ):
         """
         Generate episodes by sampling from the model.
@@ -226,12 +231,12 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
                 threshold_mb=used_threshold_mb,
             )
 
-        gpu_memory_usage_before_mb = get_gpu_memory()[this_process_device.index]
+        device_index = self._get_device_index()
+        gpu_memory_usage_before_mb = get_gpu_memory()[device_index]
 
         from deepspeed.runtime.utils import see_memory_usage
 
         see_memory_usage("Before generating episodes", force=True)
-
         if iteration is None:
             self._log_on_main(
                 "Iteration is None. Using 0 as the iteration.", level="warning"
@@ -324,17 +329,15 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
 
         metrics = {}
         t0 = time.time()
-        
+
         infer_results = self._run_inference(
             dataset_shard=dataset,
             vllm_init_fn=vllm_init_fn,
             results_root_dir=results_dir,
             iteration=iteration,
             gpu_memory_usage_before_mb=gpu_memory_usage_before_mb,
+            seed=seed,
         )
-
-        for result in infer_results:
-            logger.info(f"INFER RESUTLS {result}")
 
         metrics["timing/episode_generation/inference"] = time.time() - t0
         logger.info(f"Process {process_index} finished inference.")
@@ -344,7 +347,6 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         episodes = self._generate_episodes(infer_results, iteration)
         episodes_lst = [self._convert_to_dict(e) for e in episodes]
 
-        print("episodes_lst", episodes_lst)
         episodes_ds_shard = Dataset.from_list(episodes_lst)
         episodes_ds_shard.save_to_disk(
             temp_dir / f"episodes" / f"shard_{process_index:02d}"
@@ -431,6 +433,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         results_root_dir: Path,
         iteration: int,
         gpu_memory_usage_before_mb: int,
+        seed: int,
     ):
         """
         Potentially start a vLLM server and run inference to generate results needed for episode generation.
@@ -445,32 +448,52 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
             seed (int):
                 The seed for this process to use for inference.
         """
+
         infer_result_path = results_root_dir / "results_ds"
         vllm_server, guidance_llm_kwargs = vllm_init_fn()
-        target_device_index = self.distributed_state.device.index
+        target_device_index = self._get_device_index()
 
-        results = self.inference_strategy.generate(dataset_shard)
-         
-        # Convert the results to a list before saving 
-        episodes = []
-        for row in results:
-            episode = dict(row)  # copy all fields from row
-            episode["iteration"] = iteration
-            episodes.append(episode)
+        # Try to run infernece, if the code fails in here, clean up
+        results = None
+        try:
+            # initialize the inference strategy class with updates result dir
+            self.inference_strategy = self.inference_strategy_cls(
+                **self.inference_strategy_kwargs,
+                result_dir=results_root_dir,
+                seed=seed,
+                cloud_logger=None,
+                log_level=(
+                    logging.WARNING
+                    if not self.distributed_state.is_local_main_process
+                    else None
+                ),
+            )
 
-        episode_ds = Dataset.from_list(episodes)
-        episode_ds.save_to_disk(str(infer_result_path))
+            # initialize the guidance_llm with the right server settings
+            self.inference_strategy._init_guidance_llm(**guidance_llm_kwargs)
+            results = self.inference_strategy.generate(dataset_shard)
 
-        vllm_server.stop_server()
-        del results
-        del vllm_server
-        release_memory()
+            # Convert the results to a list before saving
+            episodes = []
+            for row in results:
+                episode = dict(row)  # copy all fields from row
+                episode["iteration"] = iteration
+                episodes.append(episode)
 
-        self.vllm_cleanup(
-            target_gpu_index=target_device_index, # or can i just use self.distributed_state.device.index here? even if there are multiple ?
-            gpu_memory_usage_before_mb=gpu_memory_usage_before_mb,
-        )
-        release_memory()
+            episode_ds = Dataset.from_list(episodes)
+            episode_ds.save_to_disk(str(infer_result_path))
+        finally:
+            logger.info(f"Cleaning up vllm server.. Device:{target_device_index}")
+            vllm_server.stop_server()
+            if results is not None:
+                del results
+            del vllm_server
+            release_memory()
+            self.vllm_cleanup(
+                target_gpu_index=target_device_index,  # or can i just use self.distributed_state.device.index here? even if there are multiple ?
+                gpu_memory_usage_before_mb=gpu_memory_usage_before_mb,
+            )
+            release_memory()
 
         results = Dataset.load_from_disk(str(results_root_dir / "results_ds"))
         return results
@@ -499,7 +522,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
 
             remaining_mem_mb = (
                 total_mem_mb - allocated_mem_mb
-            ) * 0.9  # Allow for 10% tolerance
+            ) * 0.8  # Allow for 10% tolerance
             vllm_gpu_memory_utilization = round(remaining_mem_mb / total_mem_mb, 2)
 
             logger.info(
@@ -529,7 +552,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
                     "timing/episode_generation/vllm_start": time.time() - t0,
                 }
             )
-
+            logger.info(f"SERVER URL {server_url}")
             return self.vllm_server, {
                 "api_base": server_url,
                 "model": hf_ckpt_path_or_model,
@@ -543,11 +566,12 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         target_gpu_index: int,
     ):
         if self.wait_until_memory_release:
-            threshold_mb = ( gpu_memory_usage_before_mb * 1.1)  # Allow for 10% tolerance
+            threshold_mb = gpu_memory_usage_before_mb * 1.1  # Allow for 10% tolerance
             wait_for_memory_release(
                 target_gpu_index=target_gpu_index,
                 threshold_mb=threshold_mb,
             )
+            logger.info("GPU memory usage is below threshold. Continuing.")
 
     def _save_generations_to_cloud(self, generations_dir: Path, iteration: int):
         if self.cloud_logger is None or not self.is_main_process():

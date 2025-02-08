@@ -60,9 +60,9 @@ class PPODataCollator:
         if has_advantages:
             batch["advantages"] = []
 
-        has_scores = "rewards" in instances[0]
+        has_scores = "scores" in instances[0]
         if has_scores:
-            batch["rewards"] = []
+            batch["scores"] = []
 
         has_ref_shifted_logps = COLUMN_REF_SHIFTED_LOGPS in instances[0]
         if has_ref_shifted_logps:
@@ -77,9 +77,7 @@ class PPODataCollator:
             batch[COLUMN_VALUES] = []
 
         pad_token_id = 0  # It doesn't matter what the pad token id is, since we will mask it out anyway
-        pad_label = (
-            -100
-        )  # -100 is the default value for the padding token in the loss function
+        pad_label = (-100)  # -100 is the default value for the padding token in the loss function
         pad_logp = -float(1e9)  # Crazy value to show up it in case of a bug
         pad_value = -float(1e9)  # Crazy value to show up it in case of a bug
 
@@ -135,8 +133,8 @@ class PPODataCollator:
 
 
             if has_scores:
-                assert isinstance(instance['rewards'], float)
-                batch["rewards"].append(instance["rewards"])
+                assert isinstance(instance['scores'], float)
+                batch["scores"].append(instance["scores"])
 
             if has_ref_shifted_logps:
                 shifted_ref_logps = prepare_shifted_logps(

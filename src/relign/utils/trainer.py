@@ -152,7 +152,7 @@ def masked_rescale_by_std(values, mask, distributed=False, unbiased_variance=Fal
 
 def clip_by_value(x, tensor_min, tensor_max):
     """
-    Tensor extenstion to torch.clamp
+    Tensor extension to torch.clamp
     https://github.com/pytorch/pytorch/issues/2793#issuecomment-428784713
     """
     clipped = torch.max(torch.min(x, tensor_max), tensor_min)
@@ -173,6 +173,7 @@ def prepare_data_loader_for_training(
     drop_last: bool = True,
     even_batches: bool = True,
     data_loader_kwargs: Optional[Dict[str, Any]] = None,
+    grouped_sample = False,
 ) -> DataLoader:
     data_loader_kwargs = data_loader_kwargs or {}
 
