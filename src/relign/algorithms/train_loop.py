@@ -109,22 +109,19 @@ class TrainLoop:
             self.distributed_state.wait_for_everyone()
             dist.barrier()
 
-            ##################
-            #    Evaluate    #
-            ##################
-            # if iteration % self.evaluation_freq == 0:
-            #     self.distributed_state.wait_for_everyone()
-            #     if self.distributed_state.is_main_process:
-            #         logger.info(
-            #             f"Evaluating current policy... on rank {self.distributed_state.process_index}"
-            #         )
-            #         self._evaluate(
-            #             iteration=iteration, current_policy_path=current_policy_path
-            #         )
-            #     # Ensure all processes wait until evaluation is done.
-            # TODO: apperently this works. but why? only god knows.
-            # self.distributed_state.wait_for_everyone()
-            # dist.barrier()
+            #################
+            #   Evaluate    #
+            #################
+            if iteration % self.evaluation_freq == 0:
+                logger.info(
+                    f"Evaluating current policy... on rank {self.distributed_state.process_index}"
+                )
+                self._evaluate(
+                    iteration=iteration, current_policy_path=current_policy_path
+                )
+
+            self.distributed_state.wait_for_everyone()
+            dist.barrier()
 
             logger.info(
                 f"Rank {self.distributed_state.process_index} done with evaluation."
@@ -205,7 +202,6 @@ class TrainLoop:
     def _evaluate(self, iteration: int, current_policy_path: Path):
         self.evaluator.evaluate(
             iteration=iteration,
-            tokenizer=self.episode_generator.tokenizer,
             latest_policy_path=current_policy_path,
             from_checkpoints=False,
         )

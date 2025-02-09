@@ -2,7 +2,7 @@ import shutil
 from dataclasses import dataclass
 import time
 from abc import abstractmethod
-from typing import Optional, Dict, Any, Callable, NamedTuple, Union
+from typing import Optional, Dict, Any, Callable, NamedTuple, Union, List
 from pathlib import Path
 
 
@@ -449,3 +449,23 @@ class ActorCriticPolicy(ActorPolicy):
 
     def get_checkpoint_format(self) -> str:
         return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
+
+    def _clean_old_temp_checkpoints(
+        self, 
+        checkpoint_dir, 
+        exclude: Optional[List[Path]] = None
+    ) -> None:
+        if exclude is None:
+            exclude = []
+
+        if self._is_main_process():
+            for checkpoint in self.temp_checkpoint_dir.iterdir():
+                if (
+                    checkpoint.is_dir()
+                    and checkpoint.name.startswith("ckpt--")
+                    and checkpoint not in exclude
+                ):
+                    logger.info(f"Removing old temp checkpoint {checkpoint}")
+                    shutil.rmtree(checkpoint)
+
+        dist.barrier()
