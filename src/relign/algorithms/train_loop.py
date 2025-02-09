@@ -81,7 +81,9 @@ class TrainLoop:
                 logger.info(f"Running iteration {iteration}")
                 logger.info("*" * 80)
 
-            # Generate episodes under the current policy.
+            ####################
+            # Generate episodes#
+            ####################
             logger.info(
                 f"Rank {self.distributed_state.process_index}: About to _generate_episodes() for iteration {iteration}"
             )
@@ -92,32 +94,41 @@ class TrainLoop:
                 f"Rank {self.distributed_state.process_index} done with episode generation."
             )
 
-            # Train the policy and get the latest policy path.
+            self.distributed_state.wait_for_everyone()
+            dist.barrier()
+
+            ##################
+            # Trainer step   #
+            ##################
+            logger.info(f"Rank {self.distributed_state.process_index}: About to step.")
             current_policy_path = self.trainer.step(episodes=episodes)
             logger.info(
                 f"Rank {self.distributed_state.process_index} done with trainer step."
             )
 
-            # Synchronize all ranks before moving to evaluation.
             self.distributed_state.wait_for_everyone()
-
-            # Evaluation: only run on the main process.
-            if iteration % self.evaluation_freq == 0:
-                if self.distributed_state.is_main_process:
-                    logger.info(
-                        f"Evaluating current policy... on rank {self.distributed_state.process_index}"
-                    )
-                    self._evaluate(
-                        iteration=iteration, current_policy_path=current_policy_path
-                    )
-                # Ensure all processes wait until evaluation is done.
-
             dist.barrier()
+
+            ##################
+            #    Evaluate    #
+            ##################
+            # if iteration % self.evaluation_freq == 0:
+            #     self.distributed_state.wait_for_everyone()
+            #     if self.distributed_state.is_main_process:
+            #         logger.info(
+            #             f"Evaluating current policy... on rank {self.distributed_state.process_index}"
+            #         )
+            #         self._evaluate(
+            #             iteration=iteration, current_policy_path=current_policy_path
+            #         )
+            #     # Ensure all processes wait until evaluation is done.
+            # TODO: apperently this works. but why? only god knows.
+            # self.distributed_state.wait_for_everyone()
+            # dist.barrier()
 
             logger.info(
                 f"Rank {self.distributed_state.process_index} done with evaluation."
             )
-
             # Checkpointing (e.g. saving tokenizer) -- only on main process.
             logger.info(
                 f"Rank {self.distributed_state.process_index} about to checkpoint."
@@ -129,7 +140,9 @@ class TrainLoop:
             ):
                 logger.info(f"Saving the tokenizer at {current_policy_path}")
                 self.episode_generator.tokenizer.save_pretrained(current_policy_path)
+
             # Synchronize after checkpointing.
+            self.distributed_state.wait_for_everyone()
             dist.barrier()
 
             if is_local_main_process:
@@ -151,6 +164,8 @@ class TrainLoop:
         # Wait for all processes to reach this point
         if self.distributed_state.use_distributed:
             self.distributed_state.wait_for_everyone()
+            dist.barrier()
+
         # TODO: handle distributed environments differently
         # for now we just generate it in the main process
         # Feth the epiode path on all the devices
@@ -174,6 +189,8 @@ class TrainLoop:
                 remove_null_columns(episodes).save_to_disk(str(episode_path))
 
         self.distributed_state.wait_for_everyone()
+        dist.barrier()
+
         episode_dataset = Dataset.load_from_disk(str(episode_path))
         self.episode_generator.log_episodes(
             episode_dataset,
@@ -182,7 +199,6 @@ class TrainLoop:
             seed=self.seed,
             log_to_cloud=True,
         )
-        self.distributed_state.wait_for_everyone()
 
         return episode_dataset
 

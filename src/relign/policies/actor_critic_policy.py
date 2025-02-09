@@ -427,6 +427,7 @@ class ActorCriticPolicy(ActorPolicy):
         critic_hf_pretrained_path = checkpoint_path / "critic" / "hf_pretrained"
 
         # Save the HF-pretrained actor weights
+        dist.barrier()
         self._save_hf_pretrained(
             self.actor,
             actor_hf_pretrained_path,

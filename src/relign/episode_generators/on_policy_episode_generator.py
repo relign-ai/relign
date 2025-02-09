@@ -28,6 +28,22 @@ from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+from deepspeed import comm as dist
+
+
+def check_distributed():
+    if not dist.is_initialized():
+        print("Distributed not initialized on this process!")
+        return
+
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+
+    # After printing, we can invoke a barrier and ensure no process is stuck:
+    logger.info(f"[Rank={rank}] entering barrier...")
+    dist.barrier()
+    logger.info(f"[Rank={rank}] passed barrier successfully!")
+
 
 class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
     can_precompute_episodes: bool = False
@@ -206,6 +222,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         Generate episodes by sampling from the model.
         """
         # First, we'll log that we're entering the generate method with our rank (process_index)
+        check_distributed()
         process_index = self.distributed_state.process_index
         logger.info(f"[RANK={process_index}] Entering generate method...")
 
@@ -385,6 +402,8 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
 
         # Concatenate all episodes shards
         self.distributed_state.wait_for_everyone()
+        dist.barrier()
+
         if self.is_main_process():
             shard_paths = list((temp_dir / f"episodes").glob("shard_*"))
             shard_paths.sort(key=lambda x: int(x.name.split("shard_")[-1]))
@@ -416,12 +435,15 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
                         f"Number of episodes generated ({len(merged)}) is less than "
                         f"num_episodes_per_iteration ({self.num_episodes_per_iteration})"
                     )
-
+            
             merged.save_to_disk(str(temp_dir / "episodes" / "merged"))
             del merged
             release_memory()
 
+        # TODO: again why?
         self.distributed_state.wait_for_everyone()
+        dist.barrier()
+
         episodes = Dataset.load_from_disk(str(temp_dir / "episodes" / "merged"))
 
         see_memory_usage("After generating episodes", force=True)
@@ -430,6 +452,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         self._clean_up_temp_dir(temp_dir)
 
         self.distributed_state.wait_for_everyone()
+        dist.barrier()
 
         return episodes
 
