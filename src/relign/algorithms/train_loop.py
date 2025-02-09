@@ -75,6 +75,11 @@ class TrainLoop:
         is_local_main_process = self.distributed_state.is_local_main_process
         current_policy_path = None
         for iteration in tqdm(range(self.num_iterations)):
+            if is_local_main_process:
+                logger.info("*" * 80)
+                logger.info(f"Running iteration {iteration}")
+                logger.info("*" * 80)
+
             # Collect rollouts under the current policy.
             episodes = self._generate_episodes(
                 iteration=iteration, current_policy_path=current_policy_path
@@ -84,8 +89,26 @@ class TrainLoop:
                 episodes, iteration, num_examples=3,
                 seed=self.seed, log_to_cloud = True
             )
+            
+            logger.info(f"Rank {self.distributed_state.process_index} done with episode generation.")
+            self.distributed_state.wait_for_everyone()
 
             current_policy_path = self.trainer.step(episodes=episodes)
+            logger.info(f"Rank {self.distributed_state.process_index} done with trainer step.")
+            
+            self.distributed_state.wait_for_everyone()
+            # Evalutate
+            if iteration % self.evaluation_freq == 0:
+                logger.info("Evaluation step")
+                if  self.distributed_state.is_main_process:
+                    logger.info("Evaluating the policy...")
+                    self._evaluate(iteration=iteration, current_policy_path=current_policy_path)
+            
+            self.distributed_state.wait_for_everyone()
+
+            # Checkpoint
+            # if iteration % self.checkpoint_freq == 0:
+            #     self._checkpoint(iteration=iteration)
 
             # Save the tokenizer inside the policy checkpoint
             if (
@@ -96,14 +119,8 @@ class TrainLoop:
                 logger.info(f"Saving the tokenizer at {current_policy_path}")
                 self.episode_generator.tokenizer.save_pretrained(current_policy_path)
 
-        # Evalutate
-        if iteration % self.evaluation_freq == 0:
-            logger.info("Evaluating the policy...")
-            self._evaluate(iteration=iteration, current_policy_path=current_policy_path)
-
-        # Checkpoint
-        if iteration % self.checkpoint_freq == 0:
-            self._checkpoint(iteration=iteration)
+            if is_local_main_process:
+                logger.info(f"Iteration {iteration} complete")
 
     def _generate_episodes(
         self,

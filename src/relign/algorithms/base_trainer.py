@@ -133,7 +133,7 @@ class BaseTrainer(ABC):
         self.trainer_dir.mkdir(exist_ok=True, parents=True)
 
     @abstractmethod
-    def step(self) -> None:
+    def step(self) -> Path:
         pass
 
     def save_trainer_state(self, path: str) -> None:

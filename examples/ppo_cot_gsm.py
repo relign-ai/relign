@@ -74,7 +74,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         timeout=1,
     )
 
-    num_episodes_per_iteration = 568
+    num_episodes_per_iteration = 68 
     num_rollouts_per_sample = 2
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample

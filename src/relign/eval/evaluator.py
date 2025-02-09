@@ -74,6 +74,10 @@ class Evaluator:
         """
         Main evaluation loop. Evaluates the latest policy path.
         """
+        this_process_device = self.distributed_state.device
+        logger.info(f"Process {this_process_device} is evaluating")
+        release_memory()
+
         # TODO: Do batch evaluations on all the checkpints
         if not from_checkpoints:
             model_cpt_path = latest_policy_path
@@ -82,6 +86,7 @@ class Evaluator:
                 "Evaluation from checkpoints is not yet implemented"
             )
 
+        assert latest_policy_path != None
         latest_policy_path = self._prepare_ckpt(latest_policy_path)
 
         # eval_dir_path = Path(self.evaluation_dir / model_cpt)
@@ -150,6 +155,8 @@ class Evaluator:
     ) -> Callable[[], Tuple[VLLMServer, Dict[str, Any]]]:
         logger.info("setup up vllm server")
         vllm_gpu_memory_utilization = self.vllm_gpu_memory_utilization
+        logger.info(f"Rank {process_index}: about to call _set_vllm_ports() …")
+
         self._set_vllm_ports(seed=seed)
         vllm_port = self._vllm_port
         if vllm_gpu_memory_utilization == "auto":
@@ -204,18 +211,7 @@ class Evaluator:
         This ensures that downstream processes (like the vLLM engine) can correctly load
         the GPT2TokenizerFast tokenizer.
         """
-        # Check if latest_policy_path is already a 'hf_pretrained' directory.
-        if latest_policy_path.name == "hf_pretrained":
-            hf_pretrained_dir = latest_policy_path
-            logger.info(
-                f"latest_policy_path is already a 'hf_pretrained' directory: {hf_pretrained_dir}"
-            )
-        else:
-            hf_pretrained_dir = latest_policy_path / "hf_pretrained"
-            logger.info(f"Using subdirectory for tokenizer files: {hf_pretrained_dir}")
-
-        # Create the directory if it doesn't exist
-        hf_pretrained_dir.mkdir(exist_ok=True, parents=True)
+        hf_pretrained_dir = latest_policy_path
 
         # Look for existing tokenizer files (like tokenizer.json, vocab files, etc.)
         tokenizer_files = list(hf_pretrained_dir.glob("tokenizer*"))
@@ -237,6 +233,7 @@ class Evaluator:
         and then broadcasts the ports to all processes.
         """
         if self.distributed_state.process_index == 0:
+            logger.info("finding free ports")
             ports = find_n_free_ports(
                 self.distributed_state.num_processes, generator=self._port_generator_rng
             )

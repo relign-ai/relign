@@ -236,22 +236,26 @@ class PPOTrainer(BaseTrainer):
                         global_step_last_logged = self.state.global_step
 
             dataloader_iter = iter(dataloader)
+        
         dist.barrier()
 
         self.state.iteration += 1
         progress_bar.close()
         checkpoint_path = self.project_root_dir / "policy" / "cache"
-        latest_policy_path = self.policy.save_latest_policy_path(checkpoint_path)
-        logger.info(f"Latest policy path: {latest_policy_path}")
+
+        self.policy.save_latest_policy_path(checkpoint_path)
+        dist.barrier() 
 
         # destroy engines and release memory
         self.policy.destroy_ds_engines()
         release_memory()
         import gc
-
+  
         gc.collect()
         torch.cuda.empty_cache()
 
+        latest_policy_path = checkpoint_path / "actor" / "hf_pretrained"
+        logger.info(f"Latest policy path: {latest_policy_path}")
         # return latest policy path
         return latest_policy_path
 
@@ -534,6 +538,7 @@ class PPOTrainer(BaseTrainer):
             if not self.trainer_hparams.force_disable_kl_penalty:
                 shifted_ref_logprobs = inputs[COLUMN_REF_SHIFTED_LOGPS]
             else:
+                logger.info("KL penalty disabled")
                 shifted_ref_logprobs = None
 
             assert shifted_ref_logprobs != None
