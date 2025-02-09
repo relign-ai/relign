@@ -99,9 +99,8 @@ class TrainLoop:
             self.distributed_state.wait_for_everyone()
             # Evalutate
             if iteration % self.evaluation_freq == 0:
-                logger.info("Evaluation step")
                 if  self.distributed_state.is_main_process:
-                    logger.info("Evaluating the policy...")
+                    logger.info("Evaluating current policy...")
                     self._evaluate(iteration=iteration, current_policy_path=current_policy_path)
             
             self.distributed_state.wait_for_everyone()

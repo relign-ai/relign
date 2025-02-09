@@ -49,4 +49,4 @@ runner_test/
 #experiments/ testts
 *.arrow
 wandb/
-
+gitignore.py

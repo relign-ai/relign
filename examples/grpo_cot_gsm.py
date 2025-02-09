@@ -27,25 +27,34 @@ from relign.guidance.llms import OpenAIVLLM
 from relign.inference.inference_pipeline import VLLMInferencePipeline
 from relign.eval.evaluator import Evaluator
 from relign.eval.analyzer import TaskPerformanceAnalyzer
+from relign.models.base_model import PreTrainedModelForCausalLM, DIPreTrainedTokenizer
 
 
 def grpo_gsm(cfg, local_rank: int = -1):
     # ------ Deepspeed Config ------ #
     ds_config = cfg.deepspeed
     ds_config = OmegaConf.to_container(ds_config, resolve=True)
-
+    initial_model_name = 'realtreetune/rho-1b-sft-GSM8K'
     experiment_name = "grpo-cot-rho1b-gsm"
     experiment_dir = "experiment"
 
     # --------- Tokenizer --------------- #
-    tokenizer = AutoTokenizer.from_pretrained("realtreetune/rho-1b-sft-GSM8K")
+    tokenizer = DIPreTrainedTokenizer.from_di(
+        hf_model_name=initial_model_name,
+    )
 
-    # --------- Model Definition --------- #
+    # ---------Model Defenition ---------#
     def actor_model_fn():
-        # GRPO uses a single actor model (no aux critic).
-        return AutoModelForCausalLM.from_pretrained("realtreetune/rho-1b-sft-GSM8K")
+        # Load the base actor model from pretrained weights.
+        return PreTrainedModelForCasualLM.from_di(
+            hf_model_name=initial_model_name,
+            pretrained_args={
+                "use_flash_attention_2": True,
+            },
+        )
 
     # --------- Task Definition ---------- #
+    answer_prefix = '\n####'
     task = GSM8K(
         answer_prefix=None,
         load_dataset_dict=True,

@@ -97,7 +97,7 @@ class VLLMInferencePipeline(InferencePipeline):
         self.checkpoint_global_step = checkpoint_global_step
         self.model = model
         self.inference_strategy_cls = inference_strategy_cls
-        self.inference_strategy_kwrags = inference_strategy_kwargs
+        self.inference_strategy_kwargs = inference_strategy_kwargs
         self.api_base = api_base
 
         if self.inference_name is not None:
@@ -119,7 +119,7 @@ class VLLMInferencePipeline(InferencePipeline):
             f"Inference on {task.name} (split__shard__num_shards): {self.inference_job_id}"
         )
 
-        self.inference_strategy_kwargs = {"result_dir": self.get_result_dir()}
+        self.inference_strategy_kwargs["result_dir"] = self.get_result_dir()
         if enable_cloud_logging_during_inference:
             self.inference_strategy_kwargs["cloud_logger"] = self.cloud_logger
 
@@ -139,6 +139,7 @@ class VLLMInferencePipeline(InferencePipeline):
         if hasattr(self, "_cached_results_dir"):
             return self._cached_results_dir
 
+        # TODO: change exp root dir to project root dir for consistency
         result_dir = (
             self.exp_root_dir / "eval_inference_results" / self.inference_job_id
         )
