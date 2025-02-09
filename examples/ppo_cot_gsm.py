@@ -24,7 +24,7 @@ from relign.runners.distributed_runner import DistributedRunner
 from relign.common.vllm_server import VLLMServer
 from relign.guidance.llms import OpenAIVLLM
 from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor
-from relign.models.base_model import PreTrainedModelForCasualLM, DIPreTrainedTokenizer 
+from relign.models.base_model import PreTrainedModelForCasualLM, DIPreTrainedTokenizer
 
 
 def ppo_gsm(cfg, local_rank: int = -1):
@@ -32,7 +32,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
     ds_config = OmegaConf.to_container(ds_config, resolve=True)
     experiment_name = "ppo-cot-rho1b-gsm"
     experiment_dir = "experiment"
-    initial_model_name = 'realtreetune/rho-1b-sft-GSM8K'
+    initial_model_name = "realtreetune/rho-1b-sft-GSM8K"
     # --------- Tokenizer --------------- #
     tokenizer = DIPreTrainedTokenizer.from_di(
         hf_model_name=initial_model_name,
@@ -55,9 +55,8 @@ def ppo_gsm(cfg, local_rank: int = -1):
             pretrained_model=critic_backbone
         )  # critics need to be wrapped in a pretrained value head
 
-    
     # --------- Task Definition ----------#
-    answer_prefix = '\n####'
+    answer_prefix = "\n####"
     task = GSM8K(
         answer_prefix=answer_prefix,
         load_dataset_dict=True,
@@ -74,7 +73,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         timeout=1,
     )
 
-    num_episodes_per_iteration = 68 
+    num_episodes_per_iteration = 68
     num_rollouts_per_sample = 2
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
@@ -83,8 +82,8 @@ def ppo_gsm(cfg, local_rank: int = -1):
     sampling_temperature = 0.6
     num_epoch_per_iterations = 2
     gradient_accumulation_steps = 1
-    max_concurrent_programs = 32
-    max_concurrent_generations = 32
+    max_concurrent_programs = 8
+    max_concurrent_generations = 8
     guidance_llm_cls = OpenAIVLLM
     guidance_llm_kwargs = {
         "api_key": "EMPTY",
@@ -119,7 +118,6 @@ def ppo_gsm(cfg, local_rank: int = -1):
     Solution:
     """)
 
-
     # ---- Chain of thought Strategy --- #
     cot_inference_strategy_cls = COTInferenceStrategy
     cot_inference_strategy_kwargs = {
@@ -136,14 +134,14 @@ def ppo_gsm(cfg, local_rank: int = -1):
     }
 
     # ----------- Episode Generator ------------#
-    vllm_server = VLLMServer()
+    vllm_server = VLLMServer
     episode_generator = MathEpisodeGenerator
     episode_generator_kwargs = {
         "tokenizer": tokenizer,
         "num_episodes_per_iteration": num_episodes_per_iteration,
         "dataset_num_samples_per_iteration": int(num_dataset_samples_per_iteration),
         "reasoning_step_delimiter": "",
-        "answer_prefix": '\n\n# Answer\n',
+        "answer_prefix": "\n\n# Answer\n",
         "append_bos_to_query": True,
         "append_eos_to_response": True,
         "dataset_shuffle_on_each_iteration": True,
@@ -153,7 +151,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "fill_missing_episodes": True,
         "inference_strategy_cls": cot_inference_strategy_cls,
         "inference_strategy_kwargs": cot_inference_strategy_kwargs,
-        "vllm_server": vllm_server,
+        "vllm_server_cls": vllm_server,
         "vllm_gpu_memory_utilization": "auto",
         "wait_until_memory_release": True,
         "task": task,
@@ -202,7 +200,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "tokenizer": tokenizer,
         "inference_pipeline_cls": VLLMInferencePipeline,
         "inference_pipeline_kwargs": inference_pipeline_kwargs,
-        "vllm_server": vllm_server,
+        "vllm_server_cls": vllm_server,
         "vllm_gpu_memory_utilization": "auto",
         "wait_until_memory_release": True,
         "force_rerun": False,

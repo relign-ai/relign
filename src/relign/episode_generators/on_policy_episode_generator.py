@@ -37,7 +37,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         self,
         inference_strategy_cls: InferenceStrategy,
         inference_strategy_kwargs: Dict[str, Any],
-        vllm_server: VLLMServer,
+        vllm_server_cls: VLLMServer,
         task: Task,
         seed: int,
         initial_model_name_or_path: str,
@@ -69,7 +69,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
 
         self.inference_strategy_cls = inference_strategy_cls
         self.inference_strategy_kwargs = inference_strategy_kwargs
-        self.vllm_server = vllm_server
+        self.vllm_server_cls = vllm_server_cls
         self.task = task
         self.dataset_split = dataset_split
         self.seed = seed
@@ -542,6 +542,13 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
                 f"model={hf_ckpt_path_or_model}   port={vllm_port}   seed={seed}"
             )
             t0 = time.time()
+
+            self.vllm_server = VLLMServer(
+                seed=self.seed,
+                port=vllm_port,
+                gpu_memory_utilization=vllm_gpu_memory_utilization,
+            )
+
             server_url = self.vllm_server.start_server(
                 hf_ckpt_path_or_model=hf_ckpt_path_or_model,
                 gpu_idx=process_index,

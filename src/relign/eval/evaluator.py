@@ -25,7 +25,7 @@ class Evaluator:
         tokenizer,
         inference_pipeline_cls: InferencePipeline,
         inference_pipeline_kwargs: Optional[Dict],
-        vllm_server: VLLMServer,
+        vllm_server_cls: VLLMServer,
         wait_until_memory_release: bool,
         distributed_state: PartialState,
         project_root_dir: Path,
@@ -52,7 +52,7 @@ class Evaluator:
         self.inference_pipeline_cls = inference_pipeline_cls
         self.inference_pipeline_kwargs = inference_pipeline_kwargs
         self.distributed_state = distributed_state
-        self.vllm_server = vllm_server
+        self.vllm_server_cls = vllm_server_cls
         self.vllm_gpu_memory_utilization = vllm_gpu_memory_utilization
         self.wait_until_memory_release = wait_until_memory_release
         self.tokenizer = tokenizer
@@ -185,6 +185,13 @@ class Evaluator:
                 f"Rank #{process_index} starting vLLM: "
                 f"model={hf_ckpt_path_or_model}   port={vllm_port}   seed={seed}"
             )
+
+            self.vllm_server = self.vllm_server_cls(
+                port=vllm_port,
+                seed=self.seed,
+                gpu_memory_utilization=vllm_gpu_memory_utilization,
+            )
+
             server_url = self.vllm_server.start_server(
                 hf_ckpt_path_or_model=hf_ckpt_path_or_model,
                 gpu_idx=process_index,
