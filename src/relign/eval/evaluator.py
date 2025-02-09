@@ -138,6 +138,7 @@ class Evaluator:
         # Run analysis on inference results
         if self.analyzers is not None:
             for analyzer in self.analyzers:
+                logger.info(f"Running analyser: {analyzer(__name__)}")
                 analysis = analyzer.analyze(results)
                 analysis_results.append(analysis)
                 self._log_analysis_metrics(analysis)
@@ -186,7 +187,7 @@ class Evaluator:
                 f"model={hf_ckpt_path_or_model}   port={vllm_port}   seed={seed}"
             )
 
-            self.vllm_server = self.vllm_server_cls(
+            self.vllm_server = VLLMServer(
                 port=vllm_port,
                 seed=self.seed,
                 gpu_memory_utilization=vllm_gpu_memory_utilization,

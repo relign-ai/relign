@@ -125,10 +125,12 @@ class VLLMInferencePipeline(InferencePipeline):
 
         # Point the llm_guidance to the right serveri
         logger.info(f"Using inference strategy: {self.inference_strategy_kwargs}")
-        self.inference_strategy = inference_strategy_cls(**self.inference_strategy_kwargs)
+        self.inference_strategy = inference_strategy_cls(
+            **self.inference_strategy_kwargs
+        )
 
         if self.api_base is not None:
-            self.inference_strategy.init_guidance_llm(
+            self.inference_strategy._init_guidance_llm(
                 **{
                     "api_base": self.api_base,
                     "model": self.model,
