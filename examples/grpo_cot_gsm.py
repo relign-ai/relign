@@ -35,7 +35,7 @@ def grpo_gsm(cfg):
     # ------ Deepspeed Config ------ #
     ds_config = cfg.deepspeed
     ds_config = OmegaConf.to_container(ds_config, resolve=True)
-    initial_model_name = 'realtreetune/rho-1b-sft-GSM8K'
+    initial_model_name = "realtreetune/rho-1b-sft-GSM8K"
     experiment_name = "grpo-cot-rho1b-gsm"
     experiment_dir = "experiment"
 
@@ -55,7 +55,7 @@ def grpo_gsm(cfg):
         )
 
     # --------- Task Definition ---------- #
-    answer_prefix = '\n####'
+    answer_prefix = "\n####"
     task = GSM8K(
         answer_prefix=answer_prefix,
         load_dataset_dict=True,
@@ -74,7 +74,7 @@ def grpo_gsm(cfg):
     )
 
     # --------- Inference (Chain-of-thought) Strategy --------- #
-    num_episodes_per_iteration = 68 
+    num_episodes_per_iteration = 68
     num_rollouts_per_sample = 2
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
@@ -131,16 +131,16 @@ def grpo_gsm(cfg):
         "guidance_llm_cls": guidance_llm_cls,
         "guidance_llm_kwargs": guidance_llm_kwargs,
     }
-    
+
     # ----------- Episode Generator ------------ #
     vllm_server = VLLMServer()
-    episode_generator = MathEpisodeGeneratorGroupedRewards 
+    episode_generator = MathEpisodeGeneratorGroupedRewards
     episode_generator_kwargs = {
         "tokenizer": tokenizer,
         "num_episodes_per_iteration": num_episodes_per_iteration,
         "dataset_num_samples_per_iteration": int(num_dataset_samples_per_iteration),
         "reasoning_step_delimiter": "",
-        "answer_prefix": '\n\n# Answer\n',
+        "answer_prefix": "\n\n# Answer\n",
         "append_bos_to_query": True,
         "append_eos_to_response": True,
         "dataset_shuffle_on_each_iteration": True,
@@ -179,6 +179,7 @@ def grpo_gsm(cfg):
 
     # ----------- Algorithm -------------- #
     from relign.inference.inference_pipeline import VLLMInferencePipeline
+
     inference_pipeline_kwargs = {
         "inference_strategy_cls": cot_inference_strategy_cls,
         "inference_strategy_kwargs": cot_inference_strategy_kwargs,
@@ -189,6 +190,7 @@ def grpo_gsm(cfg):
 
     from relign.eval.evaluator import Evaluator
     from relign.eval.analyzer import TaskPerformanceAnalyzer
+
     evaluator_kwargs = {
         "task": task,
         "tokenizer": tokenizer,

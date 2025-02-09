@@ -522,9 +522,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         vllm_gpu_memory_utilization = self.vllm_gpu_memory_utilization
         logger.info(f"Rank #{process_index} looking for vLLM ports with seed {seed}")
 
-        self.distributed_state.wait_for_everyone()
         self._set_vllm_ports(seed=seed)
-        self.distributed_state.wait_for_everyone()
 
         logger.info(
             f"Rank #{process_index} after _set_vllm_ports, using port {self._vllm_port}"
@@ -665,7 +663,3 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
             return episode_obj
 
         return asdict(episode_obj)
-
-    # def _cloud_log(self, *args, **kwargs):
-    #     if self.is_main_process() and self.cloud_logger is not None:
-    #         self.cloud_logger.log(*args, **kwargs)
