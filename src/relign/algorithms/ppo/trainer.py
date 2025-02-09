@@ -1,4 +1,5 @@
-from typing import Dict, Tuple, Union, Optional, Literal
+import shutil
+from typing import Dict, Tuple, Union, Optional, Literal, List
 from pathlib import Path
 from dataclasses import dataclass
 import torch
@@ -80,7 +81,7 @@ class PPOHParams:
     kl_penalty_loss_type: Optional[Literal["kl", "abs", "mse", "control_variate"]] = (
         "control_variate"
     )
-    kl_penalty_loss_clip_max: float = 10 
+    kl_penalty_loss_clip_max: float = 10
     kl_penalty_loss_clip_min: float = 0
     force_disable_kl_penalty: bool = False
     target: Optional[float] = 6.0
@@ -149,6 +150,9 @@ class PPOTrainer(BaseTrainer):
             # engines are not cached, need to laod the latest weights from checkpoin path
             logger.info(f"Loading latest policy from latest policy path")
             self.policy.load_latest_policy_path()
+            self.policy._clean_old_temp_checkpoints(
+                self.project_root_dir / "policy" / "cache"
+            )
 
         # change to appropriate input structure
         episodes = self._hydrate_episodes(episodes)
@@ -236,7 +240,7 @@ class PPOTrainer(BaseTrainer):
                         global_step_last_logged = self.state.global_step
 
             dataloader_iter = iter(dataloader)
-        
+
         dist.barrier()
 
         self.state.iteration += 0
@@ -245,13 +249,13 @@ class PPOTrainer(BaseTrainer):
         # checkpoint_name = self._get_automatic_checkpoint_name()
 
         self.policy.save_latest_policy_path(checkpoint_path)
-        dist.barrier() 
+        dist.barrier()
 
         # destroy engines and release memory
         self.policy.destroy_ds_engines()
         release_memory()
         import gc
-  
+
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -543,7 +547,7 @@ class PPOTrainer(BaseTrainer):
                 shifted_ref_logprobs = None
 
             assert shifted_ref_logprobs != None
-             
+
             rewards, _, _ = self._compute_rewards(
                 scores, shifted_actor_logprobs, shifted_ref_logprobs, attention_mask
             )
@@ -830,7 +834,7 @@ class PPOTrainer(BaseTrainer):
 
         # Update Running Metrics
         running_metrics["_num_participating_tokens"] += num_tokens
-   
+
     def _get_automatic_checkpoint_name(self) -> str:
         checkpoint_format = self.get_checkpoint_format()
         checkpoint_name = checkpoint_format.format(

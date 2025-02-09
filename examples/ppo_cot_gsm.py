@@ -182,14 +182,6 @@ def ppo_gsm(cfg, local_rank: int = -1):
 
     # ----------- Algorithm--------------#
     # Define an inference pipeline for the evalution process
-    from relign.inference.inference_pipeline import VLLMInferencePipeline
-
-    inference_pipeline_kwargs = {
-        "inference_strategy_cls": cot_inference_strategy_cls,
-        "inference_strategy_kwargs": cot_inference_strategy_kwargs,
-        "task": task,
-        "dataset_split": "validation",
-    }
 
     from relign.eval.evaluator import Evaluator
     from relign.eval.analyzer import TaskPerformanceAnalyzer
@@ -200,9 +192,10 @@ def ppo_gsm(cfg, local_rank: int = -1):
     evaluator_cls = Evaluator
     evaluator_kwargs = {
         "task": task,
+        "dataset_split": "validation",
         "tokenizer": tokenizer,
-        "inference_pipeline_cls": VLLMInferencePipeline,
-        "inference_pipeline_kwargs": inference_pipeline_kwargs,
+        "inference_strategy_cls": cot_inference_strategy_cls,
+        "inference_strategy_kwargs": cot_inference_strategy_kwargs,
         "vllm_server_cls": vllm_server,
         "vllm_gpu_memory_utilization": "auto",
         "wait_until_memory_release": True,

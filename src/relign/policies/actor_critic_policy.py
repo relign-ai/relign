@@ -2,7 +2,7 @@ import shutil
 from dataclasses import dataclass
 import time
 from abc import abstractmethod
-from typing import Optional, Dict, Any, Callable, NamedTuple, Union
+from typing import Optional, Dict, Any, Callable, NamedTuple, Union, List
 from pathlib import Path
 
 
@@ -24,54 +24,6 @@ logger = get_logger(__name__)
 
 class CriticForwardOutput(NamedTuple):
     values: Optional[torch.Tensor] = None
-
-    def _maybe_init_ds_engine_for_training(
-        self,
-        model: PreTrainedModel,
-        ds_config: Optional[Dict[str, Any]],
-        is_actor: bool = True,
-    ):
-        """
-        If ds_config is provided, create optimizer + scheduler
-        and wrap the model in a DeepSpeedEngine for training.
-        Otherwise return the raw HF model.
-        """
-
-        if ds_config is None:
-            # user provided no DS config => just keep the raw model
-            return model
-
-        # TODO: Fix the optimizer and lrscheduler initialization
-        # 1) Create an optimizer
-        # optimizer = self.create_optimizer(model, weight_decay=self.weight_decay)
-        optimizer = None
-
-        # 2) Create a learning rate scheduler
-        self._patch_ds_config_for_lr_scheduler(
-            ds_config,
-            total_num_training_steps=self.total_num_training_steps,
-            warmup_steps=self.warmup_steps,
-            learning_rate=self.learning_rate,
-        )
-
-        lr_scheduler = None
-
-        self._patch_ds_config_for_optimizer(ds_config)
-        self._patch_ds_config_for_batch_size(ds_config, self.global_batch_size)
-        self._patch_ds_config_for_dtype(ds_config)
-        self._patch_ds_config_for_bucket_size(ds_config, self.actor_config)
-
-        # 3) Actually init the DS engine.
-        #    We rely on self._init_deepspeed_engine_for_training from DeepSpeedPolicy.
-        engine = self._init_deepspeed_engine_for_training(
-            model=model,
-            deepspeed_config=ds_config.config,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
-        )
-
-        # TODO: engine caching
-        return engine
 
 
 @dataclass
@@ -99,6 +51,8 @@ class ActorCriticPolicy(ActorPolicy):
 
         # Check if the actor_ds_config is an instance of HFTrainerDeepspeedconfig, otherwise instantiate it
 
+        cache_dir = Path(self.project_root_dir) / "policy" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
         self.critic_model_fn = critic_model_fn
         self.critic_config = critic_config
 
@@ -449,3 +403,17 @@ class ActorCriticPolicy(ActorPolicy):
 
     def get_checkpoint_format(self) -> str:
         return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
+
+    def _clean_old_temp_checkpoints(
+        self, checkpoint_dir, exclude: Optional[List[Path]] = None
+    ) -> None:
+        if exclude is None:
+            exclude = []
+
+        if self._is_main_process():
+            for checkpoint in checkpoint_dir.iterdir():
+                if checkpoint.is_dir():
+                    logger.info(f"Removing old temp checkpoint {checkpoint}")
+                    shutil.rmtree(checkpoint)
+
+        dist.barrier()

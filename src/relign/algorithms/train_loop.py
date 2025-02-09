@@ -1,4 +1,5 @@
-from typing import Union, Dict
+import shutil
+from typing import Union, Dict, List
 from pathlib import Path
 from tqdm import tqdm
 from logging import Logger
@@ -109,23 +110,23 @@ class TrainLoop:
             self.distributed_state.wait_for_everyone()
             dist.barrier()
 
-            ##################
-            #    Evaluate    #
-            ##################
-            # if iteration % self.evaluation_freq == 0:
-            #     self.distributed_state.wait_for_everyone()
-            #     if self.distributed_state.is_main_process:
-            #         logger.info(
-            #             f"Evaluating current policy... on rank {self.distributed_state.process_index}"
-            #         )
-            #         self._evaluate(
-            #             iteration=iteration, current_policy_path=current_policy_path
-            #         )
-            #     # Ensure all processes wait until evaluation is done.
-            # TODO: apperently this works. but why? only god knows.
-            # self.distributed_state.wait_for_everyone()
-            # dist.barrier()
+            #################
+            #   Evaluate    #
+            #################
+            if iteration % self.evaluation_freq == 0:
+                logger.info(
+                    f"Evaluating current policy... on rank {self.distributed_state.process_index}"
+                )
+                self._evaluate(
+                    iteration=iteration, current_policy_path=current_policy_path
+                )
 
+            self.distributed_state.wait_for_everyone()
+            dist.barrier()
+
+            #################
+            #   Checkpoint  #
+            #################
             logger.info(
                 f"Rank {self.distributed_state.process_index} done with evaluation."
             )
@@ -142,6 +143,13 @@ class TrainLoop:
                 self.episode_generator.tokenizer.save_pretrained(current_policy_path)
 
             # Synchronize after checkpointing.
+            self.distributed_state.wait_for_everyone()
+            dist.barrier()
+
+            #################
+            #  HouseCleaning #
+            ##################
+            self._clean_episodes()
             self.distributed_state.wait_for_everyone()
             dist.barrier()
 
@@ -205,9 +213,7 @@ class TrainLoop:
     def _evaluate(self, iteration: int, current_policy_path: Path):
         self.evaluator.evaluate(
             iteration=iteration,
-            tokenizer=self.episode_generator.tokenizer,
             latest_policy_path=current_policy_path,
-            from_checkpoints=False,
         )
 
     def _checkpoint(self, iteration: int):
@@ -217,6 +223,39 @@ class TrainLoop:
         )
         # TODO: checkpoint other parts of the train state here
 
-    @property
-    def logger(self) -> Logger:
-        raise NotImplementedError("logger method is not implemented yet.")
+    def _clean_episodes(self) -> None:
+        if self._is_main_process():
+            keep_iterations = []  # TODO: add checkpoint iterations here
+            keep_iterations += [0]  # Always keep the initial iteration
+            keep_iterations = set(keep_iterations)
+
+            # Remove unnecessary episodes insided experiment_root
+            for episode in self.project_root_dir.glob("episodes/episodes_*"):
+                if not episode.is_dir():
+                    continue
+
+                episode_iter = int(episode.name.split("_")[1])
+                if episode_iter in keep_iterations:
+                    continue
+
+                logger.info(
+                    f"Removing exp_root/episode {episode.name}; "
+                    f"excluding iterations: {keep_iterations}"
+                )
+                shutil.rmtree(episode, ignore_errors=True)
+
+            # Remove unnecessary temp_episodes
+            for episode in self.project_root_dir.glob("temp_episodes/iteration__*"):
+                if not episode.is_dir():
+                    continue
+
+                episode_iter = int(episode.name.split("__")[1])
+                if episode_iter in keep_iterations:
+                    continue
+
+                logger.info(
+                    f"Removing temp episode {episode.name}; "
+                    f"excluding iterations: {keep_iterations}"
+                )
+                shutil.rmtree(episode, ignore_errors=True)
+        dist.barrier()
