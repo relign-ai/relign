@@ -223,13 +223,10 @@ class TrainLoop:
         )
         # TODO: checkpoint other parts of the train state here
 
-    def _clean_episodes(self, exclude: List[str]) -> None:
+    def _clean_episodes(self) -> None:
         if self._is_main_process():
             keep_iterations = []  # TODO: add checkpoint iterations here
             keep_iterations += [0]  # Always keep the initial iteration
-            keep_iterations += [
-                int(self.parse_checkpoint_name(name)[0]) for name in exclude
-            ]
             keep_iterations = set(keep_iterations)
 
             # Remove unnecessary episodes insided experiment_root
