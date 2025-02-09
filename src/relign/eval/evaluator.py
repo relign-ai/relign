@@ -35,6 +35,7 @@ class Evaluator:
         distributed_state: PartialState,
         project_root_dir: Path,
         task: Task,
+        dataset_split: str,
         vllm_gpu_memory_utilization: Union[float, str] = "auto",
         force_rerun: bool = False,
         every_n_checkpoints: int = 1,  # TODO: do we still need this?
@@ -62,6 +63,7 @@ class Evaluator:
         self.wait_until_memory_release = wait_until_memory_release
         self.tokenizer = tokenizer
         self.task = task
+        self.dataset_split = dataset_split
         self.seed = seed
         self._port_generator_rng = random.Random(self.seed)
 
@@ -120,26 +122,9 @@ class Evaluator:
         dataset = self.task.get_datasets(self.dataset_split)
         logger.info(f"Original Dataset size: {len(dataset)}")
 
-        # if self.dataset_portion < 1.0:
-        #     if self.dataset_shuffle_before_portion:
-        #         dataset = dataset.shuffle(seed=42)
-        #     dataset = dataset.select(range(int(len(dataset) * self.dataset_portion)))
-        #     logger.info(
-        #         f"Portion {self.dataset_portion} of Dataset size: {len(dataset)}"
-        #     )
-
         logger.info(
             f"Dataset Examples: "
             f"{json.dumps([dataset[i] for i in range(min(5, len(dataset)))], indent=2, sort_keys=True)}"
-        )
-
-        dataset = dataset.shard(
-            self.dataset_num_shards, self.dataset_shard_index, contiguous=True
-        )
-
-        logger.info(
-            f"Sharded Dataset size: {len(dataset)} "
-            f"(shard {self.dataset_shard_index + 1} / {self.dataset_num_shards})"
         )
 
         inp_ds_path = inference_result_dir / f"input_dataset_{process_index}"

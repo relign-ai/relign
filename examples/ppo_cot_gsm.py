@@ -192,6 +192,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
     evaluator_cls = Evaluator
     evaluator_kwargs = {
         "task": task,
+        "dataset_split": "validation",
         "tokenizer": tokenizer,
         "inference_strategy_cls": cot_inference_strategy_cls,
         "inference_strategy_kwargs": cot_inference_strategy_kwargs,
