@@ -431,7 +431,10 @@ class ActorCriticPolicy(ActorPolicy):
             actor_hf_pretrained_path,
         )
         # TODO: technically one could move this one down  
-        self.actor.save_checkpoint(str(checkpoint_path / "actor"))
+        if self._is_main_process():
+            self.actor.save_checkpoint(str(checkpoint_path / "actor"))
+        dist.barrier()
+
         # If the DeepSpeed engines are not cached, we also save the critic HF weights,
         # as well as engine checkpoints for both the actor and critic.
         if not self.cache_ds_engines:

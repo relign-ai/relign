@@ -1,4 +1,5 @@
 import hydra
+from textwrap import dedent
 import argparse
 from pathlib import Path
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -9,7 +10,7 @@ from relign.policies.base_actor import ActorPolicy
 from relign.algorithms.train_loop import TrainLoop
 from relign.algorithms.grpo.trainer import GRPOTrainer
 from relign.episode_generators.envs.math_episode_generator import (
-    MathEpisodeGenerator,
+    MathEpisodeGeneratorGroupedRewards,
     MATHRewardFunction,
 )
 from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor
@@ -27,10 +28,10 @@ from relign.guidance.llms import OpenAIVLLM
 from relign.inference.inference_pipeline import VLLMInferencePipeline
 from relign.eval.evaluator import Evaluator
 from relign.eval.analyzer import TaskPerformanceAnalyzer
-from relign.models.base_model import PreTrainedModelForCausalLM, DIPreTrainedTokenizer
+from relign.models.base_model import DIPreTrainedTokenizer, PreTrainedModelForCasualLM
 
 
-def grpo_gsm(cfg, local_rank: int = -1):
+def grpo_gsm(cfg):
     # ------ Deepspeed Config ------ #
     ds_config = cfg.deepspeed
     ds_config = OmegaConf.to_container(ds_config, resolve=True)
@@ -56,7 +57,7 @@ def grpo_gsm(cfg, local_rank: int = -1):
     # --------- Task Definition ---------- #
     answer_prefix = '\n####'
     task = GSM8K(
-        answer_prefix=None,
+        answer_prefix=answer_prefix,
         load_dataset_dict=True,
         dataset_dict_path="data/gsm8k",
         intermetdiate_step_tags=["<think>", "</think>"],
@@ -73,11 +74,17 @@ def grpo_gsm(cfg, local_rank: int = -1):
     )
 
     # --------- Inference (Chain-of-thought) Strategy --------- #
-    n_episodes_per_iteration = 50
-    n_rollouts_per_sample = 10  # group size in GRPO
-    max_concurrent_programs = 1
-    max_concurrent_generations = 1
-
+    num_episodes_per_iteration = 68 
+    num_rollouts_per_sample = 2
+    num_dataset_samples_per_iteration = (
+        num_episodes_per_iteration / num_rollouts_per_sample
+    )
+    num_iterations = 1000
+    sampling_temperature = 0.6
+    num_epoch_per_iterations = 2
+    gradient_accumulation_steps = 1
+    max_concurrent_programs = 32
+    max_concurrent_generations = 32
     guidance_llm_cls = OpenAIVLLM
     guidance_llm_kwargs = {
         "api_key": "EMPTY",
@@ -94,7 +101,7 @@ def grpo_gsm(cfg, local_rank: int = -1):
         branch_factor_strategy=ListBranchFactor(branch_factors=branch_factors),
         program=program,
         program_kwargs={
-            "temperature": 0.8,
+            "temperature": sampling_temperature,
             "max_tokens": 1024,
             "top_p": 0.9,
             "stop": '"\n\n\nProblem:"',
@@ -104,44 +111,51 @@ def grpo_gsm(cfg, local_rank: int = -1):
         model_context_size=2047,
     )
 
-    question_template = """
+    question_template = dedent("""\
     [MATH_TASK] Problem:
     {query}
 
-    answr format:
-    <think>reasoning</rink>
     Solution:
-    """
+    """)
 
     # ---- Chain of Thought Strategy Instance --- #
-    cot_inference_strategy = COTInferenceStrategy(
-        samples=n_rollouts_per_sample,
-        question_field="query",
-        question_template=question_template,
-        max_concurrent_generations=max_concurrent_generations,
-        max_concurrent_programs=max_concurrent_programs,
-        answer_extractor=answer_extractor,
-        node_expander=node_expander,
-        guidance_llm_cls=guidance_llm_cls,
-        guidance_llm_kwargs=guidance_llm_kwargs,
-        max_depth=2,
-        result_dir=Path(experiment_dir) / "chain_of_thoughts",
-    )
-
+    cot_inference_strategy_cls = COTInferenceStrategy
+    cot_inference_strategy_kwargs = {
+        "samples": num_rollouts_per_sample,
+        "question_field": "query",
+        "question_template": question_template,
+        "max_concurrent_generations": max_concurrent_generations,
+        "max_concurrent_programs": max_concurrent_programs,
+        "answer_extractor": answer_extractor,
+        "node_expander": node_expander,
+        "guidance_llm_cls": guidance_llm_cls,
+        "guidance_llm_kwargs": guidance_llm_kwargs,
+    }
+    
     # ----------- Episode Generator ------------ #
     vllm_server = VLLMServer()
-    episode_generator = MathEpisodeGenerator
+    episode_generator = MathEpisodeGeneratorGroupedRewards 
     episode_generator_kwargs = {
         "tokenizer": tokenizer,
-        "num_episodes_per_iteration": n_episodes_per_iteration,
+        "num_episodes_per_iteration": num_episodes_per_iteration,
+        "dataset_num_samples_per_iteration": int(num_dataset_samples_per_iteration),
         "reasoning_step_delimiter": "",
-        "answer_prefix": "\n\n # Answer\n",
+        "answer_prefix": '\n\n# Answer\n',
+        "append_bos_to_query": True,
+        "append_eos_to_response": True,
+        "dataset_shuffle_on_each_iteration": True,
         "max_sequence_length": 2048,
         "max_question_length": 1512,
         "reward_function": reward_function,
-        "inference_strategy": cot_inference_strategy,
+        "fill_missing_episodes": True,
+        "inference_strategy_cls": cot_inference_strategy_cls,
+        "inference_strategy_kwargs": cot_inference_strategy_kwargs,
         "vllm_server": vllm_server,
-        "initial_model_name_or_path": "realtreetune/rho-1b-sft-GSM8K",
+        "vllm_gpu_memory_utilization": "auto",
+        "wait_until_memory_release": True,
+        "task": task,
+        "save_generations_every_n_iteration": 1,
+        "initial_model_name_or_path": initial_model_name,
         "question_template": question_template,
     }
 
@@ -150,13 +164,15 @@ def grpo_gsm(cfg, local_rank: int = -1):
     actor_kwargs = {
         "actor_model_fn": actor_model_fn,
         "actor_config": ds_config,
+        "temperature": sampling_temperature,
     }
 
     # ----------- Trainer --------------- #
     grpo_trainer_class = GRPOTrainer
     grpo_trainer_kwargs = {
         "target_batch_size": 8,
-        "gradient_accumulation_steps": 1,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "num_epochs_per_iteration": num_epoch_per_iterations,
         "dataloader_num_workers": 2,
         "dataloader_pin_memory": False,
     }
@@ -180,6 +196,9 @@ def grpo_gsm(cfg, local_rank: int = -1):
         "task": task,
         "dataset_split": "validation",
     }
+    from relign.eval.evaluator import Evaluator
+    from relign.eval.analyzer import TaskPerformanceAnalyzer
+
     evaluator_cls = Evaluator
     evaluator_kwargs = {
         "task": task,
@@ -188,6 +207,7 @@ def grpo_gsm(cfg, local_rank: int = -1):
         "inference_pipeline_kwargs": inference_pipeline_kwargs,
         "vllm_server": vllm_server,
         "vllm_gpu_memory_utilization": "auto",
+        "wait_until_memory_release": True,
         "force_rerun": False,
         "every_n_checkpoints": 1,
         "analyzers": [
