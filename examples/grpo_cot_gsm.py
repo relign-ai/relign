@@ -177,29 +177,18 @@ def grpo_gsm(cfg):
         "dataloader_pin_memory": False,
     }
 
-    # ----------- (Optional) Evaluation Pipeline --------------- #
-    # If you'd like to evaluate similarly to the PPO script, add an inference pipeline + evaluator:
+    # ----------- Algorithm -------------- #
+    from relign.inference.inference_pipeline import VLLMInferencePipeline
     inference_pipeline_kwargs = {
-        "inference_strategy_cls": COTInferenceStrategy,
-        "inference_strategy_kwargs": {
-            "samples": 1,
-            "max_depth": 2,
-            "question_field": "query",
-            "question_template": question_template,
-            "answer_extractor": answer_extractor,
-            "node_expander": node_expander,
-            "guidance_llm_cls": guidance_llm_cls,
-            "guidance_llm_kwargs": guidance_llm_kwargs,
-            "max_concurrent_generations": 1,
-            "max_concurrent_programs": 1,
-        },
+        "inference_strategy_cls": cot_inference_strategy_cls,
+        "inference_strategy_kwargs": cot_inference_strategy_kwargs,
         "task": task,
         "dataset_split": "validation",
     }
+    evaluator_cls = Evaluator
+
     from relign.eval.evaluator import Evaluator
     from relign.eval.analyzer import TaskPerformanceAnalyzer
-
-    evaluator_cls = Evaluator
     evaluator_kwargs = {
         "task": task,
         "tokenizer": tokenizer,
@@ -217,8 +206,6 @@ def grpo_gsm(cfg):
             )
         ],
     }
-
-    # ----------- Algorithm -------------- #
     num_iterations = 500
     algorithm_cls = TrainLoop
     algorithm_kwargs = {
