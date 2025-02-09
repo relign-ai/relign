@@ -74,13 +74,13 @@ def ppo_gsm(cfg, local_rank: int = -1):
     )
 
     num_episodes_per_iteration = 68
-    num_rollouts_per_sample = 2
+    num_rollouts_per_sample = 1
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
     )
     num_iterations = 1000
     sampling_temperature = 0.6
-    num_epoch_per_iterations = 2
+    num_epoch_per_iterations = 1
     gradient_accumulation_steps = 1
     max_concurrent_programs = 8
     max_concurrent_generations = 8
@@ -194,6 +194,9 @@ def ppo_gsm(cfg, local_rank: int = -1):
     from relign.eval.evaluator import Evaluator
     from relign.eval.analyzer import TaskPerformanceAnalyzer
 
+    analysers_cls = [TaskPerformanceAnalyzer]
+    analysers_kwargs = [{"task": task, "metrics_prefix": "task_performance"}]
+
     evaluator_cls = Evaluator
     evaluator_kwargs = {
         "task": task,
@@ -205,12 +208,8 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "wait_until_memory_release": True,
         "force_rerun": False,
         "every_n_checkpoints": 1,
-        "analyzers": [
-            TaskPerformanceAnalyzer(
-                task=task,
-                metrics_prefix="task_performance",
-            )
-        ],
+        "analysers_cls": analysers_cls,
+        "analysers_kwargs": analysers_kwargs,
     }
 
     algorithm_cls = TrainLoop
@@ -244,12 +243,15 @@ def ppo_gsm(cfg, local_rank: int = -1):
 
 def main():
     parser = argparse.ArgumentParser(description="Deepspeed training")
-    parser.add_argument("--local_rank", type=int, default=-1)
-    args, unknown = parser.parse_known_args()
+    # parser.add_argument("--local_rank", type=int, default=-1)
+    # args, unknown = parser.parse_known_args()
 
     hydra.initialize(config_path="../configs", version_base=None)
     cfg = hydra.compose(config_name="config")
-    ppo_gsm(cfg=cfg, local_rank=args.local_rank)
+    ppo_gsm(
+        cfg=cfg,
+        # local_rank=args.local_rank
+    )
 
 
 if __name__ == "__main__":

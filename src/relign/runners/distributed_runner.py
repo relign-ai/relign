@@ -4,6 +4,7 @@ from typing import Type, Generic, Dict, Any, TypeVar
 from datetime import timedelta
 
 import torch
+from deepspeed import comm as dist
 
 from relign.runners.base_runner import BaseRunner
 from relign.policies.base_policy import BasePolicy
@@ -11,6 +12,10 @@ from relign.algorithms.base_trainer import BaseTrainer
 from relign.episode_generators.base_episode_generator import BaseEpisodeGenerator
 from relign.algorithms.train_loop import TrainLoop
 from relign.policies.base_actor import DeepSpeedPolicy
+
+from relign.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # Define TypeVars for Generics
@@ -71,6 +76,9 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
                 from wandb.sdk.wandb_run import Run
 
                 self.cloud_logger: Run = self._create_cloud_logger()
+
+        if dist.is_initialized():
+            logger.info("Distributed is initialized")
 
         if self.distributed_state.use_distributed:
             self.distributed_state.wait_for_everyone()

@@ -13,7 +13,7 @@ from relign.utils.dataset import remove_null_columns
 from relign.eval.evaluator import Evaluator
 from relign.eval.analyzer import TaskPerformanceAnalyzer
 from relign.inference.inference_pipeline import InferencePipeline
-
+from deepspeed import comm as dist
 from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -68,48 +68,60 @@ class TrainLoop:
 
     def learn(self):
         """
-        Main training loop. Trains the policy for 'num rounds' rounds.
-        Evaluates every 'eval_freq' rounds.
+        Main training loop. Trains the policy for 'num_iterations' rounds.
+        Evaluates every 'evaluation_freq' rounds.
         Checkpoints every 'checkpoint_freq' rounds.
         """
         is_local_main_process = self.distributed_state.is_local_main_process
         current_policy_path = None
+
         for iteration in tqdm(range(self.num_iterations)):
             if is_local_main_process:
                 logger.info("*" * 80)
                 logger.info(f"Running iteration {iteration}")
                 logger.info("*" * 80)
 
-            # Collect rollouts under the current policy.
+            # Generate episodes under the current policy.
+            logger.info(
+                f"Rank {self.distributed_state.process_index}: About to _generate_episodes() for iteration {iteration}"
+            )
             episodes = self._generate_episodes(
                 iteration=iteration, current_policy_path=current_policy_path
             )
-
-            self.episode_generator.log_episodes(
-                episodes, iteration, num_examples=3,
-                seed=self.seed, log_to_cloud = True
+            logger.info(
+                f"Rank {self.distributed_state.process_index} done with episode generation."
             )
-            
-            logger.info(f"Rank {self.distributed_state.process_index} done with episode generation.")
-            self.distributed_state.wait_for_everyone()
 
+            # Train the policy and get the latest policy path.
             current_policy_path = self.trainer.step(episodes=episodes)
-            logger.info(f"Rank {self.distributed_state.process_index} done with trainer step.")
-            
+            logger.info(
+                f"Rank {self.distributed_state.process_index} done with trainer step."
+            )
+
+            # Synchronize all ranks before moving to evaluation.
             self.distributed_state.wait_for_everyone()
-            # Evalutate
+
+            # Evaluation: only run on the main process.
             if iteration % self.evaluation_freq == 0:
-                if  self.distributed_state.is_main_process:
-                    logger.info("Evaluating current policy...")
-                    self._evaluate(iteration=iteration, current_policy_path=current_policy_path)
-            
-            self.distributed_state.wait_for_everyone()
+                if self.distributed_state.is_main_process:
+                    logger.info(
+                        f"Evaluating current policy... on rank {self.distributed_state.process_index}"
+                    )
+                    self._evaluate(
+                        iteration=iteration, current_policy_path=current_policy_path
+                    )
+                # Ensure all processes wait until evaluation is done.
 
-            # Checkpoint
-            # if iteration % self.checkpoint_freq == 0:
-            #     self._checkpoint(iteration=iteration)
+            dist.barrier()
 
-            # Save the tokenizer inside the policy checkpoint
+            logger.info(
+                f"Rank {self.distributed_state.process_index} done with evaluation."
+            )
+
+            # Checkpointing (e.g. saving tokenizer) -- only on main process.
+            logger.info(
+                f"Rank {self.distributed_state.process_index} about to checkpoint."
+            )
             if (
                 current_policy_path is not None
                 and self.episode_generator.tokenizer is not None
@@ -117,6 +129,8 @@ class TrainLoop:
             ):
                 logger.info(f"Saving the tokenizer at {current_policy_path}")
                 self.episode_generator.tokenizer.save_pretrained(current_policy_path)
+            # Synchronize after checkpointing.
+            dist.barrier()
 
             if is_local_main_process:
                 logger.info(f"Iteration {iteration} complete")
@@ -134,6 +148,9 @@ class TrainLoop:
             current_policy_path: path to the weights of the current policy.
             #TODO allow_from_cache: bool = True,
         """
+        # Wait for all processes to reach this point
+        if self.distributed_state.use_distributed:
+            self.distributed_state.wait_for_everyone()
         # TODO: handle distributed environments differently
         # for now we just generate it in the main process
         # Feth the epiode path on all the devices
@@ -146,6 +163,9 @@ class TrainLoop:
                     iteration=iteration, latest_policy_path=current_policy_path
                 )
         else:
+            logger.info(
+                f"rank {self.distributed_state.process_index} entering generating gen."
+            )
             episodes = self.episode_generator.generate(
                 iteration=iteration, latest_policy_path=current_policy_path
             )
@@ -155,6 +175,15 @@ class TrainLoop:
 
         self.distributed_state.wait_for_everyone()
         episode_dataset = Dataset.load_from_disk(str(episode_path))
+        self.episode_generator.log_episodes(
+            episode_dataset,
+            iteration,
+            num_examples=3,
+            seed=self.seed,
+            log_to_cloud=True,
+        )
+        self.distributed_state.wait_for_everyone()
+
         return episode_dataset
 
     def _evaluate(self, iteration: int, current_policy_path: Path):

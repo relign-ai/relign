@@ -420,6 +420,7 @@ class ActorCriticPolicy(ActorPolicy):
         We will append '/actor/hf_pretrained' and '/critic/hf_pretrained'
         accordingly here.
         """
+
         # Path to store the HF version of the actor
         actor_hf_pretrained_path = checkpoint_path / "actor" / "hf_pretrained"
         # Path to store the HF version of the critic
@@ -430,7 +431,7 @@ class ActorCriticPolicy(ActorPolicy):
             self.actor,
             actor_hf_pretrained_path,
         )
-        # TODO: technically one could move this one down  
+        # TODO: technically one could move this one down
         self.actor.save_checkpoint(str(checkpoint_path / "actor"))
         dist.barrier()
 
@@ -444,3 +445,6 @@ class ActorCriticPolicy(ActorPolicy):
             # Actually save the full engine state for both
             self.critic.save_checkpoint(str(checkpoint_path / "critic"))
             # Return the path of the (actor) HF pretrained directory for inference
+
+    def get_checkpoint_format(self) -> str:
+        return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"

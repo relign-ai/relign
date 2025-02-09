@@ -121,18 +121,11 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         The main process searches for self.distributed_state.num_processes's free ports.
         and then broadcasts the ports to all processes.
         """
-        if self.distributed_state.process_index == 0:
-            ports = find_n_free_ports(
-                self.distributed_state.num_processes, generator=self._port_generator_rng
-            )
-            logger.info(f"Found free ports: {ports}")
-        else:
-            ports = [0] * self.distributed_state.num_processes
-
-        from accelerate.utils import broadcast_object_list
-
-        ports = broadcast_object_list(ports, from_process=0)
-        release_memory()
+        # if self.distributed_state.process_index == 0:
+        ports = find_n_free_ports(
+            self.distributed_state.num_processes, generator=self._port_generator_rng
+        )
+        logger.info(f"Found free ports: {ports}")
 
         self._vllm_port = ports[self.distributed_state.process_index]
         logger.info(
@@ -212,8 +205,15 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         """
         Generate episodes by sampling from the model.
         """
+        # First, we'll log that we're entering the generate method with our rank (process_index)
+        process_index = self.distributed_state.process_index
+        logger.info(f"[RANK={process_index}] Entering generate method...")
+
         this_process_device = self.distributed_state.device
         release_memory()
+        logger.info(
+            f"[RANK={process_index}] Finished release_memory() after entering generate."
+        )
 
         if self.vllm_min_available_gpu_memory_mb is not None:
             total_mem_mb = (
@@ -222,7 +222,7 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
             )
             used_threshold_mb = total_mem_mb - self.vllm_min_available_gpu_memory_mb
             logger.info(
-                f"Need at least {self.vllm_min_available_gpu_memory_mb}. "
+                f"[RANK={process_index}] Need at least {self.vllm_min_available_gpu_memory_mb} MB free. "
                 f"Waiting for GPU{this_process_device.index} used memory to be below {used_threshold_mb} MB. "
                 f"Total GPU memory: {total_mem_mb} MB."
             )
@@ -230,23 +230,30 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
                 this_process_device.index,
                 threshold_mb=used_threshold_mb,
             )
+            logger.info(f"[RANK={process_index}] Finished waiting for memory release.")
 
         device_index = self._get_device_index()
         gpu_memory_usage_before_mb = get_gpu_memory()[device_index]
 
         from deepspeed.runtime.utils import see_memory_usage
 
-        see_memory_usage("Before generating episodes", force=True)
+        see_memory_usage(
+            f"[RANK={process_index}] Before generating episodes", force=True
+        )
         if iteration is None:
             self._log_on_main(
                 "Iteration is None. Using 0 as the iteration.", level="warning"
             )
             iteration = 0
 
-        process_index = self.distributed_state.process_index
+        logger.info(f"[RANK={process_index}] iteration is set to {iteration}.")
 
         # Prepare the dataset on all processes
+        logger.info(f"[RANK={process_index}] Checking if _orig_ds is None.")
         if self._orig_ds is None:
+            logger.info(
+                f"[RANK={process_index}] _orig_ds is None, entering main_process_first..."
+            )
             with self.distributed_state.main_process_first():
                 self._init_orig_ds()
 
@@ -513,42 +520,43 @@ class OnPolicyEpisodeGenerator(BaseEpisodeGenerator):
         seed: int,
     ) -> Callable[[], Tuple[VLLMServer, Dict[str, Any]]]:
         vllm_gpu_memory_utilization = self.vllm_gpu_memory_utilization
+        logger.info(f"Rank #{process_index} looking for vLLM ports with seed {seed}")
+
+        self.distributed_state.wait_for_everyone()
         self._set_vllm_ports(seed=seed)
+        self.distributed_state.wait_for_everyone()
+
+        logger.info(
+            f"Rank #{process_index} after _set_vllm_ports, using port {self._vllm_port}"
+        )
         vllm_port = self._vllm_port
+
         if vllm_gpu_memory_utilization == "auto":
             # Compute the GPU utilization based on amount of remaining memory
             allocated_mem_mb = get_gpu_memory()[process_index]
             total_mem_mb = (
                 torch.cuda.get_device_properties(process_index).total_memory / 1024**2
             )
-
             remaining_mem_mb = (
                 total_mem_mb - allocated_mem_mb
-            ) * 0.8  # Allow for 10% tolerance
+            ) * 0.8  # Allow for tolerance
             vllm_gpu_memory_utilization = round(remaining_mem_mb / total_mem_mb, 2)
-
             logger.info(
                 f"GPU #{process_index} Auto-computed vLLM GPU memory utilization: {vllm_gpu_memory_utilization}. "
-                f"Currently Allocated: {allocated_mem_mb} MB, "
-                f"Total: {total_mem_mb} MB, "
-                f"Remaining: {remaining_mem_mb} MB."
+                f"Allocated: {allocated_mem_mb} MB, Total: {total_mem_mb} MB, Remaining: {remaining_mem_mb} MB."
             )
 
         def _init() -> Tuple[VLLMServer, Dict[str, Any]]:
             vllm_log_path = results_dir / "vllm_server.log"
-
             logger.info(
-                f"Rank #{process_index} starting vLLM: "
-                f"model={hf_ckpt_path_or_model}   port={vllm_port}   seed={seed}"
+                f"Rank #{process_index} starting vLLM: model={hf_ckpt_path_or_model} port={vllm_port} seed={seed}"
             )
             t0 = time.time()
-
             self.vllm_server = VLLMServer(
                 seed=self.seed,
                 port=vllm_port,
                 gpu_memory_utilization=vllm_gpu_memory_utilization,
             )
-
             server_url = self.vllm_server.start_server(
                 hf_ckpt_path_or_model=hf_ckpt_path_or_model,
                 gpu_idx=process_index,

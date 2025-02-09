@@ -25,6 +25,8 @@ class Evaluator:
         tokenizer,
         inference_pipeline_cls: InferencePipeline,
         inference_pipeline_kwargs: Optional[Dict],
+        analysers_cls: List[Analyzer],
+        analysers_kwargs: List[Dict],
         vllm_server_cls: VLLMServer,
         wait_until_memory_release: bool,
         distributed_state: PartialState,
@@ -33,7 +35,6 @@ class Evaluator:
         vllm_gpu_memory_utilization: Union[float, str] = "auto",
         force_rerun: bool = False,
         every_n_checkpoints: int = 1,  # TODO: do we still need this?
-        analyzers=Optional[List[Analyzer]],
         cloud_logger: Optional[Callable] = None,
         seed: int = 69,
     ):
@@ -47,7 +48,8 @@ class Evaluator:
         self._init_evaluation_dir()
         self.force_rerun = force_rerun
         self.every_n_checkpoints = every_n_checkpoints
-        self.analyzers = analyzers
+        self.analysers_cls = analysers_cls
+        self.analysers_kwargs = analysers_kwargs
         self.cloud_logger = cloud_logger
         self.inference_pipeline_cls = inference_pipeline_cls
         self.inference_pipeline_kwargs = inference_pipeline_kwargs
@@ -59,6 +61,13 @@ class Evaluator:
         self.task = task
         self.seed = seed
         self._port_generator_rng = random.Random(self.seed)
+
+        # Initialize the analyzers
+        self.analysers = []
+        for analyser, kwrgs in zip(self.analysers_cls, self.analysers_kwargs):
+            kwrgs["cloud_logger"] = self.cloud_logger
+            kwrgs["project_root_dir"] = self.project_root_dir
+            self.analysers.append(analyser(**kwrgs))
 
     def _init_evaluation_dir(self):
         evaluation_dir = self.project_root_dir / "evals"
@@ -78,7 +87,6 @@ class Evaluator:
         logger.info(f"Process {this_process_device} is evaluating")
         release_memory()
 
-        # TODO: Do batch evaluations on all the checkpints
         if not from_checkpoints:
             model_cpt_path = latest_policy_path
         else:
@@ -86,10 +94,9 @@ class Evaluator:
                 "Evaluation from checkpoints is not yet implemented"
             )
 
-        assert latest_policy_path != None
+        assert latest_policy_path is not None, "latest_policy_path cannot be None."
         latest_policy_path = self._prepare_ckpt(latest_policy_path)
 
-        # eval_dir_path = Path(self.evaluation_dir / model_cpt)
         eval_dir = Path(self.project_root_dir / "evals")
         eval_dir.mkdir(exist_ok=True)
         inference_result_dir = Path(eval_dir / f"it_{iteration}")
@@ -106,11 +113,10 @@ class Evaluator:
             seed=self.seed,
         )
 
-        # Starts thhe vllm server and retuirns the server kwargs
+        # Starts the vLLM server and returns the server kwargs.
         vllm_server, server_kwargs = vllm_init_fn()
 
         try:
-            # instantiate the infernce pipeline, with the correct inference
             infer_pipeline = self.inference_pipeline_cls(
                 **self.inference_pipeline_kwargs,
                 **server_kwargs,
@@ -118,12 +124,11 @@ class Evaluator:
                 cloud_logger=self.cloud_logger,
             )
 
-            # Run the inference pipeline
             results = infer_pipeline.generate()
             logger.info(f"Evaluation results: {results}")
 
         finally:
-            # Stop the server
+            # Stop the vLLM server and clean up GPU memory.
             vllm_server.stop_server()
             del vllm_server
             release_memory()
@@ -134,11 +139,9 @@ class Evaluator:
             release_memory()
 
         analysis_results = []
-
-        # Run analysis on inference results
-        if self.analyzers is not None:
-            for analyzer in self.analyzers:
-                logger.info(f"Running analyser: {analyzer(__name__)}")
+        if self.analysers is not None:
+            for analyzer in self.analysers:
+                logger.info(f"Running analyser: {analyzer.__class__.__name__}")
                 analysis = analyzer.analyze(results)
                 analysis_results.append(analysis)
                 self._log_analysis_metrics(analysis)

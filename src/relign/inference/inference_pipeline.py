@@ -118,15 +118,12 @@ class VLLMInferencePipeline(InferencePipeline):
         logger.info(
             f"Inference on {task.name} (split__shard__num_shards): {self.inference_job_id}"
         )
-
-        self.inference_strategy_kwargs["result_dir"] = self.get_result_dir()
-        if enable_cloud_logging_during_inference:
-            self.inference_strategy_kwargs["cloud_logger"] = self.cloud_logger
-
         # Point the llm_guidance to the right serveri
         logger.info(f"Using inference strategy: {self.inference_strategy_kwargs}")
         self.inference_strategy = inference_strategy_cls(
-            **self.inference_strategy_kwargs
+            **self.inference_strategy_kwargs,
+            result_dir=self.get_result_dir(),
+            cloud_logger=self.cloud_logger,
         )
 
         if self.api_base is not None:

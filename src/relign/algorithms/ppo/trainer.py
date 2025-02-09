@@ -239,9 +239,10 @@ class PPOTrainer(BaseTrainer):
         
         dist.barrier()
 
-        self.state.iteration += 1
+        self.state.iteration += 0
         progress_bar.close()
         checkpoint_path = self.project_root_dir / "policy" / "cache"
+        # checkpoint_name = self._get_automatic_checkpoint_name()
 
         self.policy.save_latest_policy_path(checkpoint_path)
         dist.barrier() 
@@ -829,3 +830,15 @@ class PPOTrainer(BaseTrainer):
 
         # Update Running Metrics
         running_metrics["_num_participating_tokens"] += num_tokens
+   
+    def _get_automatic_checkpoint_name(self) -> str:
+        checkpoint_format = self.get_checkpoint_format()
+        checkpoint_name = checkpoint_format.format(
+            iteration=str(self.state.iteration).zfill(4),
+            epoch=f"{self.state.epoch:.2f}",
+            global_step=str(self.state.global_step).zfill(4),
+        )
+        return checkpoint_name
+
+    def get_checkpoint_format(self) -> str:
+        return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
