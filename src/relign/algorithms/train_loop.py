@@ -234,6 +234,7 @@ class TrainLoop:
                 if not episode.is_dir():
                     continue
 
+                # TODO: make this a class. do it properly
                 # episode_iter = int(episode.name.split("_")[1])
                 # if episode_iter in keep_iterations:
                 #     continue
