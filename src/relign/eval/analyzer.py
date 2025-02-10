@@ -20,7 +20,7 @@ class Analyzer:
         metrics_prefix: str = "",
         cloud_logger: Optional[Run] = None,
         global_step: Optional[int] = None,
-        plot_prefix: Optional[str] = None,
+        plot_prefix: Optional[str] = "eval",
         project_root_dir: Optional[Path] = None,
         distributed_state: Optional[PartialState] = None,
     ):
@@ -54,7 +54,7 @@ class Analyzer:
             analysis_root /= analysis_id
         return analysis_root
 
-    def log_metrics(self, metrics):
+    def log_metrics(self, metrics, global_step):
         # Log the metrics to the console
         logger.info(f"Metrics: {metrics}")
 
@@ -62,16 +62,16 @@ class Analyzer:
         self.log(metrics)
 
         # Log the metrics to the cloud
-        if hasattr(self, "cloud_logger") and self.cloud_logger is not None:
-            if self.global_step is not None and self.plot_prefix is not None:
-                plot_metrics = copy.deepcopy(metrics)
-                plot_metrics = {
-                    f"{self.plot_prefix}/{k}": v for k, v in plot_metrics.items()
-                }
-                self.cloud_logger.log(
-                    {**plot_metrics, "train/global_step": self.global_step}
-                )
-
+        if self.cloud_logger is not None:
+            logger.info(f"logging cloud metrics")
+            plot_metrics = copy.deepcopy(metrics)
+            plot_metrics = {
+                f"{self.plot_prefix}/{k}": v for k, v in plot_metrics.items()
+            }
+            self.cloud_logger.log(
+                {**plot_metrics, "train/global_step": global_step}
+            )
+            
             # Append the analysis ID to the metrics
             prefix = f"analysis/{self.__class__.__name__}/"
             analysis_id = self.get_analysis_id()
@@ -126,10 +126,10 @@ class TaskPerformanceAnalyzer(Analyzer):
         # return super().get_analysis_id() + self.results_dir.name
         return super().get_analysis_id()
 
-    def analyze(self, results: Dataset):
+    def analyze(self, results: Dataset, global_step):
         super().analyze()
         # logger.info(f"Analyzing {self.result_dir}...")
-
+        
         # # Load the mutated dataset
         # output_dataset = Dataset.load_from_disk(str(self.result_dir))
 
@@ -143,5 +143,5 @@ class TaskPerformanceAnalyzer(Analyzer):
             predictions=predictions, references=references
         )
 
-        self.log_metrics(metrics)
+        self.log_metrics(metrics, global_step)
         return metrics

@@ -5,7 +5,7 @@ import random
 from typing import Optional, Callable, Dict, Tuple, Dict, Any, Union, List
 
 import torch
-from datasets import Dataset
+from datasets import Dataset, concatenate_datasets
 from transformers import PreTrainedTokenizer
 from accelerate import PartialState
 from accelerate.utils import release_memory
@@ -80,6 +80,7 @@ class Evaluator:
 
     def evaluate(
         self,
+        global_step : int,
         iteration: int,
         latest_policy_path: Optional[Path] = None,
     ):
@@ -120,6 +121,7 @@ class Evaluator:
         # Prepare the eval dataset
         ####################
         dataset = self.task.get_datasets(self.dataset_split)
+        num_evals = len(dataset)
         logger.info(f"Original Dataset size: {len(dataset)}")
 
         logger.info(
@@ -138,13 +140,13 @@ class Evaluator:
             contiguous=True,
         )
 
-        results_dir = inference_result_dir / "eval_results" / f"results_{process_index}"
+        results_dir = inference_result_dir / "eval_results" / f"shard_{process_index}"
         results_dir.mkdir(parents=True, exist_ok=True)
 
         ######################################
         # Prepare the server and run inference
         ######################################
-        seed = self.seed + process_index * 100 + iteration
+        seed = self.seed + process_index * 100 
         vllm_init_fn = self._get_vllm_init_fn(
             results_dir=inference_result_dir,
             hf_ckpt_path_or_model=str(latest_policy_path),
@@ -161,16 +163,40 @@ class Evaluator:
             seed=seed,
         )
 
-        logger.info(f"Evaluation results: {results}")
+        self.distributed_state.wait_for_everyone() 
 
-        analysis_results = []
-        if self.analysers is not None:
-            for analyzer in self.analysers:
-                logger.info(f"Running analyser: {analyzer.__class__.__name__}")
-                analysis = analyzer.analyze(results)
-                analysis_results.append(analysis)
-                self._log_analysis_metrics(analysis)
+        ######################
+        #  Recombine results #
+        ######################
+        merged_results = None
+        if self.is_main_process():
+            shard_paths = list((inference_result_dir/ f"eval_results").glob("shard_*"))
+            shard_paths.sort(key=lambda x: int(x.name.split("shard_")[-1]))
+            merged = concatenate_datasets(
+                [Dataset.load_from_disk(str(p)) for p in shard_paths]
+            )
 
+            if len(merged) > num_evals:
+                merged = merged.shuffle(seed=self.seed + iteration)
+                merged = merged.select(range(num_evals))
+            
+            merged.save_to_disk(str(inference_result_dir/ "evals" / "merged"))
+            # del merged
+            # release_memory()
+
+        logger.info(f"Merged results {merged_results}")
+        ################
+        #    Analyze   #
+        ################
+        if self.distributed_state.is_main_process():
+            analysis_results = []
+            if self.analysers is not None:
+                for analyzer in self.analysers:
+                    logger.info(f"Running analyser: {analyzer.__class__.__name__}")
+                    analysis = analyzer.analyze(merged_results, global_step)
+                    analysis_results.append(analysis)
+        
+        self.distributed_state.wait_for_everyone()
         return analysis_results
 
     def _run_inference(
@@ -247,7 +273,6 @@ class Evaluator:
         results = Dataset.load_from_disk(str(results_root_dir / "results_ds"))
         return results
 
-    def _log_analysis_metrics(self, analysis): ...
 
     def _get_vllm_init_fn(
         self,

@@ -30,7 +30,7 @@ from relign.models.base_model import PreTrainedModelForCasualLM, DIPreTrainedTok
 def ppo_gsm(cfg, local_rank: int = -1):
     ds_config = cfg.deepspeed
     ds_config = OmegaConf.to_container(ds_config, resolve=True)
-    experiment_name = "ppo-cot-rho1b-gsm"
+    experiment_name = "relign-ppo-gsm8k"
     experiment_dir = "experiment"
     initial_model_name = "realtreetune/rho-1b-sft-GSM8K"
     # --------- Tokenizer --------------- #
@@ -73,17 +73,18 @@ def ppo_gsm(cfg, local_rank: int = -1):
         timeout=1,
     )
 
-    num_episodes_per_iteration = 68
-    num_rollouts_per_sample = 1
+    num_episodes_per_iteration = 64 
+    num_rollouts_per_sample = 2
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
     )
-    num_iterations = 1000
+    num_iterations = 600 
     sampling_temperature = 0.6
-    num_epoch_per_iterations = 1
-    gradient_accumulation_steps = 1
-    max_concurrent_programs = 8
-    max_concurrent_generations = 8
+    num_epoch_per_iterations = 2
+    target_batch_size = 64
+    gradient_accumulation_steps = 4
+    max_concurrent_programs = 512 
+    max_concurrent_generations = 128
     guidance_llm_cls = OpenAIVLLM
     guidance_llm_kwargs = {
         "api_key": "EMPTY",
@@ -173,10 +174,10 @@ def ppo_gsm(cfg, local_rank: int = -1):
     # ----------- Trainer ---------------#
     ppo_trainer_class = PPOTrainer
     ppo_trainer_kwargs = {
-        "target_batch_size": 8,
+        "target_batch_size": target_batch_size,
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "num_epochs_per_iteration": num_epoch_per_iterations,
-        "dataloader_num_workers": 2,
+        "dataloader_num_workers": 4,
         "dataloader_pin_memory": False,
     }
 

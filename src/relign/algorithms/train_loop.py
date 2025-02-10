@@ -118,7 +118,9 @@ class TrainLoop:
                     f"Evaluating current policy... on rank {self.distributed_state.process_index}"
                 )
                 self._evaluate(
-                    iteration=iteration, current_policy_path=current_policy_path
+                    iteration=iteration, 
+                    global_step=self.trainer.state.global_step,
+                    current_policy_path=current_policy_path
                 )
 
             self.distributed_state.wait_for_everyone()
@@ -146,7 +148,7 @@ class TrainLoop:
             self.distributed_state.wait_for_everyone()
             dist.barrier()
 
-            #################
+            ##################
             #  HouseCleaning #
             ##################
             self._clean_episodes()
@@ -210,9 +212,13 @@ class TrainLoop:
 
         return episode_dataset
 
-    def _evaluate(self, iteration: int, current_policy_path: Path):
+    def _evaluate(
+            self, 
+            iteration: int, 
+            global_step:int ,current_policy_path: Path):
         self.evaluator.evaluate(
             iteration=iteration,
+            global_step=global_step,
             latest_policy_path=current_policy_path,
         )
 
@@ -224,7 +230,7 @@ class TrainLoop:
         # TODO: checkpoint other parts of the train state here
 
     def _clean_episodes(self) -> None:
-        if self._is_main_process():
+        if self.distributed_state.is_main_process:
             keep_iterations = []  # TODO: add checkpoint iterations here
             keep_iterations += [0]  # Always keep the initial iteration
             keep_iterations = set(keep_iterations)
@@ -234,9 +240,9 @@ class TrainLoop:
                 if not episode.is_dir():
                     continue
 
-                episode_iter = int(episode.name.split("_")[1])
-                if episode_iter in keep_iterations:
-                    continue
+                # episode_iter = int(episode.name.split("_")[1])
+                # if episode_iter in keep_iterations:
+                #     continue
 
                 logger.info(
                     f"Removing exp_root/episode {episode.name}; "
@@ -255,7 +261,7 @@ class TrainLoop:
 
                 logger.info(
                     f"Removing temp episode {episode.name}; "
-                    f"excluding iterations: {keep_iterations}"
+                    f"excluding iteraitions: {keep_iterations}"
                 )
                 shutil.rmtree(episode, ignore_errors=True)
         dist.barrier()
