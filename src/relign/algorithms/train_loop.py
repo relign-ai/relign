@@ -224,7 +224,7 @@ class TrainLoop:
         # TODO: checkpoint other parts of the train state here
 
     def _clean_episodes(self) -> None:
-        if self._is_main_process():
+        if self.distributed_state.is_main_process:
             keep_iterations = []  # TODO: add checkpoint iterations here
             keep_iterations += [0]  # Always keep the initial iteration
             keep_iterations = set(keep_iterations)
@@ -234,9 +234,9 @@ class TrainLoop:
                 if not episode.is_dir():
                     continue
 
-                episode_iter = int(episode.name.split("_")[1])
-                if episode_iter in keep_iterations:
-                    continue
+                # episode_iter = int(episode.name.split("_")[1])
+                # if episode_iter in keep_iterations:
+                #     continue
 
                 logger.info(
                     f"Removing exp_root/episode {episode.name}; "
