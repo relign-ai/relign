@@ -13,8 +13,7 @@ class TestEval:
     ):
         actor_critic_policy.init_actor_engine_if_needed()
         actor_critic_policy.init_critic_engine_if_needed()
-        # latest_policy_path = actor_critic_policy.save_latest_policy_path()
-        latest_policy_path = "tests/output/tests_test_eval.py_TestEval_test_evaluation_pipeline/policy/cache/actor/hf_pretrained"
+        latest_policy_path = actor_critic_policy.save_latest_policy_path()
         logging.info("start test evaluation")
         eval_results = evaluator.evaluate(
             iteration=1,

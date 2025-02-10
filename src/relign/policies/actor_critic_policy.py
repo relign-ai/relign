@@ -2,7 +2,7 @@ import shutil
 from dataclasses import dataclass
 import time
 from abc import abstractmethod
-from typing import Optional, Dict, Any, Callable, NamedTuple, Union
+from typing import Optional, Dict, Any, Callable, NamedTuple, Union, List
 from pathlib import Path
 
 
@@ -24,54 +24,6 @@ logger = get_logger(__name__)
 
 class CriticForwardOutput(NamedTuple):
     values: Optional[torch.Tensor] = None
-
-    def _maybe_init_ds_engine_for_training(
-        self,
-        model: PreTrainedModel,
-        ds_config: Optional[Dict[str, Any]],
-        is_actor: bool = True,
-    ):
-        """
-        If ds_config is provided, create optimizer + scheduler
-        and wrap the model in a DeepSpeedEngine for training.
-        Otherwise return the raw HF model.
-        """
-
-        if ds_config is None:
-            # user provided no DS config => just keep the raw model
-            return model
-
-        # TODO: Fix the optimizer and lrscheduler initialization
-        # 1) Create an optimizer
-        # optimizer = self.create_optimizer(model, weight_decay=self.weight_decay)
-        optimizer = None
-
-        # 2) Create a learning rate scheduler
-        self._patch_ds_config_for_lr_scheduler(
-            ds_config,
-            total_num_training_steps=self.total_num_training_steps,
-            warmup_steps=self.warmup_steps,
-            learning_rate=self.learning_rate,
-        )
-
-        lr_scheduler = None
-
-        self._patch_ds_config_for_optimizer(ds_config)
-        self._patch_ds_config_for_batch_size(ds_config, self.global_batch_size)
-        self._patch_ds_config_for_dtype(ds_config)
-        self._patch_ds_config_for_bucket_size(ds_config, self.actor_config)
-
-        # 3) Actually init the DS engine.
-        #    We rely on self._init_deepspeed_engine_for_training from DeepSpeedPolicy.
-        engine = self._init_deepspeed_engine_for_training(
-            model=model,
-            deepspeed_config=ds_config.config,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
-        )
-
-        # TODO: engine caching
-        return engine
 
 
 @dataclass
@@ -99,6 +51,8 @@ class ActorCriticPolicy(ActorPolicy):
 
         # Check if the actor_ds_config is an instance of HFTrainerDeepspeedconfig, otherwise instantiate it
 
+        cache_dir = Path(self.project_root_dir) / "policy" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
         self.critic_model_fn = critic_model_fn
         self.critic_config = critic_config
         self.critic = None
@@ -169,6 +123,13 @@ class ActorCriticPolicy(ActorPolicy):
         self._patch_ds_config_for_batch_size(ds_config, self.global_batch_size)
         self._patch_ds_config_for_dtype(ds_config)
         self._patch_ds_config_for_bucket_size(ds_config, critic_model.config)
+
+        import json
+
+        logger.info(
+            "DS config after batch patching:\n%s",
+            json.dumps(ds_config.config, indent=2),
+        )
 
         engine = self._init_deepspeed_engine_for_training(
             critic_model,
@@ -279,6 +240,10 @@ class ActorCriticPolicy(ActorPolicy):
 
     def init_critic_engine_if_needed(
         self,
+        global_batch_size: int,
+        per_device_batch_size: int,
+        gradient_accumulation_steps: int,
+        total_num_training_steps: int,
         critic_model_fn: Optional[Callable[[], PretrainedModelValueHead]] = None,
         force_reload: bool = False,
     ) -> None:
@@ -287,7 +252,10 @@ class ActorCriticPolicy(ActorPolicy):
         If 'force_reload' is True, or if no engine is cached, re-initialize.
         """
         logger.info("Initializing critic DeepSpeed engine...")
-
+        self.global_batch_isze = global_batch_size
+        self.per_device_batch_size = per_device_batch_size
+        self.gradient_accumulation_steps = gradient_accumulation_steps
+        self.total_num_training_steps = total_num_training_steps
         # Decide whether to skip if we already have a cached engine
         if (
             (not force_reload)
@@ -390,8 +358,6 @@ class ActorCriticPolicy(ActorPolicy):
                 shutil.rmtree(checkpoint_path)
             checkpoint_path.mkdir(parents=True, exist_ok=True)
 
-        self._save_trainer_state(checkpoint_path)
-
         if self.actor is not None:
             self._save_hf_pretrained(self.actor, checkpoint_path / "hf_pretrained")
             self.actor.save_checkpoint(str(checkpoint_path / "actor"))
@@ -402,17 +368,56 @@ class ActorCriticPolicy(ActorPolicy):
             )
             self.critic.save_checkpoint(str(checkpoint_path / "critic"))
 
-    def save_latest_policy_path(self) -> Path:
-        # Save both the actor and critic engine and return the path of the actor for inference
+    def save_latest_policy_path(self, checkpoint_path: Path) -> Path:
+        """
+        Saves both the actor and critic engines and returns the path of the actor for inference.
+
+        The caller can specify an arbitrary checkpoint path (for example:
+        Path("/some/storage/path/policy/TIMESTAMP") ).
+        We will append '/actor/hf_pretrained' and '/critic/hf_pretrained'
+        accordingly here.
+        """
+
+        # Path to store the HF version of the actor
+        actor_hf_pretrained_path = checkpoint_path / "actor" / "hf_pretrained"
+        # Path to store the HF version of the critic
+        critic_hf_pretrained_path = checkpoint_path / "critic" / "hf_pretrained"
+
+        # Save the HF-pretrained actor weights
+        dist.barrier()
+
         self._save_hf_pretrained(
             self.actor,
-            self.project_root_dir / "policy" / "cache" / "critic" / "hf_pretrained",
+            actor_hf_pretrained_path,
         )
-        self._save_hf_pretrained(
-            self.critic,
-            self.project_root_dir / "policy" / "cache" / "actor" / "hf_pretrained",
-        )
+        # TODO: technically one could move this one down
+        self.actor.save_checkpoint(str(checkpoint_path / "actor"))
+        dist.barrier()
 
-        return Path(
-            self.project_root_dir / "policy" / "cache" / "actor" / "hf_pretrained"
-        )
+        # If the DeepSpeed engines are not cached, we also save the critic HF weights,
+        # as well as engine checkpoints for both the actor and critic.
+        if not self.cache_ds_engines:
+            self._save_hf_pretrained(
+                self.critic,
+                critic_hf_pretrained_path,
+            )
+            # Actually save the full engine state for both
+            self.critic.save_checkpoint(str(checkpoint_path / "critic"))
+            # Return the path of the (actor) HF pretrained directory for inference
+
+    def get_checkpoint_format(self) -> str:
+        return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
+
+    def _clean_old_temp_checkpoints(
+        self, checkpoint_dir, exclude: Optional[List[Path]] = None
+    ) -> None:
+        if exclude is None:
+            exclude = []
+
+        if self._is_main_process():
+            for checkpoint in checkpoint_dir.iterdir():
+                if checkpoint.is_dir():
+                    logger.info(f"Removing old temp checkpoint {checkpoint}")
+                    shutil.rmtree(checkpoint)
+
+        dist.barrier()

@@ -85,8 +85,12 @@ class ActorPolicy(DeepSpeedPolicy):
         self._patch_ds_config_for_batch_size(ds_config, self.global_batch_size)
         self._patch_ds_config_for_dtype(ds_config)
         self._patch_ds_config_for_bucket_size(ds_config, actor_model.config)
+        import json
 
-        logger.info("USED OPTIMZEER {optimizer}")
+        logger.info(
+            "DS config after batch patching:\n%s",
+            json.dumps(ds_config.config, indent=2),
+        )
 
         engine = self._init_deepspeed_engine_for_training(
             actor_model,
@@ -103,6 +107,10 @@ class ActorPolicy(DeepSpeedPolicy):
 
     def init_actor_engine_if_needed(
         self,
+        global_batch_size: int,
+        per_device_batch_size: int,
+        gradient_accumulation_steps: int,
+        total_num_training_steps: int,
         actor_model_fn: Optional[Callable[[], PreTrainedModel]] = None,
         force_reload: bool = False,
     ) -> None:
@@ -111,6 +119,11 @@ class ActorPolicy(DeepSpeedPolicy):
         If 'force_reload' is True, or if no engine is cached, re-initialize.
         """
         logger.info("Initializing actor DeepSpeed engine...")
+        # Set these from the trainer to the policy before engine start
+        self.global_batch_size = global_batch_size
+        self.per_device_batch_size = per_device_batch_size
+        self.gradient_accumulation_steps = gradient_accumulation_steps
+        self.total_num_training_steps = total_num_training_steps
 
         # Decide whether to skip if we already have a cached engine
         if (
@@ -243,7 +256,7 @@ class ActorPolicy(DeepSpeedPolicy):
         ref_kl_loss = None
         ref_kl = None
         kl_penalty_loss_type = "forward_kl"
-        kl_penalty_loss_clip_max = 10000
+        kl_penalty_loss_clip_max = 10
         kl_penalty_loss_clip_min = 0
         kl_clt = 0.05
         if kl_penalty_loss_type is not None:
@@ -387,11 +400,20 @@ class ActorPolicy(DeepSpeedPolicy):
 
     def init_reference_engine_if_needed(
         self,
+        global_batch_size: int,
+        per_device_batch_size: int,
+        gradient_accumulation_steps: int,
+        total_num_training_steps: int,
         force_reload: bool = False,
     ) -> None:
         """
         Ensures that the reference engine is initialized if enabled.
         """
+        self.global_batch_size = global_batch_size
+        self.per_device_batch_size = per_device_batch_size
+        self.gradient_accumulation_steps = gradient_accumulation_steps
+        self.total_num_training_steps = total_num_training_steps
+
         if not self.enable_reference:
             return
         if (not force_reload) and (self.reference is not None):
@@ -465,6 +487,7 @@ class ActorPolicy(DeepSpeedPolicy):
         if not self.cache_ds_engines:
             if getattr(self, "reference", None) is not None:
                 logger.info("Destroying reference engine to free memory.")
+                self.reference.optimizer = None
                 self._destroy_ds_engine(self.reference)
                 # Call a shutdown or cleanup method if the engine provides one.
                 if hasattr(self.reference, "shutdown") and callable(
@@ -506,7 +529,6 @@ class ActorPolicy(DeepSpeedPolicy):
         # elif estimation_type == ...
         return kl
 
-
     def get_last_checkpoint(self, return_resumable_only: bool = False):
         checkpoints = list(self.checkpoint_dir.iterdir())
         checkpoints = [
@@ -532,51 +554,50 @@ class ActorPolicy(DeepSpeedPolicy):
         grad_acc_kwargs = {"num_steps": self.args.gradient_accumulation_steps}
         # grad_acc_kwargs["sync_with_dataloader"] = False
 
+    # def _create_accelerator_and_postprocess(self):
+    #     grad_acc_kwargs = {"num_steps": self.args.gradient_accumulation_steps}
+    #     # grad_acc_kwargs["sync_with_dataloader"] = False
+    #     gradient_accumulation_plugin = GradientAccumulationPlugin(**grad_acc_kwargs)
 
-    def _create_accelerator_and_postprocess(self):
-        grad_acc_kwargs = {"num_steps": self.args.gradient_accumulation_steps}
-        # grad_acc_kwargs["sync_with_dataloader"] = False
-        gradient_accumulation_plugin = GradientAccumulationPlugin(**grad_acc_kwargs)
+    #     # Create accelerator object
+    #     self.accelerator = Accelerator(
+    #         dispatch_batches=False,
+    #         deepspeed_plugin=self.deepspeed_plugin,
+    #         gradient_accumulation_plugin=gradient_accumulation_plugin,
+    #     )
 
-        # Create accelerator object
-        self.accelerator = Accelerator(
-            dispatch_batches=False,
-            deepspeed_plugin=self.deepspeed_plugin,
-            gradient_accumulation_plugin=gradient_accumulation_plugin,
-        )
+    #     # Deepspeed and Accelerate flags covering both trainer args and accelerate launcher
+    #     self.is_deepspeed_enabled = (
+    #         getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
+    #     )
 
-        # Deepspeed and Accelerate flags covering both trainer args and accelerate launcher
-        self.is_deepspeed_enabled = (
-            getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
-        )
+    #     if self.is_deepspeed_enabled:
+    #         from deepspeed.utils import logger as ds_logger
+    #         import logging
 
-        if self.is_deepspeed_enabled:
-            from deepspeed.utils import logger as ds_logger
-            import logging
+    #         ds_logger.setLevel(logging.DEBUG)
 
-            ds_logger.setLevel(logging.DEBUG)
+    #         if getattr(self.args, "hf_deepspeed_config", None) is None:
+    #             from transformers.deepspeed import HfTrainerDeepSpeedConfig
 
-            if getattr(self.args, "hf_deepspeed_config", None) is None:
-                from transformers.deepspeed import HfTrainerDeepSpeedConfig
+    #             ds_plugin = self.accelerator.state.deepspeed_plugin
 
-                ds_plugin = self.accelerator.state.deepspeed_plugin
+    #             ds_plugin.hf_ds_config = HfTrainerDeepSpeedConfig(
+    #                 ds_plugin.hf_ds_config.config
+    #             )
+    #             ds_plugin.deepspeed_config = ds_plugin.hf_ds_config.config
+    #             ds_plugin.hf_ds_config.trainer_config_process(self.args)
 
-                ds_plugin.hf_ds_config = HfTrainerDeepSpeedConfig(
-                    ds_plugin.hf_ds_config.config
-                )
-                ds_plugin.deepspeed_config = ds_plugin.hf_ds_config.config
-                ds_plugin.hf_ds_config.trainer_config_process(self.args)
+    #     if (
+    #         self.args.gradient_checkpointing
+    #         and not self.is_flash_attention_model
+    #         and not self.is_deepspeed_enabled
+    #     ):
+    #         from accelerate import DistributedDataParallelKwargs
 
-        if (
-            self.args.gradient_checkpointing
-            and not self.is_flash_attention_model
-            and not self.is_deepspeed_enabled
-        ):
-            from accelerate import DistributedDataParallelKwargs
+    #         self.accelerator.ddp_handler = DistributedDataParallelKwargs(
+    #             find_unused_parameters=False
+    #         )
 
-            self.accelerator.ddp_handler = DistributedDataParallelKwargs(
-                find_unused_parameters=False
-            )
-
-        # Add state to accelerator for checkpointing
-        self.accelerator.register_for_checkpointing(self.state)
+    #     # Add state to accelerator for checkpointing
+    #     self.accelerator.register_for_checkpointing(self.state)

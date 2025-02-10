@@ -32,6 +32,7 @@ class Analyzer:
         self.distributed_state = distributed_state
         self._local_log_obj = {}
         self.task = task
+        self.results_dir = self.get_analysis_root_dir()
 
     def get_analysis_id(self) -> str:
         return self.metrics_prefix
@@ -120,16 +121,10 @@ class TaskPerformanceAnalyzer(Analyzer):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        # TODO: skip this mechanism for now, just take the results from invernecece
-        # as agrument of the analyse method
-        # self.result_dir = self.runtime._get_result_dir()
-        # results_dir = None
-        # assert self.result_dir is not None, "Result directory is not set."
-        # if not self.result_dir.exists():
-        #     raise ValueError(f"Result directory {self.result_dir} does not exist.")
-
     def get_analysis_id(self) -> str:
-        return super().get_analysis_id() + self.result_dir.name
+        # logger.info(f"Getting analysis ID for {self.results_dir}")
+        # return super().get_analysis_id() + self.results_dir.name
+        return super().get_analysis_id()
 
     def analyze(self, results: Dataset):
         super().analyze()
@@ -138,9 +133,9 @@ class TaskPerformanceAnalyzer(Analyzer):
         # # Load the mutated dataset
         # output_dataset = Dataset.load_from_disk(str(self.result_dir))
 
-        assert "_treetune__candidate_answers" in results.features, (
-            "The dataset does not contain the candidate answers."
-        )
+        assert (
+            "_treetune__candidate_answers" in results.features
+        ), "The dataset does not contain the candidate answers."
 
         predictions = results["_treetune__candidate_answers"]
         references = results

@@ -1,4 +1,5 @@
-from typing import Union, Dict
+import shutil
+from typing import Union, Dict, List
 from pathlib import Path
 from tqdm import tqdm
 from logging import Logger
@@ -13,7 +14,7 @@ from relign.utils.dataset import remove_null_columns
 from relign.eval.evaluator import Evaluator
 from relign.eval.analyzer import TaskPerformanceAnalyzer
 from relign.inference.inference_pipeline import InferencePipeline
-
+from deepspeed import comm as dist
 from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -27,12 +28,11 @@ class TrainLoop:
         policy: BasePolicy,
         trainer: BaseTrainer,
         episode_generator: BaseEpisodeGenerator,
-        inference_pipeline_cls: InferencePipeline,
-        inference_pipeline_kwargs: Dict,
+        evaluator_cls: Evaluator,
+        evaluator_kwargs: Dict,
         distributed_state: PartialState,
         verbose: int = 0,
         num_iterations: int = 100,
-        num_episodes_per_iteration: int = 100,
         evaluation_freq: int = 10,
         checkpoint_freq: int = 10,
     ):
@@ -50,51 +50,111 @@ class TrainLoop:
         self.policy = policy
         self.trainer = trainer
         self.episode_generator = episode_generator
-        self.inference_pipeline_cls = inference_pipeline_cls
-        self.inference_pipeline_kwargs = inference_pipeline_kwargs
+        self.evaluator_cls = evaluator_cls
+        self.evaluator_kwargs = evaluator_kwargs
         self.verbose = verbose
         self.num_iterations = num_iterations
-        self.num_episodes_per_iteration = num_episodes_per_iteration
         self.evaluation_freq = evaluation_freq
         self.checkpoint_freq = checkpoint_freq
         self.distributed_state = distributed_state
 
-        # TODO: pass this instead
-        self.evaluator = Evaluator(
+        # Intitialize the evaluator:
+        self.evaluator = self.evaluator_cls(
+            **evaluator_kwargs,
             project_root_dir=project_root_dir,
-            analyzers=[
-                TaskPerformanceAnalyzer(
-                    project_root_dir=project_root_dir,
-                    cloud_logger=None,
-                    task=self.episode_generator.task,
-                )
-            ],
-            inference_pipeline_cls=self.inference_pipeline_cls,
-            inference_pipeline_kwargs=self.inference_pipeline_kwargs,
+            distributed_state=distributed_state,
+            cloud_logger=None,
+            seed=self.seed,
         )
 
     def learn(self):
         """
-        Main training loop. Trains the policy for 'num rounds' rounds.
-        Evaluates every 'eval_freq' rounds.
+        Main training loop. Trains the policy for 'num_iterations' rounds.
+        Evaluates every 'evaluation_freq' rounds.
         Checkpoints every 'checkpoint_freq' rounds.
         """
+        is_local_main_process = self.distributed_state.is_local_main_process
         current_policy_path = None
+
         for iteration in tqdm(range(self.num_iterations)):
-            # Collect rollouts under the current policy.
+            if is_local_main_process:
+                logger.info("*" * 80)
+                logger.info(f"Running iteration {iteration}")
+                logger.info("*" * 80)
+
+            ####################
+            # Generate episodes#
+            ####################
+            logger.info(
+                f"Rank {self.distributed_state.process_index}: About to _generate_episodes() for iteration {iteration}"
+            )
             episodes = self._generate_episodes(
                 iteration=iteration, current_policy_path=current_policy_path
             )
+            logger.info(
+                f"Rank {self.distributed_state.process_index} done with episode generation."
+            )
 
+            self.distributed_state.wait_for_everyone()
+            dist.barrier()
+
+            ##################
+            # Trainer step   #
+            ##################
+            logger.info(f"Rank {self.distributed_state.process_index}: About to step.")
             current_policy_path = self.trainer.step(episodes=episodes)
+            logger.info(
+                f"Rank {self.distributed_state.process_index} done with trainer step."
+            )
 
-        # Evalutate
-        if iteration % self.evaluation_freq == 0:
-            self._evaluate(iteration=iteration)
+            self.distributed_state.wait_for_everyone()
+            dist.barrier()
 
-        # Checkpoint
-        if iteration % self.checkpoint_freq == 0:
-            self._checkpoint(iteration=iteration)
+            #################
+            #   Evaluate    #
+            #################
+            if iteration % self.evaluation_freq == 0:
+                logger.info(
+                    f"Evaluating current policy... on rank {self.distributed_state.process_index}"
+                )
+                self._evaluate(
+                    iteration=iteration, current_policy_path=current_policy_path
+                )
+
+            self.distributed_state.wait_for_everyone()
+            dist.barrier()
+
+            #################
+            #   Checkpoint  #
+            #################
+            logger.info(
+                f"Rank {self.distributed_state.process_index} done with evaluation."
+            )
+            # Checkpointing (e.g. saving tokenizer) -- only on main process.
+            logger.info(
+                f"Rank {self.distributed_state.process_index} about to checkpoint."
+            )
+            if (
+                current_policy_path is not None
+                and self.episode_generator.tokenizer is not None
+                and is_local_main_process
+            ):
+                logger.info(f"Saving the tokenizer at {current_policy_path}")
+                self.episode_generator.tokenizer.save_pretrained(current_policy_path)
+
+            # Synchronize after checkpointing.
+            self.distributed_state.wait_for_everyone()
+            dist.barrier()
+
+            #################
+            #  HouseCleaning #
+            ##################
+            self._clean_episodes()
+            self.distributed_state.wait_for_everyone()
+            dist.barrier()
+
+            if is_local_main_process:
+                logger.info(f"Iteration {iteration} complete")
 
     def _generate_episodes(
         self,
@@ -109,6 +169,11 @@ class TrainLoop:
             current_policy_path: path to the weights of the current policy.
             #TODO allow_from_cache: bool = True,
         """
+        # Wait for all processes to reach this point
+        if self.distributed_state.use_distributed:
+            self.distributed_state.wait_for_everyone()
+            dist.barrier()
+
         # TODO: handle distributed environments differently
         # for now we just generate it in the main process
         # Feth the epiode path on all the devices
@@ -118,27 +183,37 @@ class TrainLoop:
         if not self.episode_generator.supports_distributed:
             if self.distributed_state.is_main_process:
                 episode_path = self.episode_generator.generate(
-                    iteration=iteration, altest_policy_path=current_policy_path
+                    iteration=iteration, latest_policy_path=current_policy_path
                 )
         else:
+            logger.info(
+                f"rank {self.distributed_state.process_index} entering generating gen."
+            )
             episodes = self.episode_generator.generate(
                 iteration=iteration, latest_policy_path=current_policy_path
             )
             assert isinstance(episodes, Dataset)
             if self.distributed_state.is_main_process:
-                remove_null_columns(episodes).save_to_disk(episode_path)
+                remove_null_columns(episodes).save_to_disk(str(episode_path))
 
         self.distributed_state.wait_for_everyone()
-        episode_dataset = Dataset.load_from_disk(episode_path)
+        dist.barrier()
+
+        episode_dataset = Dataset.load_from_disk(str(episode_path))
+        self.episode_generator.log_episodes(
+            episode_dataset,
+            iteration,
+            num_examples=3,
+            seed=self.seed,
+            log_to_cloud=True,
+        )
+
         return episode_dataset
 
-    def _evaluate(self, iteration: int):
+    def _evaluate(self, iteration: int, current_policy_path: Path):
         self.evaluator.evaluate(
             iteration=iteration,
-            tokenizer=self.trainer.tokenizer,
-            seed=self.seed,
-            latest_policy_path=None,
-            from_checkpoints=False,
+            latest_policy_path=current_policy_path,
         )
 
     def _checkpoint(self, iteration: int):
@@ -148,6 +223,39 @@ class TrainLoop:
         )
         # TODO: checkpoint other parts of the train state here
 
-    @property
-    def logger(self) -> Logger:
-        raise NotImplementedError("logger method is not implemented yet.")
+    def _clean_episodes(self) -> None:
+        if self._is_main_process():
+            keep_iterations = []  # TODO: add checkpoint iterations here
+            keep_iterations += [0]  # Always keep the initial iteration
+            keep_iterations = set(keep_iterations)
+
+            # Remove unnecessary episodes insided experiment_root
+            for episode in self.project_root_dir.glob("episodes/episodes_*"):
+                if not episode.is_dir():
+                    continue
+
+                episode_iter = int(episode.name.split("_")[1])
+                if episode_iter in keep_iterations:
+                    continue
+
+                logger.info(
+                    f"Removing exp_root/episode {episode.name}; "
+                    f"excluding iterations: {keep_iterations}"
+                )
+                shutil.rmtree(episode, ignore_errors=True)
+
+            # Remove unnecessary temp_episodes
+            for episode in self.project_root_dir.glob("temp_episodes/iteration__*"):
+                if not episode.is_dir():
+                    continue
+
+                episode_iter = int(episode.name.split("__")[1])
+                if episode_iter in keep_iterations:
+                    continue
+
+                logger.info(
+                    f"Removing temp episode {episode.name}; "
+                    f"excluding iterations: {keep_iterations}"
+                )
+                shutil.rmtree(episode, ignore_errors=True)
+        dist.barrier()

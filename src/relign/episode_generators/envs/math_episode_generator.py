@@ -1,5 +1,6 @@
 import json
 import uuid
+import random  # ← We add this import to sample random responses
 from typing import Any, Dict, List, Union, Optional, Tuple
 
 import evaluate
@@ -8,16 +9,17 @@ import torch
 from datasets import Dataset
 
 from relign.episode_generators.base_episode_generator import Episode
-from relign.episode_generators.episode_generator_with_reward_function import(
+from relign.episode_generators.episode_generator_with_reward_function import (
     EpisodeGeneratorWithRewardFunction,
     RewardFunction,
 )
 from relign.tasks import Task, GSM8K
 from relign.tasks.math import MATH
 from relign.tokenization import Tokenizer
-from relign.utils.logging import get_logger 
+from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
 
 class MATHRewardFunction(RewardFunction):
     def __init__(
@@ -97,12 +99,13 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
         return len(indices) - 1, indices
 
     def _generate_episodes(
-        self, 
-        inference_results: Dataset, 
-        iteration: int
+        self, inference_results: Dataset, iteration: int
     ) -> List[Union[Dict[str, Any], Episode]]:
         episodes = []
         metrics = {}
+        # Collect all textual responses for possible logging
+        all_collected_responses = []
+
         for instance in inference_results:
             tree = json.loads(instance["_treetune__reasoning_tree"])
             paths = self.extract_paths_from_tree(tree)
@@ -118,7 +121,7 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
                 full_text = path["node_chain"][-1]["full_text"]
                 response_text = full_text[len(query_text) :]
 
-                # Compute the number of reasoning steps in response 
+                # Compute the number of reasoning steps in response
                 try:
                     num_reasoning_steps = self.compute_number_of_reasoning_steps(
                         response_text
@@ -140,12 +143,12 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
                     reward = self.reward_function.get_unfinished_response_penalty()
                     is_unfinished_response = True
                 try:
-                    query_token_ids, response_token_ids  = (
+                    query_token_ids, response_token_ids = (
                         self._tokenize_query_and_response(
                             query_text,
                             response_text,
                             # Only append EOS token if the response is complete
-                            allow_append_eos=not is_unfinished_response
+                            allow_append_eos=not is_unfinished_response,
                         )
                     )
                 except Exception as e:
@@ -166,7 +169,7 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
                         is_unfinished_response = True
 
                 if len(response_token_ids) == 0:
-                    logger.info('empty response')
+                    logger.info("empty response")
                     metrics.setdefault("empty_response", []).append(True)
                     continue
 
@@ -184,6 +187,9 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
 
                 episodes.append(episode)
                 all_rewards.append(float(reward))
+
+            # Accumulate all the textual responses from this inference result
+            all_collected_responses.extend(all_responses)
 
             if len(all_rewards) > 0:
                 once_hit = any([r == 1.0 for r in all_rewards])
@@ -227,7 +233,20 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
 
         if len(metrics) > 0:
             logs = {f"episodes_metric/{k}": v for k, v in metrics.items()}
-            self._cloud_log({**logs, "train/global_iteration": iteration})
+            self.cloud_log({**logs, "train/global_iteration": iteration})
+
+        if episodes:
+            mean_reward = np.mean([episode.scores for episode in episodes])
+            logger.info(
+                f"Mean reward for all {len(episodes)} out episodes at iteration: {iteration} is {mean_reward}"
+            )
+            # Log up to 15 random responses
+            # if all_collected_responses:
+            #     sample_size = min(15, len(all_collected_responses))
+            #     random_sample = random.sample(all_collected_responses, sample_size)
+            #     logger.info(f"Random {sample_size} responses from this iteration:")
+            #     for idx, resp in enumerate(random_sample, 1):
+            #         logger.info(f"{idx}. {resp}")
 
         return episodes
 
@@ -248,19 +267,19 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
 
 class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
     def __init__(
-        self, 
+        self,
         with_process_reward: bool = True,
         reward_entire_span: bool = False,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(**kwargs)
-        self.with_process_reward = with_process_reward # Wether we want to reward reasoning tokens
-        self.reward_entire_span = reward_entire_span # Wether we want to reward the entire span between reasoning tokens
+        self.with_process_reward = (
+            with_process_reward  # Wether we want to reward reasoning tokens
+        )
+        self.reward_entire_span = reward_entire_span  # Wether we want to reward the entire span between reasoning tokens
 
     def _generate_episodes(
-        self, 
-        inference_results: Dataset, 
-        iteration: int
+        self, inference_results: Dataset, iteration: int
     ) -> List[Union[Dict[str, Any], Episode]]:
         episodes = []
         metrics = {}
@@ -280,10 +299,10 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                 response_text = full_text[len(query_text) :]
 
                 try:
-                    num_reasoning_steps, reasoning_indices = self._extract_reasoning_steps(
-                        response_text
+                    num_reasoning_steps, reasoning_indices = (
+                        self._extract_reasoning_steps(response_text)
                     )
-                    
+
                     metrics.setdefault("num_reasoning_steps", []).append(
                         num_reasoning_steps
                     )
@@ -308,7 +327,7 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                             response_text,
                             # Only append EOS token if the response is complete
                             allow_append_eos=not is_unfinished_response,
-                            return_offsets=True
+                            return_offsets=True,
                         )
                     )
 
@@ -316,7 +335,7 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                     logger.info(f"Failed to tokenize query and response: {e}")
                     metrics.setdefault("empty_response", []).append(True)
                     continue
-            
+
                 all_responses.append(response_text)
                 if self.max_sequence_length is not None:
                     seq_len = len(query_token_ids) + len(response_token_ids)
@@ -329,7 +348,7 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                         is_unfinished_response = True
 
                 if len(response_token_ids) == 0:
-                    logger.info('empty response')
+                    logger.info("empty response")
                     metrics.setdefault("empty_response", []).append(True)
                     continue
 
@@ -358,8 +377,8 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                         process_reward_value=1,
                         reward_entire_span=self.reward_entire_span,
                     )
-                    episode_kwargs["process_rewards"] = process_rewards 
-                
+                    episode_kwargs["process_rewards"] = process_rewards
+
                 # Generate an episode
                 episode = Episode(**episode_kwargs)
 
@@ -411,14 +430,12 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
             self._cloud_log({**logs, "train/global_iteration": iteration})
 
         return episodes
-    
-    def _extract_reasoning_steps(
-        self, response_text: str
-    ) -> Tuple[int, List[int]]:
-        """ 
-        Computes the number of reasoning steps in the response text, along 
+
+    def _extract_reasoning_steps(self, response_text: str) -> Tuple[int, List[int]]:
+        """
+        Computes the number of reasoning steps in the response text, along
         with the character of the indices of the FINAL token of each reasoning step
-        <think>.... </think> will give the index of the last character of the </think> 
+        <think>.... </think> will give the index of the last character of the </think>
         """
         indices = self.task.split_solution_into_intermediate_steps(response_text)
         return len(indices) - 1, indices
@@ -468,7 +485,7 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
         has_bos = query_token_ids[0] == self.tokenizer.bos_token_id
         if has_bos:
             query_token_ids = query_token_ids[1:]
-     
+
         if reward_entire_span:
             # Reward the entire span of each reasoning step.
             for start, end in zip(reasoning_indices[:-1], reasoning_indices[1:]):

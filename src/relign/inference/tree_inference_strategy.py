@@ -79,9 +79,8 @@ class TreeInferenceStrategy(InferenceStrategy):
         self.max_concurrent_programs = max_concurrent_programs
         self.max_concurrent_generations = max_concurrent_generations
 
-
         self.guidance_llm_cls = guidance_llm_cls
-        self.guidance_llm_kwargs = guidance_llm_kwargs 
+        self.guidance_llm_kwargs = guidance_llm_kwargs
 
         self.question_field = question_field
         self.no_cache = no_cache

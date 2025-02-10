@@ -1,4 +1,6 @@
-from typing import Dict, Tuple, Union, Optional, Literal
+import shutil
+from typing import Dict, Tuple, Union, Optional, Literal, List
+from pathlib import Path
 from dataclasses import dataclass
 import torch
 from torch.utils.data import Dataset
@@ -20,6 +22,7 @@ from relign.algorithms.ppo.data_collator import (
 )
 
 from relign.utils.logging import get_logger
+
 logger = get_logger(__name__)
 
 
@@ -71,13 +74,14 @@ class PPOHParams:
         temperature (float):
             The temperature used for sampling.
     """
+
     adap_kl_ctrl: bool = True
-    init_kl_coef: Optional[float] = 0.2
+    init_kl_coef: Optional[float] = 0.05
     kl_penalty: Literal["kl", "abs", "mse", "full", "control_variate"] = "kl"
     kl_penalty_loss_type: Optional[Literal["kl", "abs", "mse", "control_variate"]] = (
-        None
+        "control_variate"
     )
-    kl_penalty_loss_clip_max: float = 10000
+    kl_penalty_loss_clip_max: float = 10
     kl_penalty_loss_clip_min: float = 0
     force_disable_kl_penalty: bool = False
     target: Optional[float] = 6.0
@@ -97,7 +101,7 @@ class PPOHParams:
     whiten_advantages: bool = True
     grayen_advantages: bool = False
     whiten_rewards: bool = False
-    temperature: float = 1.0
+    temperature: float = 0.6
 
     def __post_init__(self):
         assert self.temperature > 0, "Temperature should be positive."
@@ -111,30 +115,50 @@ class PPOTrainer(BaseTrainer):
     PPO Trainer.
     Implementation of the PPO update rule.
     """
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # TODO: make this initialization more robust ( ideally we get it from a config file)
-        self.ppo_hparams = PPOHParams(**kwargs.get("ppo_hparams", {}))
+        self.trainer_hparams = PPOHParams(**kwargs.get("ppo_hparams", {}))
 
     def set_cloud_logger(self, cloud_log):
         self.cloud_log = cloud_log
 
-    def step(self, episodes: EpisodeDataset) -> None:
+    def step(self, episodes: EpisodeDataset) -> Path:
         """
         Performs a single update step using the dataset rollout under the current policy.
         Each update step can rum multiple epochs of optimization.
         """
-        self.policy.init_actor_engine_if_needed()
-        self.policy.init_critic_engine_if_needed()
+        #
+        episodes = self._hydrate_ref_log_probs(episodes)
+
+        # TODO: Make this one function in the policy
+        self.policy.init_actor_engine_if_needed(
+            global_batch_size=self.global_batch_size,
+            per_device_batch_size=self.per_device_batch_size,
+            gradient_accumulation_steps=self.gradient_accumulation_steps,
+            total_num_training_steps=self.total_num_training_steps,
+        )
+
+        self.policy.init_critic_engine_if_needed(
+            global_batch_size=self.global_batch_size,
+            per_device_batch_size=self.per_device_batch_size,
+            gradient_accumulation_steps=self.gradient_accumulation_steps,
+            total_num_training_steps=self.total_num_training_steps,
+        )
 
         if not self.policy.cache_ds_engines:
             # engines are not cached, need to laod the latest weights from checkpoin path
             logger.info(f"Loading latest policy from latest policy path")
             self.policy.load_latest_policy_path()
-
+            self.policy._clean_old_temp_checkpoints(
+                self.project_root_dir / "policy" / "cache"
+            )
 
         # change to appropriate input structure
         episodes = self._hydrate_episodes(episodes)
+        episodes = self._rescale_and_clip_scores(episodes)
+        kls = self._log_episodes_metrics(episodes)
+
         dataloader = prepare_data_loader_for_training(
             episodes,
             per_device_batch_size=self.per_device_batch_size,
@@ -169,6 +193,13 @@ class PPOTrainer(BaseTrainer):
         )
         progress_bar.update(self.state.global_step)
 
+        logger.info(f"Per device batch size: {self.per_device_batch_size}")
+        logger.info(f"Dataloder num workers: {self.dataloader_num_workers}")
+        logger.info(f"total_num_optimization_steps: {self.total_num_training_steps}")
+        logger.info(
+            f"num_optimization_steps_in_iteration:{num_optimization_steps_in_iteration}"
+        )
+
         # Set everything in train mode
         self.policy.actor.train()
         self.policy.critic.train()
@@ -188,7 +219,6 @@ class PPOTrainer(BaseTrainer):
         dist.barrier()
         for epoch in range(self.num_epochs_per_iteration):
             for step, batch in enumerate(dataloader_iter):
-
                 is_grad_acc_boundary = (
                     self.policy.actor.is_gradient_accumulation_boundary()
                 )
@@ -209,27 +239,38 @@ class PPOTrainer(BaseTrainer):
                         )
                         global_step_last_logged = self.state.global_step
 
-        self.state.iteration += 1
+            dataloader_iter = iter(dataloader)
+
+        dist.barrier()
+
+        self.state.iteration += 0
         progress_bar.close()
-        latest_policy_path = self.policy.save_latest_policy_path()
-        logger.info(f"Latest policy path: {latest_policy_path}")
+        checkpoint_path = self.project_root_dir / "policy" / "cache"
+        # checkpoint_name = self._get_automatic_checkpoint_name()
+
+        self.policy.save_latest_policy_path(checkpoint_path)
+        dist.barrier()
 
         # destroy engines and release memory
         self.policy.destroy_ds_engines()
         release_memory()
         import gc
+
         gc.collect()
         torch.cuda.empty_cache()
 
+        latest_policy_path = checkpoint_path / "actor" / "hf_pretrained"
+        logger.info(f"Latest policy path: {latest_policy_path}")
         # return latest policy path
         return latest_policy_path
-        
+
     def _hydrate_episodes(self, episodes: Dataset) -> Dataset:
         """
         Takes the collated dataset and hydrates it with the
         logprobs and values under the current policy parameters.
         These will be the baseline logprobs and values i.e., pi_old(a|s)
         """
+
         episodes = self._hydrate_log_probs(episodes)
         episodes = self._hydrate_values(episodes)
         return episodes
@@ -382,11 +423,98 @@ class PPOTrainer(BaseTrainer):
 
         return episodes
 
+    def _hydrate_ref_log_probs(
+        self, episodes: Dataset, column_name: str = COLUMN_REF_SHIFTED_LOGPS
+    ) -> Dataset:
+        logger.info("Computing refrence model logprobs")
+
+        self.policy.init_reference_engine_if_needed(
+            self.global_batch_size,
+            self.per_device_batch_size,
+            self.gradient_accumulation_steps,
+            self.total_num_training_steps,
+        )
+
+        ## update the episodes
+        data_loader = prepare_data_loader_for_inference(
+            episodes,
+            per_device_batch_size=self.per_device_batch_size,
+            data_loader_kwargs={
+                "collate_fn": PPODataCollator(),
+                "num_workers": self.dataloader_num_workers,
+                "pin_memory": self.dataloader_pin_memory,
+            },
+        )
+
+        self.policy.reference.eval()  # put the referenc emodel in non-training mode
+        dist.barrier()
+
+        ref_log_probs_list = []
+        for inputs in tqdm(
+            data_loader,
+            desc="Computing reference log probs",
+            disable=not self._is_main_process(),
+        ):
+            with torch.no_grad():
+                # Asume every sequence is padded from the right
+                # noinspection DuplicatedCode
+                assert torch.all(inputs["attention_mask"][:, 0] == 1)
+                assert inputs["input_ids"].shape[0] == self.per_device_batch_size, (
+                    f"We expect on all processes to have the same batch size of "
+                    f"{self.per_device_batch_size}."
+                )
+
+                inputs = {
+                    k: v.to(self.policy.reference.device) for k, v in inputs.items()
+                }
+
+                # Compute the sequence lengths as we need to extract
+                # the log probs of the non-padded tokens
+                seq_lengths = inputs["attention_mask"].sum(dim=1).detach().clone()
+                seq_lengths = seq_lengths.unsqueeze(1)  # Shape: (batch_size, 1)
+
+                # Compute the log probabilities for each token
+                outputs = self.policy.forward_reference(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    labels=inputs["labels"],
+                    return_all_logp=True,
+                )
+
+                logps = outputs.all_logp.detach()
+                assert logps.shape[1] == inputs["input_ids"].shape[1] - 1
+
+                seq_lengths = seq_lengths.to(self.policy.reference.device)
+                seq_lengths = gather(seq_lengths).cpu()
+                logps = gather(
+                    pad_across_processes(logps, dim=1, pad_index=0.0, pad_first=False)
+                ).cpu()
+
+                assert (
+                    logps.shape[0]
+                    == inputs["input_ids"].shape[0] * dist.get_world_size()
+                )
+
+                # Convert 2d tensors to a list of lists
+                logps_seq_lengths = seq_lengths - 1
+                for i, seq_len in enumerate(logps_seq_lengths.squeeze().tolist()):
+                    assert seq_len <= logps.shape[1]
+                    ref_log_probs_list.append(logps[i, :seq_len].tolist())
+
+        ref_log_probs_list = ref_log_probs_list[
+            : len(episodes)
+        ]  # remove any extra log probs that were added due to global paddingS
+
+        with self.distributed_state.main_process_first():
+            episodes = episodes.add_column(name=column_name, column=ref_log_probs_list)
+
+        self.policy.destroy_reference_engine_if_not_cached()
+        return episodes
+
     def _step(
         self,
         inputs: Dict[str, torch.Tensor],
     ) -> Dict[str, Union[float, torch.Tensor]]:
-
         inputs = {k: v.to(self.policy.actor.device) for k, v in inputs.items()}
 
         # Turn this into a dataclass
@@ -412,12 +540,13 @@ class PPOTrainer(BaseTrainer):
 
         #  Compute the rewards, advantages, and returns
         with torch.no_grad():
-            if self._is_kl_penalty_enabled(
-                self.ppo_hparams.kl_penalty_loss_type, self.policy.reference
-            ):
+            if not self.trainer_hparams.force_disable_kl_penalty:
                 shifted_ref_logprobs = inputs[COLUMN_REF_SHIFTED_LOGPS]
             else:
+                logger.info("KL penalty disabled")
                 shifted_ref_logprobs = None
+
+            assert shifted_ref_logprobs != None
 
             rewards, _, _ = self._compute_rewards(
                 scores, shifted_actor_logprobs, shifted_ref_logprobs, attention_mask
@@ -454,6 +583,28 @@ class PPOTrainer(BaseTrainer):
         )
 
         self.policy.actor.backward(actor_loss)
+
+        # Log gradient norms on actor parameters (especially normalization layers)
+        logger.debug("[_step] Actor backward call done. Checking gradient norms...")
+        if hasattr(self.policy.actor, "module"):
+            for name, param in self.policy.actor.module.named_parameters():
+                # Only check norm layers or group norm if you want to single them out:
+                if "norm" in name.lower():
+                    if param.grad is not None:
+                        grad_norm_val = param.grad.detach().norm().item()
+                        if grad_norm_val == 0.0:
+                            logger.warning(
+                                f"[_step] Actor param '{name}' has ZERO grad norm!"
+                            )
+                        else:
+                            logger.debug(
+                                f"[_step] Actor param '{name}' grad norm: {grad_norm_val:.6f}"
+                            )
+                    else:
+                        logger.debug(
+                            f"[_step] Actor param '{name}' grad is None (no gradient)"
+                        )
+
         self.policy.actor.step()
         # Get rid of actor's activations to free up memory
         actor_loss = actor_loss.detach().clone()
@@ -466,7 +617,7 @@ class PPOTrainer(BaseTrainer):
             shifted_labels_mask=shifted_labels_mask,
             old_valid_values=valid_values,
             returns=returns,
-            trainer_params=self.ppo_hparams,
+            trainer_params=self.trainer_hparams,
         )
 
         self.policy.critic.backward(critic_loss)
@@ -518,12 +669,11 @@ class PPOTrainer(BaseTrainer):
         """
         if (
             shifted_ref_logprobs is not None
-            and self.ppo_params.kl_penalty_loss_type is None
+            and self.trainer_hparams.kl_penalty_loss_type is None
         ):
             kl = self._compute_kl_penalty(
                 shifted_actor_logprobs,
                 shifted_ref_logprobs,
-                trainer_hparams=self.ppo_hparams,
             )
             non_score_rewards = -self.kl_ctl.value * kl
         else:
@@ -653,7 +803,7 @@ class PPOTrainer(BaseTrainer):
         dist.barrier()
 
         def get_initial_value(
-            val: Union[float, torch.Tensor]
+            val: Union[float, torch.Tensor],
         ) -> Union[float, torch.Tensor]:
             if isinstance(val, torch.Tensor):
                 return torch.tensor(0.0, dtype=val.dtype, device=val.device)
@@ -684,3 +834,15 @@ class PPOTrainer(BaseTrainer):
 
         # Update Running Metrics
         running_metrics["_num_participating_tokens"] += num_tokens
+
+    def _get_automatic_checkpoint_name(self) -> str:
+        checkpoint_format = self.get_checkpoint_format()
+        checkpoint_name = checkpoint_format.format(
+            iteration=str(self.state.iteration).zfill(4),
+            epoch=f"{self.state.epoch:.2f}",
+            global_step=str(self.state.global_step).zfill(4),
+        )
+        return checkpoint_name
+
+    def get_checkpoint_format(self) -> str:
+        return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"

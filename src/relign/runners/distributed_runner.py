@@ -4,6 +4,7 @@ from typing import Type, Generic, Dict, Any, TypeVar
 from datetime import timedelta
 
 import torch
+from deepspeed import comm as dist
 
 from relign.runners.base_runner import BaseRunner
 from relign.policies.base_policy import BasePolicy
@@ -11,6 +12,10 @@ from relign.algorithms.base_trainer import BaseTrainer
 from relign.episode_generators.base_episode_generator import BaseEpisodeGenerator
 from relign.algorithms.train_loop import TrainLoop
 from relign.policies.base_actor import DeepSpeedPolicy
+
+from relign.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 # Define TypeVars for Generics
@@ -44,6 +49,7 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
         trainer_kwargs: Dict[str, Any],
         episode_generator_kwargs: Dict[str, Any],
         algorithm_kwargs: Dict[str, Any],
+        cloud_logger=None,
     ):
         super().__init__(
             experiment_name=experiment_name,
@@ -64,12 +70,6 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
         self.exp_root = self._init_experiment_dir()  # Corrected method name
         self.log_dir = self._init_log_dir()
 
-        # Init PTEA
-        self._init_policy()
-        self._init_trainer()
-        self._init_episode_generator()
-        self._init_algorithm()
-
         if self.distributed_state.is_main_process:
             cloud_logger = self._create_cloud_logger()
             if cloud_logger is not None:
@@ -77,8 +77,16 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
 
                 self.cloud_logger: Run = self._create_cloud_logger()
 
+        if dist.is_initialized():
+            logger.info("Distributed is initialized")
+
         if self.distributed_state.use_distributed:
             self.distributed_state.wait_for_everyone()
+
+        self._init_policy()
+        self._init_trainer()
+        self._init_episode_generator()
+        self._init_algorithm()
 
     def _init_distributed_setup(self):
         from accelerate import PartialState
@@ -121,6 +129,8 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
             seed=self.seed,
             project_root_dir=self.exp_root,
             distributed_state=self.distributed_state,
+            cloud_log=self._cloud_log,
+            cloud_save=self._cloud_save,
             **self.episode_generator_kwargs,
         )
 
@@ -138,3 +148,7 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
     def _cloud_log(self, *args, **kwargs):
         if self.distributed_state.is_main_process and self.cloud_logger is not None:
             self.cloud_logger.log(*args, **kwargs)
+
+    def _cloud_save(self, *args, **kwargs):
+        if self.distributed_state.is_main_process and self.cloud_logger is not None:
+            self.cloud_logger.save(*args, **kwargs)
