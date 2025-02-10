@@ -787,7 +787,7 @@ class PPOTrainer(BaseTrainer):
 
         # Add "train/" prefix for clarity.
         logs = {f"train/{k}": v for k, v in logs.items()}
-
+        logger.info(f"logging {logs}")
         self._cloud_log({**logs, "train/global_step": self.state.global_step})
 
         # Reset the accumulated metrics

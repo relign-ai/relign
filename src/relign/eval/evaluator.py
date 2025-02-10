@@ -9,6 +9,7 @@ from datasets import Dataset, concatenate_datasets
 from transformers import PreTrainedTokenizer
 from accelerate import PartialState
 from accelerate.utils import release_memory
+from deepspeed import comm as dist
 
 from relign.inference.base_inference_strategy import InferenceStrategy
 from relign.tasks import Task
@@ -40,6 +41,7 @@ class Evaluator:
         force_rerun: bool = False,
         every_n_checkpoints: int = 1,  # TODO: do we still need this?
         cloud_logger: Optional[Callable] = None,
+        cloud_updater: Optional[Callable] = None,
         seed: int = 69,
     ):
         """
@@ -55,6 +57,7 @@ class Evaluator:
         self.analysers_cls = analysers_cls
         self.analysers_kwargs = analysers_kwargs
         self.cloud_logger = cloud_logger
+        self.cloud_updater = cloud_updater
         self.inference_strategy_cls = inference_strategy_cls
         self.inference_strategy_kwargs = inference_strategy_kwargs
         self.distributed_state = distributed_state
@@ -70,7 +73,9 @@ class Evaluator:
         # Initialize the analyzers
         self.analysers = []
         for analyser, kwrgs in zip(self.analysers_cls, self.analysers_kwargs):
+            logger.info(f"passing cloud loffer {self.cloud_logger} to analyser")
             kwrgs["cloud_logger"] = self.cloud_logger
+            kwrgs["cloud_updater"] = self.cloud_updater
             kwrgs["project_root_dir"] = self.project_root_dir
             self.analysers.append(analyser(**kwrgs))
 
@@ -148,29 +153,32 @@ class Evaluator:
         ######################################
         seed = self.seed + process_index * 100 
         vllm_init_fn = self._get_vllm_init_fn(
-            results_dir=inference_result_dir,
+            results_dir=results_dir,
             hf_ckpt_path_or_model=str(latest_policy_path),
             process_index=process_index,
             seed=seed,
         )
 
-        results = self._run_inference(
+        # inference results are saved in eval_results_shard_n
+        _ = self._run_inference(
             dataset_shard=dataset,
             vllm_init_fn=vllm_init_fn,
-            results_root_dir=inference_result_dir,
+            results_root_dir=results_dir,
             iteration=iteration,
             gpu_memory_usage_before_mb=gpu_mem_usage_before_mb,
             seed=seed,
         )
 
+        logger.info(f"Process {process_index} finished inference.")
         self.distributed_state.wait_for_everyone() 
 
         ######################
         #  Recombine results #
         ######################
-        merged_results = None
-        if self.is_main_process():
+        merged= None
+        if self.distributed_state.is_main_process:
             shard_paths = list((inference_result_dir/ f"eval_results").glob("shard_*"))
+            logger.info(f"shard path, {shard_paths}")
             shard_paths.sort(key=lambda x: int(x.name.split("shard_")[-1]))
             merged = concatenate_datasets(
                 [Dataset.load_from_disk(str(p)) for p in shard_paths]
@@ -180,24 +188,28 @@ class Evaluator:
                 merged = merged.shuffle(seed=self.seed + iteration)
                 merged = merged.select(range(num_evals))
             
-            merged.save_to_disk(str(inference_result_dir/ "evals" / "merged"))
+            merged.save_to_disk(str(eval_root_dir / "merged"))
             # del merged
             # release_memory()
 
-        logger.info(f"Merged results {merged_results}")
+        logger.info(f"Merged results {merged}")
+        self.distributed_state.wait_for_everyone()
+        dist.barrier()
+        
         ################
         #    Analyze   #
         ################
-        if self.distributed_state.is_main_process():
+        if self.distributed_state.is_main_process:
             analysis_results = []
             if self.analysers is not None:
                 for analyzer in self.analysers:
                     logger.info(f"Running analyser: {analyzer.__class__.__name__}")
-                    analysis = analyzer.analyze(merged_results, global_step)
+                    analysis = analyzer.analyze(merged, global_step)
                     analysis_results.append(analysis)
+            del merged
+            release_memory()
         
         self.distributed_state.wait_for_everyone()
-        return analysis_results
 
     def _run_inference(
         self,
@@ -222,7 +234,7 @@ class Evaluator:
                 The seed for this process to use for inference.
         """
 
-        infer_result_path = results_root_dir / "results_ds"
+        # something like : shard_1
         vllm_server, guidance_llm_kwargs = vllm_init_fn()
         target_device_index = self._get_device_index()
 
@@ -232,7 +244,7 @@ class Evaluator:
             # initialize the inference strategy class with updates result dir
             self.inference_strategy = self.inference_strategy_cls(
                 **self.inference_strategy_kwargs,
-                result_dir=results_root_dir,
+                result_dir=Path(results_root_dir / "ds_shard"), # ie., shard_1
                 seed=seed,
                 cloud_logger=None,
                 log_level=(
@@ -241,27 +253,13 @@ class Evaluator:
                     else None
                 ),
             )
-
             # initialize the guidance_llm with the right server settings
             self.inference_strategy._init_guidance_llm(**guidance_llm_kwargs)
             results = self.inference_strategy.generate(dataset_shard)
-
-            logging.info(f"obtained {len(results)} from inference strategy")
-
-            # Convert the results to a list before saving
-            episodes = []
-            for row in results:
-                episode = dict(row)  # copy all fields from row
-                episode["iteration"] = iteration
-                episodes.append(episode)
-
-            episode_ds = Dataset.from_list(episodes)
-            episode_ds.save_to_disk(str(infer_result_path))
+            results.save_to_disk(str(results_root_dir))
         finally:
             logger.info(f"Cleaning up vllm server.. Device:{target_device_index}")
             vllm_server.stop_server()
-            if results is not None:
-                del results
             del vllm_server
             release_memory()
             self.vllm_cleanup(
@@ -270,9 +268,7 @@ class Evaluator:
             )
             release_memory()
 
-        results = Dataset.load_from_disk(str(results_root_dir / "results_ds"))
         return results
-
 
     def _get_vllm_init_fn(
         self,

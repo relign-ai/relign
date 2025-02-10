@@ -80,7 +80,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
     )
     num_iterations = 600 
     sampling_temperature = 0.6
-    num_epoch_per_iterations = 2
+    num_epoch_per_iterations = 1
     target_batch_size = 64
     gradient_accumulation_steps = 4
     max_concurrent_programs = 512 

@@ -19,12 +19,14 @@ class Analyzer:
         task: Task,
         metrics_prefix: str = "",
         cloud_logger: Optional[Run] = None,
+        cloud_updater: Optional[Run] = None,
         global_step: Optional[int] = None,
         plot_prefix: Optional[str] = "eval",
         project_root_dir: Optional[Path] = None,
         distributed_state: Optional[PartialState] = None,
     ):
         self.cloud_logger = cloud_logger
+        self.cloud_updater = cloud_updater
         self.metrics_prefix = metrics_prefix
         self.global_step = global_step
         self.plot_prefix = plot_prefix
@@ -62,13 +64,14 @@ class Analyzer:
         self.log(metrics)
 
         # Log the metrics to the cloud
+        logger.info(f"cloud logger {self.cloud_logger}")
         if self.cloud_logger is not None:
             logger.info(f"logging cloud metrics")
             plot_metrics = copy.deepcopy(metrics)
             plot_metrics = {
                 f"{self.plot_prefix}/{k}": v for k, v in plot_metrics.items()
             }
-            self.cloud_logger.log(
+            self.cloud_logger(
                 {**plot_metrics, "train/global_step": global_step}
             )
             
@@ -78,7 +81,7 @@ class Analyzer:
             if analysis_id is not None and len(analysis_id) > 0:
                 prefix += analysis_id + "/"
             metrics = {prefix + k: v for k, v in metrics.items()}
-            self.cloud_logger.summary.update(metrics)
+            self.cloud_updater(metrics)
 
     def flush_local_log(self):
         analysis_root = self.get_analysis_root_dir()

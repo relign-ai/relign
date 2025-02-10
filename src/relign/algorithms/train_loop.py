@@ -35,6 +35,8 @@ class TrainLoop:
         num_iterations: int = 100,
         evaluation_freq: int = 10,
         checkpoint_freq: int = 10,
+        cloud_logger = None,
+        cloud_updater = None,
     ):
         """
         Base of Reinforcement Learning Algorithms.
@@ -57,13 +59,17 @@ class TrainLoop:
         self.evaluation_freq = evaluation_freq
         self.checkpoint_freq = checkpoint_freq
         self.distributed_state = distributed_state
+        self.cloud_logger = cloud_logger
+        self.cloud_updater = cloud_updater
 
         # Intitialize the evaluator:
+        logger.info(f"Initializing evaluator")
         self.evaluator = self.evaluator_cls(
             **evaluator_kwargs,
             project_root_dir=project_root_dir,
             distributed_state=distributed_state,
-            cloud_logger=None,
+            cloud_logger=self.cloud_logger,
+            cloud_updater=self.cloud_updater,
             seed=self.seed,
         )
 
