@@ -232,6 +232,7 @@ class PPOTrainer(BaseTrainer):
 
                     should_log = self.state.global_step % self.logging_steps == 0
                     if should_log:
+                        logger.info("Logging training metrics")
                         self._log_training_metrics(
                             global_step_last_logged,
                             accumulated_metrics,
@@ -787,7 +788,7 @@ class PPOTrainer(BaseTrainer):
 
         # Add "train/" prefix for clarity.
         logs = {f"train/{k}": v for k, v in logs.items()}
-        logger.info(f"logging {logs}")
+        logger.info(f"LOGGING TRAINING METRICS {logs}")
         self._cloud_log({**logs, "train/global_step": self.state.global_step})
 
         # Reset the accumulated metrics

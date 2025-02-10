@@ -73,18 +73,18 @@ def ppo_gsm(cfg, local_rank: int = -1):
         timeout=1,
     )
 
-    num_episodes_per_iteration = 64 
+    num_episodes_per_iteration = 64
     num_rollouts_per_sample = 2
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
     )
-    num_iterations = 600 
+    num_iterations = 600
     sampling_temperature = 0.6
     num_epoch_per_iterations = 1
     target_batch_size = 64
     gradient_accumulation_steps = 4
-    max_concurrent_programs = 512 
-    max_concurrent_generations = 128
+    max_concurrent_programs = 32
+    max_concurrent_generations = 32
     guidance_llm_cls = OpenAIVLLM
     guidance_llm_kwargs = {
         "api_key": "EMPTY",
@@ -177,7 +177,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "target_batch_size": target_batch_size,
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "num_epochs_per_iteration": num_epoch_per_iterations,
-        "dataloader_num_workers": 4,
+        "dataloader_num_workers": 2,
         "dataloader_pin_memory": False,
     }
 

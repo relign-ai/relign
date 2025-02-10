@@ -78,7 +78,7 @@ class BaseTrainer(ABC):
         num_episodes_per_iteration: int = 1,
         gamma: int = 1,
         lam=0.95,
-        logging_steps: int = 5,
+        logging_steps: int = 1,
         per_device_batch_size: Optional[int] = None,
         target_batch_size: Optional[int] = None,
         cloud_log: Optional[Any] = None,

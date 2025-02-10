@@ -85,7 +85,7 @@ class Evaluator:
 
     def evaluate(
         self,
-        global_step : int,
+        global_step: int,
         iteration: int,
         latest_policy_path: Optional[Path] = None,
     ):
@@ -145,13 +145,15 @@ class Evaluator:
             contiguous=True,
         )
 
+        self.distributed_state.wait_for_everyone()
+
         results_dir = inference_result_dir / "eval_results" / f"shard_{process_index}"
         results_dir.mkdir(parents=True, exist_ok=True)
 
         ######################################
         # Prepare the server and run inference
         ######################################
-        seed = self.seed + process_index * 100 
+        seed = self.seed + process_index * 100
         vllm_init_fn = self._get_vllm_init_fn(
             results_dir=results_dir,
             hf_ckpt_path_or_model=str(latest_policy_path),
@@ -170,14 +172,16 @@ class Evaluator:
         )
 
         logger.info(f"Process {process_index} finished inference.")
-        self.distributed_state.wait_for_everyone() 
+
+        self.distributed_state.wait_for_everyone()
+        dist.barrier()
 
         ######################
         #  Recombine results #
         ######################
-        merged= None
+        merged = None
         if self.distributed_state.is_main_process:
-            shard_paths = list((inference_result_dir/ f"eval_results").glob("shard_*"))
+            shard_paths = list((inference_result_dir / f"eval_results").glob("shard_*"))
             logger.info(f"shard path, {shard_paths}")
             shard_paths.sort(key=lambda x: int(x.name.split("shard_")[-1]))
             merged = concatenate_datasets(
@@ -187,15 +191,16 @@ class Evaluator:
             if len(merged) > num_evals:
                 merged = merged.shuffle(seed=self.seed + iteration)
                 merged = merged.select(range(num_evals))
-            
+
             merged.save_to_disk(str(eval_root_dir / "merged"))
             # del merged
             # release_memory()
 
         logger.info(f"Merged results {merged}")
+
         self.distributed_state.wait_for_everyone()
         dist.barrier()
-        
+
         ################
         #    Analyze   #
         ################
@@ -208,8 +213,9 @@ class Evaluator:
                     analysis_results.append(analysis)
             del merged
             release_memory()
-        
+
         self.distributed_state.wait_for_everyone()
+        dist.barrier()
 
     def _run_inference(
         self,
@@ -244,7 +250,7 @@ class Evaluator:
             # initialize the inference strategy class with updates result dir
             self.inference_strategy = self.inference_strategy_cls(
                 **self.inference_strategy_kwargs,
-                result_dir=Path(results_root_dir / "ds_shard"), # ie., shard_1
+                result_dir=Path(results_root_dir / "ds_shard"),  # ie., shard_1
                 seed=seed,
                 cloud_logger=None,
                 log_level=(

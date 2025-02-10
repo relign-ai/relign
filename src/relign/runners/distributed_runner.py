@@ -71,7 +71,7 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
         self.log_dir = self._init_log_dir()
 
         if self.distributed_state.is_main_process:
-            cloud_logger = cloud_logger
+            cloud_logger = self._create_cloud_logger()
             if cloud_logger is not None:
                 from wandb.sdk.wandb_run import Run
 
@@ -143,7 +143,7 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
             trainer=self.trainer,
             episode_generator=self.episode_generator,
             cloud_logger=self._cloud_log,
-            cloud_updater= self._cloud_update,
+            cloud_updater=self._cloud_update,
             **self.algorithm_kwargs,
         )
 
@@ -154,8 +154,7 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
     def _cloud_save(self, *args, **kwargs):
         if self.distributed_state.is_main_process and self.cloud_logger is not None:
             self.cloud_logger.save(*args, **kwargs)
-    
+
     def _cloud_update(self, *args, **kwargs):
         if self.distributed_state.is_main_process and self.cloud_logger is not None:
             self.cloud_logger.summary.update(*args, **kwargs)
-
