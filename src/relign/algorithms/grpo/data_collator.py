@@ -1,11 +1,14 @@
 from typing import List, Dict, Any
-import torch
+from collections import defaultdict
+
+import random
 import math
 
-from relign.utils.logging import get_logger
-import random
+import numpy as np
+import torch
 from torch.utils.data import Sampler, Dataset
-from collections import defaultdict
+
+from relign.utils.logging import get_logger
 
 COLUMN_REF_SHIFTED_LOGPS = "ref_shifted_log_probs"  # We mean shifted to left by 1
 COLUMN_ACTOR_SHIFTED_LOGPS = "actor_shifted_log_probs"  # We mean shifted to left by 1
@@ -121,16 +124,24 @@ class GRPODataCollator:
         )
 
         # Create the batch
-        batch = {"input_ids": [], "labels": [], "attention_mask": []}
+        batch = {
+            "input_ids": [], 
+            "labels": [], 
+            "attention_mask": [], 
+            "len_query_token_ids": [],
+            "len_response_token_ids": [],
+            "max_seq_length": [],
+            "normalized_scores": [],
+        }
 
         has_group = "group" in instances[0] and instances[0]["group"] is not None
         if has_group:
-            # Group to which the instance belongs
             batch["group"] = []
 
         has_advantages = (
             "advantages" in instances[0] and instances[0]["advantages"] is not None
         )
+
         if has_advantages:
             batch["advantages"] = []
 
@@ -145,43 +156,17 @@ class GRPODataCollator:
         if has_scores:
             batch["scores"] = []
 
-        has_ref_shifted_logps = COLUMN_REF_SHIFTED_LOGPS in instances[0]
-        if has_ref_shifted_logps:
-            batch[COLUMN_REF_SHIFTED_LOGPS] = []
-
-        has_actor_logps = COLUMN_ACTOR_SHIFTED_LOGPS in instances[0]
-        if has_actor_logps:
-            batch[COLUMN_ACTOR_SHIFTED_LOGPS] = []
-
         pad_token_id = 0  # It doesn't matter what the pad token id is, since we will mask it out anyway
         pad_label = (
             -100
         )  # -100 is the default value for the padding token in the loss function
         pad_logp = -float(1e9)  # Crazy value to show up it in case of a bug
 
-        def prepare_shifted_logps(shifted_logps_with_query, query_len, response_len):
-            assert len(shifted_logps_with_query) == (query_len + response_len - 1), (
-                f"We assume the ref. log probs are provided for the entire sequence",
-                f"(query + response) but got {len(shifted_logps_with_query)}",
-                f"instead of {query_len + response_len - 1}",
-            )
-
-            shifted_logps_without_query = shifted_logps_with_query[query_len - 1 :]
-            assert len(shifted_logps_without_query) == response_len
-
-            n_pads_at_end = (max_seq_length - 1) - len(shifted_logps_with_query)
-            shifted_logs = (
-                [pad_logp] * (query_len - 1)
-                + shifted_logps_without_query
-                + [pad_logp] * n_pads_at_end
-            )
-            return shifted_logs
-
         for instance in instances:
             # attention masks: length: max_seq length, '1' for real tokens, '0' for padding tokens
+            # We want to send these to the batch in collation
             query_token_ids = instance["query_token_ids"]
             response_token_ids = instance["response_token_ids"]
-
             # Create the input ids and attention mask
             input_ids = query_token_ids + response_token_ids
             attention_mask = [1] * len(input_ids)
@@ -189,8 +174,13 @@ class GRPODataCollator:
 
             input_ids += [pad_token_id] * num_pad_at_end
             attention_mask += [0] * num_pad_at_end
+
             batch["input_ids"].append(input_ids)
             batch["attention_mask"].append(attention_mask)
+
+            batch["len_query_token_ids"].append(len(query_token_ids))
+            batch["len_response_token_ids"].append(len(response_token_ids))
+            batch["max_seq_length"].append(max_seq_length) 
 
             # Create the labels
             labels = (
@@ -202,6 +192,8 @@ class GRPODataCollator:
 
             if has_group:
                 batch["group"].append(instance["group"])
+                # calculate the mean for each group and add it to the instance
+                # calculate the std for each group and add it to the instance
 
             if has_advantages:
                 advantages = instance["advantages"]
@@ -212,37 +204,41 @@ class GRPODataCollator:
                 assert len(labels) == len(advantages)
                 batch["advantages"].append(advantages)
 
-            if has_process_rewards:
-                process_rewards = instance["process_rewards"]
-                process_rewards = (
-                    [0.0] * len(query_token_ids)
-                    + process_rewards
-                    + [0.0] * num_pad_at_end
-                )
-                assert len(labels) == len(process_rewards)
-                batch["process_rewards"].append(process_rewards)
-
             if has_scores:
                 assert isinstance(instance["scores"], float)
                 batch["scores"].append(instance["scores"])
 
-            if has_ref_shifted_logps:
-                shifted_ref_logps = prepare_shifted_logps(
-                    instance[COLUMN_REF_SHIFTED_LOGPS],
-                    len(query_token_ids),
-                    len(response_token_ids),
+        group2scores = defaultdict(list)
+        for example in batch:
+            if "group" not in example:
+                raise KeyError(
+                    "Each example must have a 'group' key to enable group-based normalization."
                 )
-                assert len(shifted_ref_logps) == max_seq_length - 1
-                batch[COLUMN_REF_SHIFTED_LOGPS].append(shifted_ref_logps)
+            if "scores" not in example:
+                raise KeyError(
+                    "Each example must have a 'scores' key to enable group-based normalization."
+                )
+            group2scores[example["group"]].append(example["scores"])
 
-            if has_actor_logps:
-                shifted_actor_logps = prepare_shifted_logps(
-                    instance[COLUMN_ACTOR_SHIFTED_LOGPS],
-                    len(query_token_ids),
-                    len(response_token_ids),
-                )
-                assert len(shifted_actor_logps) == (max_seq_length - 1)
-                batch[COLUMN_ACTOR_SHIFTED_LOGPS].append(shifted_actor_logps)
+        # Compute mean & std for each group in the episodes
+        group2meanstd = {}
+        for group, scores in group2scores.items():
+            arr = np.array(scores, dtype=np.float32)
+            mean = arr.mean()
+            std = arr.std()
+            group2meanstd[group] = (mean, std)
+
+        # 3. Replace 'scores' with normalized 'rewards'
+        for example in batch:
+            group = example["group"]
+            mean, std = group2meanstd[group]
+            if std < 1e-12:
+                example["rewards"] = 0.0
+            else:
+                example["rewards"] = (example["scores"] - mean) / std
+
+            # Remove the old 'scores' to ensure only normalized rewards remain
+            del example["scores"]
 
         # Convert the lists to tensors
         batch = {k: torch.tensor(v) for k, v in batch.items()}

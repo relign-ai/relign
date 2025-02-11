@@ -135,7 +135,6 @@ class ActorPolicy(DeepSpeedPolicy):
         if actor_model_fn is not None:
             self.actor_model_fn = actor_model_fn
 
-        logger.info("Initializing actor DeepSpeed engine...")
         self._init_actor_model(
             actor_model_fn=self.actor_model_fn, only_return_unwrapped_model=False
         )

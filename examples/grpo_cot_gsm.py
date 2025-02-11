@@ -1,4 +1,5 @@
 import hydra
+from datasets import Dataset
 from textwrap import dedent
 import argparse
 from pathlib import Path
@@ -75,14 +76,15 @@ def grpo_gsm(cfg, local_rank):
     )
 
     # --------- Inference (Chain-of-thought) Strategy --------- #
-    num_episodes_per_iteration = 24  # num groups
-    num_rollouts_per_sample = 6  # group size
+    num_episodes_per_iteration = 8# num groups
+    num_rollouts_per_sample = 8# group size
+    # This is num_groups in grpo
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
     )
     num_iterations = 1000
     sampling_temperature = 0.6
-    num_epoch_per_iterations = 2
+    num_epoch_per_iterations = 4
     gradient_accumulation_steps = 1
     max_concurrent_programs = 32
     max_concurrent_generations = 32
@@ -115,8 +117,9 @@ def grpo_gsm(cfg, local_rank):
     question_template = dedent("""\
     [MATH_TASK] Problem:
     {query}
-    put your thinking between <think>...</think>
-    Solution:
+    first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning
+    process and answer are enclosed within <think> </think> followed by an answer tag ####, respectively, i.e.,
+    <think> reasoning process here </think> \n#### answer 
     """)
 
     # ---- Chain of Thought Strategy Instance --- #
@@ -172,10 +175,10 @@ def grpo_gsm(cfg, local_rank):
     # ----------- Trainer --------------- #
     grpo_trainer_class = GRPOTrainer
     grpo_trainer_kwargs = {
-        "target_batch_size": 8,
+        "target_batch_size": 1,
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "num_epochs_per_iteration": num_epoch_per_iterations,
-        "dataloader_num_workers": 2,
+        "dataloader_num_workers": 1,
         "dataloader_pin_memory": False,
     }
 
@@ -206,7 +209,7 @@ def grpo_gsm(cfg, local_rank):
     algorithm_kwargs = {
         "num_iterations": num_iterations,
         "verbose": 1,
-        "evaluation_freq": 1,
+        "evaluation_freq": 10,
         "checkpoint_freq": 10,
         "evaluator_cls": evaluator_cls,
         "evaluator_kwargs": evaluator_kwargs,
@@ -229,6 +232,11 @@ def grpo_gsm(cfg, local_rank):
 
     # Start training
     runner.run()
+
+    # dataset_path="experiment/grpo-cot-rho1b-gsm/episodes/episodes_0000.js+on"
+    # episodes = Dataset.load_from_disk(dataset_path)
+    # runner.trainer._compute_batch_size_and_steps()
+    # runner.trainer.step(episodes)
 
 
 def main():
