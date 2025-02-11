@@ -14,7 +14,6 @@ COLUMN_VALUES = "critic_values"
 logger = get_logger(__name__)
 
 
-
 class GroupedBatchSampler(Sampler):
     """
     A sampler that groups samples by a specified 'group' column and returns
@@ -26,12 +25,13 @@ class GroupedBatchSampler(Sampler):
         shuffle_groups (bool): Whether to shuffle the order of groups
         groups_per_step (int): How many groups to sample in one iteration. Defaults to 1.
     """
+
     def __init__(
         self,
         dataset,
         group_column: str,
         shuffle_groups: bool = True,
-        groups_per_step: int = 1
+        groups_per_step: int = 1,
     ):
         super().__init__(data_source=dataset)
         self.dataset = dataset
@@ -77,45 +77,46 @@ class GroupedBatchSampler(Sampler):
 
 class GRPODataCollator:
     """
-        Collates the given data instances into a batch.
-        Every data instance should have the following keys:
-        - "query_token_ids": The token ids of the query.
-        - "response_token_ids": The token ids of the response.
-        - "score": The reward of the response (single scalar per response)
-        - "advantages": The advantages of the response.
-        - "group: The group of the response. It is a scalar tensor.
+    Collates the given data instances into a batch.
+    Every data instance should have the following keys:
+    - "query_token_ids": The token ids of the query.
+    - "response_token_ids": The token ids of the response.
+    - "score": The reward of the response (single scalar per response)
+    - "advantages": The advantages of the response.
+    - "group: The group of the response. It is a scalar tensor.
 
-        Args:
-            data_instances (List[Dict[str, Any]]):
-                The data instances to collate.
-        Returns:
-            Dict[str, torch.Tensor]:
-                It contains the following keys:
-                - "input_ids": The token ids of the entire episode (query + responses).
-                        Description: Query + response tokens + padding
-                        Shape: (batch_size, max_seq_len)
-                - "labels": The token ids of the entire episode (query + responses).
-                        Description: -100 for padding and query tokens, response tokens for labels.
-                        Shape: (batch_size, max_seq_len)
-                - "attention_mask": The attention mask of the entire episode (query + responses),
-                        Description:  1 for input tokens, 0 for padding tokens. 
-                        Shape: (batch_size, max_seq_len)
-                - "advantages": The advantages of the responses.
-                        Description: 0.0 for padding and query tokens, advantages at response token index 
-                        Shape: (batch_size, max_seq_len)
-                - "scores": The scores of the responses. It should be a 1D scalar tensor.
-                        Description: The scores of the responses.
-                        Shape: (batch_size,)
-                - "values": The values of the response states.
-                        (batch_size, max_seq_len)
-                - "ref_shifted_log_probs": The reference log probabilities of the responses.
-                        Shape: (batch_size, max_seq_len-1)
-                - "actor_shifted_log_probs": The actor log probabilities of the responses.
-                        Shape: (batch_size, max_seq_len-1)
+    Args:
+        data_instances (List[Dict[str, Any]]):
+            The data instances to collate.
+    Returns:
+        Dict[str, torch.Tensor]:
+            It contains the following keys:
+            - "input_ids": The token ids of the entire episode (query + responses).
+                    Description: Query + response tokens + padding
+                    Shape: (batch_size, max_seq_len)
+            - "labels": The token ids of the entire episode (query + responses).
+                    Description: -100 for padding and query tokens, response tokens for labels.
+                    Shape: (batch_size, max_seq_len)
+            - "attention_mask": The attention mask of the entire episode (query + responses),
+                    Description:  1 for input tokens, 0 for padding tokens.
+                    Shape: (batch_size, max_seq_len)
+            - "advantages": The advantages of the responses.
+                    Description: 0.0 for padding and query tokens, advantages at response token index
+                    Shape: (batch_size, max_seq_len)
+            - "scores": The scores of the responses. It should be a 1D scalar tensor.
+                    Description: The scores of the responses.
+                    Shape: (batch_size,)
+            - "values": The values of the response states.
+                    (batch_size, max_seq_len)
+            - "ref_shifted_log_probs": The reference log probabilities of the responses.
+                    Shape: (batch_size, max_seq_len-1)
+            - "actor_shifted_log_probs": The actor log probabilities of the responses.
+                    Shape: (batch_size, max_seq_len-1)
     """
+
     def __call__(self, instances: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         max_seq_length = max(
-            len(instance["query_token_ids"]) + len(instance["response_token_ids"]) 
+            len(instance["query_token_ids"]) + len(instance["response_token_ids"])
             for instance in instances
         )
 
@@ -124,15 +125,20 @@ class GRPODataCollator:
 
         has_group = "group" in instances[0] and instances[0]["group"] is not None
         if has_group:
-            # Group to which the instance belongs 
+            # Group to which the instance belongs
             batch["group"] = []
 
-        has_advantages = "advantages" in instances[0] and instances[0]["advantages"] is not None
+        has_advantages = (
+            "advantages" in instances[0] and instances[0]["advantages"] is not None
+        )
         if has_advantages:
             batch["advantages"] = []
 
-        has_process_rewards = "process_rewards" in instances[0] and instances[0]["process_rewards"] is not None
-        if has_process_rewards: 
+        has_process_rewards = (
+            "process_rewards" in instances[0]
+            and instances[0]["process_rewards"] is not None
+        )
+        if has_process_rewards:
             batch["process_rewards"] = []
 
         has_scores = "scores" in instances[0] and instances[0]["scores"] is not None
@@ -148,18 +154,18 @@ class GRPODataCollator:
             batch[COLUMN_ACTOR_SHIFTED_LOGPS] = []
 
         pad_token_id = 0  # It doesn't matter what the pad token id is, since we will mask it out anyway
-        pad_label = (-100)  # -100 is the default value for the padding token in the loss function
+        pad_label = (
+            -100
+        )  # -100 is the default value for the padding token in the loss function
         pad_logp = -float(1e9)  # Crazy value to show up it in case of a bug
 
         def prepare_shifted_logps(shifted_logps_with_query, query_len, response_len):
-            assert len(shifted_logps_with_query) == (
-                (query_len + response_len - 1)
-            ), ( 
+            assert len(shifted_logps_with_query) == (query_len + response_len - 1), (
                 f"We assume the ref. log probs are provided for the entire sequence",
                 f"(query + response) but got {len(shifted_logps_with_query)}",
-                f"instead of {query_len + response_len - 1}"
+                f"instead of {query_len + response_len - 1}",
             )
-                
+
             shifted_logps_without_query = shifted_logps_with_query[query_len - 1 :]
             assert len(shifted_logps_without_query) == response_len
 
@@ -168,7 +174,7 @@ class GRPODataCollator:
                 [pad_logp] * (query_len - 1)
                 + shifted_logps_without_query
                 + [pad_logp] * n_pads_at_end
-             )
+            )
             return shifted_logs
 
         for instance in instances:
@@ -199,19 +205,25 @@ class GRPODataCollator:
 
             if has_advantages:
                 advantages = instance["advantages"]
-                # Advantages are the same length as the reponse_token_ids 
-                advantages = [0.0] * len(query_token_ids) + advantages + [0.0] * num_pad_at_end
+                # Advantages are the same length as the reponse_token_ids
+                advantages = (
+                    [0.0] * len(query_token_ids) + advantages + [0.0] * num_pad_at_end
+                )
                 assert len(labels) == len(advantages)
                 batch["advantages"].append(advantages)
 
             if has_process_rewards:
                 process_rewards = instance["process_rewards"]
-                process_rewards = [0.0] * len(query_token_ids) + process_rewards + [0.0] * num_pad_at_end
+                process_rewards = (
+                    [0.0] * len(query_token_ids)
+                    + process_rewards
+                    + [0.0] * num_pad_at_end
+                )
                 assert len(labels) == len(process_rewards)
                 batch["process_rewards"].append(process_rewards)
 
             if has_scores:
-                assert isinstance(instance['scores'], float)
+                assert isinstance(instance["scores"], float)
                 batch["scores"].append(instance["scores"])
 
             if has_ref_shifted_logps:
@@ -231,7 +243,6 @@ class GRPODataCollator:
                 )
                 assert len(shifted_actor_logps) == (max_seq_length - 1)
                 batch[COLUMN_ACTOR_SHIFTED_LOGPS].append(shifted_actor_logps)
-
 
         # Convert the lists to tensors
         batch = {k: torch.tensor(v) for k, v in batch.items()}

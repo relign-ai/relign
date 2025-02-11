@@ -27,7 +27,9 @@ class GSM8K(Task):
         remove_calculator_expressions: bool = True,
         intermediate_step_delimiter: Optional[str] = "\n",
         intermetdiate_step_tags: Optional[Tuple[str, str]] = None,
+        match_single_think_tag: bool = True,
         answer_prefix: Optional[str] = "\n#### ",
+        reward_on_last_token: bool = True,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -36,6 +38,8 @@ class GSM8K(Task):
         self.answer_prefix = answer_prefix
         self.intermediate_step_delimiter = intermediate_step_delimiter
         self.intermediate_step_tags = intermetdiate_step_tags
+        self.match_single_think_tag = match_single_think_tag
+        self.reward_on_last_token = reward_on_last_token
 
     def extract_predicted_answer_from_text(
         self, text: str, problem: Optional[str] = None
@@ -65,14 +69,10 @@ class GSM8K(Task):
         Split the solution into reasoning steps.
 
         Args:
-            solution: The solution text.
+            solution: The full solution text.
 
         Returns:
             A list of indices where each index corresponds to the start of a reasoning step.
-            Example:
-            >>> solution = '...'
-            >>> indices = split_solution_into_reasoning_steps(solution)
-            >>> steps = [solution[indices[i]:indices[i+1]] for i in range(len(indices) - 1)]
         """
         assert self.use_original_format, "This method is only for original format"
         assert self.intermediate_step_delimiter is not None
@@ -80,6 +80,7 @@ class GSM8K(Task):
         delimiter = self.intermediate_step_delimiter
         answer_prefix = self.answer_prefix
 
+        # Attempt to split out the final answer if answer_prefix is provided
         if answer_prefix is None:
             sol_without_answer, answer = solution, None
         else:
@@ -89,44 +90,29 @@ class GSM8K(Task):
             else:
                 sol_without_answer, answer = solution_parts
 
-
-        # ========== Tag-Based Extraction ========== #         
+        # ========== Tag-Based Extraction ========== #
+        # If we do want to look for <think>...</think> blocks:
         if self.intermediate_step_tags is not None:
-            start_tag, end_tag = self.intermediate_step_tags
-            import re
-            # Modified regex: now we capture the entire block including the tags.
-            pattern = re.compile(
-                f"({re.escape(start_tag)}.*?{re.escape(end_tag)})", flags=re.DOTALL
-            )
-            matches = list(pattern.finditer(sol_without_answer))
-            # Extract steps preserving the <think> tags.
-            steps = [match.group(1).strip() for match in matches if match.group(1).strip() != ""]
+            # If we are matching a *single* <think> block plus answer prefix (or just ####), simplify logic:
+            if self.match_single_think_tag:
+                import re
 
-            # If no tagged steps are found, fallback to treating the whole text as one step.
-            if not steps:
-                steps = [sol_without_answer.strip()]
+                # Example: match <think> ... </think> followed eventually by ####
+                pattern = (
+                    rf"{re.escape(self.intermediate_step_tags[0])}"  # e.g. <think>
+                    r".*?"  # capture any text
+                    rf"{re.escape(self.intermediate_step_tags[1])}"  # e.g. </think>
+                    r".*?"  # capture any text (including newlines)
+                    r"####"  # the literal ####
+                )
 
-            # Merge the final answer (if provided) to the last intermediate step.
-            if answer is not None:
-                steps[-1] = f"{steps[-1]}{answer_prefix}{answer}"
-
-            # Reassemble a solution string that still contains the tags.
-            tag_preserving_solution = "\n".join(steps)
-            indices = [0]
-            for i, step in enumerate(steps):
-                if i == 0:
-                    indices.append(len(step))
+                # Use DOTALL so that '.' matches across newlines
+                if re.search(pattern, solution, flags=re.DOTALL):
+                    return [1]
                 else:
-                    # add one to account for the newline joining.
-                    indices.append(indices[-1] + 1 + len(step))
-            assert indices[-1] == len(tag_preserving_solution), (
-                f"{indices[-1]} != {len(tag_preserving_solution)}"
-            )
-            return indices
-        # ===== Delimiter-based splitting (existing logic) =====
-        assert self.intermediate_step_delimiter is not None
-        delimiter = self.intermediate_step_delimiter
+                    return []
 
+        # ===== Delimiter-based splitting (existing logic) =====
         steps = sol_without_answer.split(delimiter)
 
         # Merge leading empty steps into the first non-empty step.
@@ -154,7 +140,9 @@ class GSM8K(Task):
             steps = steps[:last_non_empty_step_idx] + [new_last_step]
 
         reconstructed_solution = delimiter.join(steps)
-        assert reconstructed_solution == solution, f"{reconstructed_solution} != {solution}"
+        assert (
+            reconstructed_solution == solution
+        ), f"{reconstructed_solution} != {solution}"
 
         indices = [0]
         for i, step in enumerate(steps):

@@ -331,16 +331,6 @@ class ActorCriticPolicy(ActorPolicy):
         self._load_training_state(checkpoint_path)
         self.checkpoint_path_to_load = checkpoint_path
 
-    def _save_hf_pretrained(self, engine: DeepSpeedEngine, path: Path) -> None:
-        """Saves a huggingface model that can be used for inference"""
-        if self._is_main_process():
-            # Only save on the main process
-            assert engine.zero_optimization_stage() < 3
-            logger.info(f"Saving HF pretrained weights to {path}")
-            unwrapped_model = engine.module
-            unwrapped_model.save_pretrained(path, safe_serialization=False)
-        dist.barrier()
-
     def save_checkpoint(self, checkpoint_path: Path) -> None:
         """
         saves both a hugginface model of the actor + critic and a
@@ -400,20 +390,3 @@ class ActorCriticPolicy(ActorPolicy):
             # Actually save the full engine state for both
             self.critic.save_checkpoint(str(checkpoint_path / "critic"))
             # Return the path of the (actor) HF pretrained directory for inference
-
-    def get_checkpoint_format(self) -> str:
-        return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
-
-    def _clean_old_temp_checkpoints(
-        self, checkpoint_dir, exclude: Optional[List[Path]] = None
-    ) -> None:
-        if exclude is None:
-            exclude = []
-
-        if self._is_main_process():
-            for checkpoint in checkpoint_dir.iterdir():
-                if checkpoint.is_dir():
-                    logger.info(f"Removing old temp checkpoint {checkpoint}")
-                    shutil.rmtree(checkpoint)
-
-        dist.barrier()

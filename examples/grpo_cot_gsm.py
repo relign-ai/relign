@@ -31,7 +31,7 @@ from relign.eval.analyzer import TaskPerformanceAnalyzer
 from relign.models.base_model import DIPreTrainedTokenizer, PreTrainedModelForCasualLM
 
 
-def grpo_gsm(cfg):
+def grpo_gsm(cfg, local_rank):
     # ------ Deepspeed Config ------ #
     ds_config = cfg.deepspeed
     ds_config = OmegaConf.to_container(ds_config, resolve=True)
@@ -62,6 +62,7 @@ def grpo_gsm(cfg):
         dataset_dict_path="data/gsm8k",
         intermetdiate_step_tags=["<think>", "</think>"],
         remove_calculator_expressions=True,
+        use_original_format=True,
     )
 
     # ------- Task Reward Function -------- #
@@ -74,8 +75,8 @@ def grpo_gsm(cfg):
     )
 
     # --------- Inference (Chain-of-thought) Strategy --------- #
-    num_episodes_per_iteration = 68
-    num_rollouts_per_sample = 2
+    num_episodes_per_iteration = 24  # num groups
+    num_rollouts_per_sample = 6  # group size
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
     )
@@ -114,7 +115,7 @@ def grpo_gsm(cfg):
     question_template = dedent("""\
     [MATH_TASK] Problem:
     {query}
-
+    put your thinking between <think>...</think>
     Solution:
     """)
 
@@ -130,10 +131,11 @@ def grpo_gsm(cfg):
         "node_expander": node_expander,
         "guidance_llm_cls": guidance_llm_cls,
         "guidance_llm_kwargs": guidance_llm_kwargs,
+        "max_depth": 2,
     }
 
     # ----------- Episode Generator ------------ #
-    vllm_server = VLLMServer()
+    vllm_server = VLLMServer
     episode_generator = MathEpisodeGeneratorGroupedRewards
     episode_generator_kwargs = {
         "tokenizer": tokenizer,
@@ -150,7 +152,7 @@ def grpo_gsm(cfg):
         "fill_missing_episodes": True,
         "inference_strategy_cls": cot_inference_strategy_cls,
         "inference_strategy_kwargs": cot_inference_strategy_kwargs,
-        "vllm_server": vllm_server,
+        "vllm_server_cls": vllm_server,
         "vllm_gpu_memory_utilization": "auto",
         "wait_until_memory_release": True,
         "task": task,
@@ -178,42 +180,33 @@ def grpo_gsm(cfg):
     }
 
     # ----------- Algorithm -------------- #
-    from relign.inference.inference_pipeline import VLLMInferencePipeline
-
-    inference_pipeline_kwargs = {
-        "inference_strategy_cls": cot_inference_strategy_cls,
-        "inference_strategy_kwargs": cot_inference_strategy_kwargs,
-        "task": task,
-        "dataset_split": "validation",
-    }
-    evaluator_cls = Evaluator
-
     from relign.eval.evaluator import Evaluator
     from relign.eval.analyzer import TaskPerformanceAnalyzer
 
+    analysers_cls = [TaskPerformanceAnalyzer]
+    analysers_kwargs = [{"task": task, "metrics_prefix": "task_performance"}]
+
+    evaluator_cls = Evaluator
     evaluator_kwargs = {
         "task": task,
+        "dataset_split": "validation",
         "tokenizer": tokenizer,
-        "inference_pipeline_cls": VLLMInferencePipeline,
-        "inference_pipeline_kwargs": inference_pipeline_kwargs,
-        "vllm_server": vllm_server,
+        "inference_strategy_cls": cot_inference_strategy_cls,
+        "inference_strategy_kwargs": cot_inference_strategy_kwargs,
+        "vllm_server_cls": vllm_server,
         "vllm_gpu_memory_utilization": "auto",
         "wait_until_memory_release": True,
         "force_rerun": False,
         "every_n_checkpoints": 1,
-        "analyzers": [
-            TaskPerformanceAnalyzer(
-                task=task,
-                metrics_prefix="task_performance",
-            )
-        ],
+        "analysers_cls": analysers_cls,
+        "analysers_kwargs": analysers_kwargs,
     }
-    num_iterations = 500
+
     algorithm_cls = TrainLoop
     algorithm_kwargs = {
         "num_iterations": num_iterations,
         "verbose": 1,
-        "evaluation_freq": 10,
+        "evaluation_freq": 1,
         "checkpoint_freq": 10,
         "evaluator_cls": evaluator_cls,
         "evaluator_kwargs": evaluator_kwargs,

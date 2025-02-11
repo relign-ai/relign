@@ -268,7 +268,7 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
 class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
     def __init__(
         self,
-        with_process_reward: bool = True,
+        with_process_reward: bool = False,
         reward_entire_span: bool = False,
         **kwargs,
     ):
@@ -299,16 +299,12 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                 response_text = full_text[len(query_text) :]
 
                 try:
-                    num_reasoning_steps, reasoning_indices = (
-                        self._extract_reasoning_steps(response_text)
-                    )
-
-                    metrics.setdefault("num_reasoning_steps", []).append(
-                        num_reasoning_steps
-                    )
-                    metrics.setdefault("parse_failed", []).append(False)
+                    format_rewards = self._extract_reasoning_steps(response_text)
+                    metrics.setdefault("num_reasoning_steps", []).append(format_rewards)
                 except Exception as e:
                     metrics.setdefault("parse_failed", []).append(True)
+                    logger.info(f"Failed to extract reasoning steps: {e}")
+                    format_rewards = 0.0  # Default/fallback to avoid unbound variable
 
                 if finish_reason != "length":
                     # Generation stopped because the model hit <eos>
@@ -359,7 +355,7 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                 episode_kwargs = {
                     "query_token_ids": query_token_ids,
                     "response_token_ids": response_token_ids,
-                    "scores": float(reward),
+                    "scores": float(reward) + float(format_rewards),
                     "group": int(i),
                 }
 
@@ -373,7 +369,6 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                         query_token_ids,
                         response_token_ids,
                         offsets,
-                        reasoning_indices,
                         process_reward_value=1,
                         reward_entire_span=self.reward_entire_span,
                     )
@@ -427,7 +422,8 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
 
         if len(metrics) > 0:
             logs = {f"episodes_metric/{k}": v for k, v in metrics.items()}
-            self._cloud_log({**logs, "train/global_iteration": iteration})
+            if self.cloud_log is not None:
+                self.cloud_log({**logs, "train/global_iteration": iteration})
 
         return episodes
 
@@ -438,7 +434,8 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
         <think>.... </think> will give the index of the last character of the </think>
         """
         indices = self.task.split_solution_into_intermediate_steps(response_text)
-        return len(indices) - 1, indices
+        # TODO: make this clever if we want to do optional process rewards
+        return len(indices)
 
     def _compute_process_reward_tokens(
         self,

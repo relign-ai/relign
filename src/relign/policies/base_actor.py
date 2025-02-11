@@ -2,16 +2,14 @@ from abc import abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
-from typing import Dict, Optional, Literal, Callable, Union
+from typing import Dict, Optional, Literal, Callable, Union, List
 
-from accelerate import Accelerator
-from accelerate.utils import GradientAccumulationPlugin
-import numpy as np
 import torch
 import torch.nn.functional as F
 from transformers import PreTrainedModel
 from transformers.integrations import HfTrainerDeepSpeedConfig
 from deepspeed import DeepSpeedEngine
+from deepspeed import comm as dist
 
 from relign.policies.base_policy import DeepSpeedPolicy
 from relign.policies.base_policy import ActorForwardOutput
@@ -26,6 +24,8 @@ class ActorPolicy(DeepSpeedPolicy):
         self, actor_model_fn, actor_config, enable_reference: bool = True, **kwargs
     ):
         super().__init__(**kwargs)
+        cache_dir = Path(self.project_root_dir) / "policy" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
         self.actor_model_fn = actor_model_fn
         self.actor_config = actor_config
         self.enable_reference = enable_reference
@@ -508,6 +508,13 @@ class ActorPolicy(DeepSpeedPolicy):
             if hasattr(self, "_reference_engine"):
                 self._reference_engine = None
 
+    def destroy_ds_engines(self) -> None:
+        """
+        Destroys all cached engines.
+        """
+        self.destroy_actor_engine_if_not_cached()
+        self.destroy_reference_engine_if_not_cached()
+
     def _compute_kl_penalty(
         self,
         logprobs: torch.FloatTensor,
@@ -528,6 +535,50 @@ class ActorPolicy(DeepSpeedPolicy):
             pass  # already computed
         # elif estimation_type == ...
         return kl
+
+    def _load_checkpoint_to_ds_engines(
+        self,
+        checkpoint_path: Path,
+    ) -> None:
+        metrics = {}
+        if self.actor is not None:
+            self.actor.load_checkpoint(str(checkpoint_path / "actor"))
+        if len(metrics) > 0:
+            self._cloud_log({**metrics, "train/global_step": self.state.global_step})
+
+    def load_latest_policy_path(self, project_root_dir: Optional[Path] = None) -> None:
+        """loads both actor and critic from "policy/cache" folder"""
+        if not project_root_dir:
+            project_root_dir = self.project_root_dir
+        self._load_checkpoint_to_ds_engines(project_root_dir / "policy" / "cache")
+
+    def _save_hf_pretrained(self, engine: DeepSpeedEngine, path: Path) -> None:
+        """Saves a huggingface model that can be used for inference"""
+        if self._is_main_process():
+            # Only save on the main process
+            assert engine.zero_optimization_stage() < 3
+            logger.info(f"Saving HF pretrained weights to {path}")
+            unwrapped_model = engine.module
+            unwrapped_model.save_pretrained(path, safe_serialization=False)
+        dist.barrier()
+
+    def save_checkpoint(self, checkpoint_path: Path) -> None:
+        """
+        saves both a hugginface model of the actor + critic and a
+        deepspeed checkpoint which contains all the optimizer states
+        saves the actor in `checkpoint_path/actor` and the critic in `checkpoint_path/critic`
+        """
+        if self._is_main_process():
+            if checkpoint_path.exists():
+                logger.warning(
+                    f"Checkpoint path {checkpoint_path} already exists. Overwriting."
+                )
+                shutil.rmtree(checkpoint_path)
+            checkpoint_path.mkdir(parents=True, exist_ok=True)
+
+        if self.actor is not None:
+            self._save_hf_pretrained(self.actor, checkpoint_path / "hf_pretrained")
+            self.actor.save_checkpoint(str(checkpoint_path / "actor"))
 
     def get_last_checkpoint(self, return_resumable_only: bool = False):
         checkpoints = list(self.checkpoints_dir.iterdir())
@@ -554,50 +605,41 @@ class ActorPolicy(DeepSpeedPolicy):
         grad_acc_kwargs = {"num_steps": self.args.gradient_accumulation_steps}
         # grad_acc_kwargs["sync_with_dataloader"] = False
 
-    # def _create_accelerator_and_postprocess(self):
-    #     grad_acc_kwargs = {"num_steps": self.args.gradient_accumulation_steps}
-    #     # grad_acc_kwargs["sync_with_dataloader"] = False
-    #     gradient_accumulation_plugin = GradientAccumulationPlugin(**grad_acc_kwargs)
+    def save_latest_policy_path(self, checkpoint_path: Path) -> Path:
+        """
+        Saves both the actor and critic engines and returns the path of the actor for inference.
 
-    #     # Create accelerator object
-    #     self.accelerator = Accelerator(
-    #         dispatch_batches=False,
-    #         deepspeed_plugin=self.deepspeed_plugin,
-    #         gradient_accumulation_plugin=gradient_accumulation_plugin,
-    #     )
+        The caller can specify an arbitrary checkpoint path (for example:
+        Path("/some/storage/path/policy/TIMESTAMP") ).
+        We will append '/actor/hf_pretrained' and '/critic/hf_pretrained'
+        accordingly here.
+        """
+        # Path to store the HF version of the actor
+        actor_hf_pretrained_path = checkpoint_path / "actor" / "hf_pretrained"
+        # Path to store the HF version of the critic
+        # Save the HF-pretrained actor weights
+        dist.barrier()
+        self._save_hf_pretrained(
+            self.actor,
+            actor_hf_pretrained_path,
+        )
+        # TODO: technically one could move this one down
+        self.actor.save_checkpoint(str(checkpoint_path / "actor"))
+        dist.barrier()
 
-    #     # Deepspeed and Accelerate flags covering both trainer args and accelerate launcher
-    #     self.is_deepspeed_enabled = (
-    #         getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
-    #     )
+    def get_checkpoint_format(self) -> str:
+        return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
 
-    #     if self.is_deepspeed_enabled:
-    #         from deepspeed.utils import logger as ds_logger
-    #         import logging
+    def _clean_old_temp_checkpoints(
+        self, checkpoint_dir, exclude: Optional[List[Path]] = None
+    ) -> None:
+        if exclude is None:
+            exclude = []
 
-    #         ds_logger.setLevel(logging.DEBUG)
+        if self._is_main_process():
+            for checkpoint in checkpoint_dir.iterdir():
+                if checkpoint.is_dir():
+                    logger.info(f"Removing old temp checkpoint {checkpoint}")
+                    shutil.rmtree(checkpoint)
 
-    #         if getattr(self.args, "hf_deepspeed_config", None) is None:
-    #             from transformers.deepspeed import HfTrainerDeepSpeedConfig
-
-    #             ds_plugin = self.accelerator.state.deepspeed_plugin
-
-    #             ds_plugin.hf_ds_config = HfTrainerDeepSpeedConfig(
-    #                 ds_plugin.hf_ds_config.config
-    #             )
-    #             ds_plugin.deepspeed_config = ds_plugin.hf_ds_config.config
-    #             ds_plugin.hf_ds_config.trainer_config_process(self.args)
-
-    #     if (
-    #         self.args.gradient_checkpointing
-    #         and not self.is_flash_attention_model
-    #         and not self.is_deepspeed_enabled
-    #     ):
-    #         from accelerate import DistributedDataParallelKwargs
-
-    #         self.accelerator.ddp_handler = DistributedDataParallelKwargs(
-    #             find_unused_parameters=False
-    #         )
-
-    #     # Add state to accelerator for checkpointing
-    #     self.accelerator.register_for_checkpointing(self.state)
+        dist.barrier()

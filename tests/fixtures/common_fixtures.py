@@ -12,7 +12,7 @@ from relign.common.vllm_server import VLLMServer
 
 @pytest.fixture
 def vllm_server():
-    return VLLMServer()
+    return VLLMServer
 
 
 @pytest.fixture
