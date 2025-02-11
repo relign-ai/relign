@@ -96,8 +96,10 @@ class ActorCriticPolicy(ActorPolicy):
 
         # Create the LR scheduler if DS config has a scheduler
         has_deepspeed_scheduler = ds_config.get_value("scheduler", None) is not None
+        
         warmup_steps = self.warmup_steps
         if has_deepspeed_scheduler:
+            logger.info(f"has deepspeed scheduler")
             lr_scheduler = None
             self._patch_ds_config_for_lr_scheduler(
                 ds_config,
@@ -115,6 +117,7 @@ class ActorCriticPolicy(ActorPolicy):
                 num_training_steps=self.total_num_training_steps,
             )
         else:
+            logger.info(f"No scheduler found")
             lr_scheduler = None
 
         self._patch_ds_config_for_optimizer(ds_config)

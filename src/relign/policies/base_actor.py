@@ -244,20 +244,20 @@ class ActorPolicy(DeepSpeedPolicy):
         pg_losses1_anomalies = monitor_tensor_anomalies(
             pg_losses1.detach(), action_mask
         )
-        clip_range = 0.4
+        clip_range = 0.2
         pg_losses2 = -advantages * torch.clamp(
-            ratio, 1.0 - clip_range, 1.0 + clip_range
+            ratio, 1.0 - clip_range, 1.0 + clip_range 
         )
         pg_losses = torch.max(pg_losses1, pg_losses2)
         pg_loss = masked_mean(pg_losses, action_mask)
 
-        # Possibly apply a KL penalty if self.ppo_hparams.kl_penalty_loss_type is not None
         ref_kl_loss = None
         ref_kl = None
-        kl_penalty_loss_type = "forward_kl"
+        # Here we want the control variate kl penalty loss type
+        kl_penalty_loss_type = "control_variate"
         kl_penalty_loss_clip_max = 10
         kl_penalty_loss_clip_min = 0
-        kl_clt = 0.05
+        kl_clt = 0.0001
         if kl_penalty_loss_type is not None:
             # _compute_kl_penalty is below
             ref_kl_tensor = self._compute_kl_penalty(
@@ -276,7 +276,7 @@ class ActorPolicy(DeepSpeedPolicy):
         # Ratio check
         is_skipped = False
         avg_ratio = masked_mean(ratio, action_mask)
-        ratio_threshold = 1.5
+        ratio_threshold = 10 
         if avg_ratio.item() > ratio_threshold:
             logger.warning(
                 f"High ratio detected: {avg_ratio.item():.2f}. Skipping this batch."

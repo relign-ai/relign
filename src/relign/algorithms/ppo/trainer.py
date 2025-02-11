@@ -76,7 +76,7 @@ class PPOHParams:
     """
 
     adap_kl_ctrl: bool = True
-    init_kl_coef: Optional[float] = 0.05
+    init_kl_coef: Optional[float] = 0.0001, 
     kl_penalty: Literal["kl", "abs", "mse", "full", "control_variate"] = "kl"
     kl_penalty_loss_type: Optional[Literal["kl", "abs", "mse", "control_variate"]] = (
         "control_variate"
@@ -670,11 +670,12 @@ class PPOTrainer(BaseTrainer):
         """
         if (
             shifted_ref_logprobs is not None
-            and self.trainer_hparams.kl_penalty_loss_type is None
+            and self.trainer_hparams.kl_penalty is None
         ):
             kl = self._compute_kl_penalty(
                 shifted_actor_logprobs,
                 shifted_ref_logprobs,
+                self.trainer_hparams.kl_penalty
             )
             non_score_rewards = -self.kl_ctl.value * kl
         else:

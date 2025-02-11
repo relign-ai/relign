@@ -73,18 +73,18 @@ def ppo_gsm(cfg, local_rank: int = -1):
         timeout=1,
     )
 
-    num_episodes_per_iteration = 64
-    num_rollouts_per_sample = 2
+    num_episodes_per_iteration = 512 
+    num_rollouts_per_sample = 8
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
     )
     num_iterations = 600
     sampling_temperature = 0.6
-    num_epoch_per_iterations = 1
+    num_epoch_per_iterations = 2
     target_batch_size = 64
     gradient_accumulation_steps = 4
-    max_concurrent_programs = 32
-    max_concurrent_generations = 32
+    max_concurrent_programs = 256 
+    max_concurrent_generations = 128 
     guidance_llm_cls = OpenAIVLLM
     guidance_llm_kwargs = {
         "api_key": "EMPTY",
@@ -156,7 +156,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "vllm_gpu_memory_utilization": "auto",
         "wait_until_memory_release": True,
         "task": task,
-        "save_generations_every_n_iteration": 1,
+        "save_generations_every_n_iteration": 2,
         "initial_model_name_or_path": initial_model_name,
         "question_template": question_template,
     }
@@ -177,7 +177,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "target_batch_size": target_batch_size,
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "num_epochs_per_iteration": num_epoch_per_iterations,
-        "dataloader_num_workers": 2,
+        "dataloader_num_workers": 4,
         "dataloader_pin_memory": False,
     }
 
@@ -210,7 +210,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
     algorithm_kwargs = {
         "num_iterations": num_iterations,
         "verbose": 1,
-        "evaluation_freq": 1,
+        "evaluation_freq": 15,
         "checkpoint_freq": 10,
         "evaluator_cls": evaluator_cls,
         "evaluator_kwargs": evaluator_kwargs,

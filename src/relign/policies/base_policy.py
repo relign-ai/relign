@@ -185,6 +185,8 @@ class DeepSpeedPolicy(BasePolicy):
             "lr_scheduler": lr_scheduler,
             "config": deepspeed_config,
         }
+        logger.info(f"deepspeed init kwargs {kwargs}")
+
         if isinstance(optimizer, DummyOptim):
             kwargs["model_parameters"] = optimizer.params
         else:

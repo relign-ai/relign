@@ -1,44 +1,39 @@
+
 import hydra
 from textwrap import dedent
 import argparse
 from pathlib import Path
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModel
 from omegaconf import OmegaConf
 
 from relign.tasks import GSM8K
-from relign.policies.base_actor import ActorPolicy
+from relign.policies.actor_critic_policy import ActorCriticPolicy
+from relign.policies.base_critic import PretrainedModelValueHead
 from relign.algorithms.train_loop import TrainLoop
-from relign.algorithms.grpo.trainer import GRPOTrainer
+from relign.algorithms.ppo.trainer import PPOTrainer
 from relign.episode_generators.envs.math_episode_generator import (
-    MathEpisodeGeneratorGroupedRewards,
+    MathEpisodeGenerator,
     MATHRewardFunction,
 )
-from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor
+
 from relign.inference.cot_inference_strategy import COTInferenceStrategy
 from relign.inference.tree_inference.expansion import EfficientIIDExpander
-from relign.inference.tree_inference.answer_extraction import (
-    IdentityAnswerExtractor,
-)
+from relign.inference.tree_inference.answer_extraction import IdentityAnswerExtractor
 
-# For actor or actor-critic methods, we can use a Distributed Runner
+# For actor critic methods, we need a Distributed Runner
 from relign.runners.distributed_runner import DistributedRunner
 from relign.common.vllm_server import VLLMServer
 from relign.guidance.llms import OpenAIVLLM
-
-from relign.inference.inference_pipeline import VLLMInferencePipeline
-from relign.eval.evaluator import Evaluator
-from relign.eval.analyzer import TaskPerformanceAnalyzer
-from relign.models.base_model import DIPreTrainedTokenizer, PreTrainedModelForCasualLM
+from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor
+from relign.models.base_model import PreTrainedModelForCasualLM, DIPreTrainedTokenizer
 
 
-def grpo_gsm(cfg):
-    # ------ Deepspeed Config ------ #
+def ppo_gsm(cfg, local_rank: int = -1):
     ds_config = cfg.deepspeed
     ds_config = OmegaConf.to_container(ds_config, resolve=True)
-    initial_model_name = "realtreetune/rho-1b-sft-GSM8K"
-    experiment_name = "grpo-cot-rho1b-gsm"
+    experiment_name = "relign-ppo-gsm8k"
     experiment_dir = "experiment"
-
+    initial_model_name = "realtreetune/rho-1b-sft-GSM8K"
     # --------- Tokenizer --------------- #
     tokenizer = DIPreTrainedTokenizer.from_di(
         hf_model_name=initial_model_name,
@@ -54,17 +49,23 @@ def grpo_gsm(cfg):
             },
         )
 
-    # --------- Task Definition ---------- #
+    def critic_model_fn():
+        # Wrap the critic with the value head model.
+        critic_backbone = AutoModel.from_pretrained(initial_model_name)
+        return PretrainedModelValueHead(
+            pretrained_model=critic_backbone
+        )  # critics need to be wrapped in a pretrained value head
+
+    # --------- Task Definition ----------#
     answer_prefix = "\n####"
     task = GSM8K(
         answer_prefix=answer_prefix,
         load_dataset_dict=True,
         dataset_dict_path="data/gsm8k",
-        intermetdiate_step_tags=["<think>", "</think>"],
         remove_calculator_expressions=True,
     )
 
-    # ------- Task Reward Function -------- #
+    # ------- Task Reward Function --------#
     reward_function = MATHRewardFunction(
         tokenizer=tokenizer,
         math_task=task,
@@ -73,16 +74,16 @@ def grpo_gsm(cfg):
         timeout=1,
     )
 
-    # --------- Inference (Chain-of-thought) Strategy --------- #
-    num_episodes_per_iteration = 64 
-    num_rollouts_per_sample = 2
+    num_episodes_per_iteration = 512 
+    num_rollouts_per_sample = 8
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
     )
-    num_iterations = 600 
+    num_iterations = 600
     sampling_temperature = 0.6
-    num_epoch_per_iterations = 2
-    gradient_accumulation_steps = 1
+    num_epoch_per_iterations = 1
+    target_batch_size = 64
+    gradient_accumulation_steps = 4
     max_concurrent_programs = 256 
     max_concurrent_generations = 128 
     guidance_llm_cls = OpenAIVLLM
@@ -93,9 +94,10 @@ def grpo_gsm(cfg):
         "max_retries": 10,
     }
 
-    # ---------- Node Expansion ---------- #
+    # ---------- Node Expanders---------- #
     answer_extractor = IdentityAnswerExtractor(node_key_name="text")
     program = """{{prefix}}{{gen "chain_of_thought" temperature={temperature} top_p={top_p} max_tokens={max_tokens} save_stop_text="stop_text" stop={stop} n={num_samples}}}"""
+
     branch_factors = [{"depth": 0, "branch_factor": 2}]
     node_expander = EfficientIIDExpander(
         branch_factor_strategy=ListBranchFactor(branch_factors=branch_factors),
@@ -118,7 +120,7 @@ def grpo_gsm(cfg):
     Solution:
     """)
 
-    # ---- Chain of Thought Strategy Instance --- #
+    # ---- Chain of thought Strategy --- #
     cot_inference_strategy_cls = COTInferenceStrategy
     cot_inference_strategy_kwargs = {
         "samples": num_rollouts_per_sample,
@@ -130,11 +132,12 @@ def grpo_gsm(cfg):
         "node_expander": node_expander,
         "guidance_llm_cls": guidance_llm_cls,
         "guidance_llm_kwargs": guidance_llm_kwargs,
+        "max_depth": 2,
     }
 
-    # ----------- Episode Generator ------------ #
-    vllm_server = VLLMServer()
-    episode_generator = MathEpisodeGeneratorGroupedRewards
+    # ----------- Episode Generator ------------#
+    vllm_server = VLLMServer
+    episode_generator = MathEpisodeGenerator
     episode_generator_kwargs = {
         "tokenizer": tokenizer,
         "num_episodes_per_iteration": num_episodes_per_iteration,
@@ -150,102 +153,106 @@ def grpo_gsm(cfg):
         "fill_missing_episodes": True,
         "inference_strategy_cls": cot_inference_strategy_cls,
         "inference_strategy_kwargs": cot_inference_strategy_kwargs,
-        "vllm_server": vllm_server,
+        "vllm_server_cls": vllm_server,
         "vllm_gpu_memory_utilization": "auto",
         "wait_until_memory_release": True,
         "task": task,
-        "save_generations_every_n_iteration": 1,
+        "save_generations_every_n_iteration": 2,
         "initial_model_name_or_path": initial_model_name,
         "question_template": question_template,
     }
 
-    # ----------- Policy --------------- #
-    actor_policy = ActorPolicy
-    actor_kwargs = {
+    # ----------- Policy ---------------#
+    actor_critic_policy = ActorCriticPolicy
+    actor_critic_kwargs = {
         "actor_model_fn": actor_model_fn,
+        "critic_model_fn": critic_model_fn,
         "actor_config": ds_config,
+        "critic_config": ds_config,
         "temperature": sampling_temperature,
     }
 
-    # ----------- Trainer --------------- #
-    grpo_trainer_class = GRPOTrainer
-    grpo_trainer_kwargs = {
-        "target_batch_size": 8,
+    # ----------- Trainer ---------------#
+    ppo_trainer_class = PPOTrainer
+    ppo_trainer_kwargs = {
+        "target_batch_size": target_batch_size,
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "num_epochs_per_iteration": num_epoch_per_iterations,
-        "dataloader_num_workers": 2,
+        "dataloader_num_workers": 4,
         "dataloader_pin_memory": False,
     }
 
-    # ----------- Algorithm -------------- #
-    from relign.inference.inference_pipeline import VLLMInferencePipeline
-
-    inference_pipeline_kwargs = {
-        "inference_strategy_cls": cot_inference_strategy_cls,
-        "inference_strategy_kwargs": cot_inference_strategy_kwargs,
-        "task": task,
-        "dataset_split": "validation",
-    }
-    evaluator_cls = Evaluator
+    # ----------- Algorithm--------------#
+    # Define an inference pipeline for the evalution process
 
     from relign.eval.evaluator import Evaluator
     from relign.eval.analyzer import TaskPerformanceAnalyzer
 
+    analysers_cls = [TaskPerformanceAnalyzer]
+    analysers_kwargs = [{"task": task, "metrics_prefix": "task_performance"}]
+
+    evaluator_cls = Evaluator
     evaluator_kwargs = {
         "task": task,
+        "dataset_split": "validation",
         "tokenizer": tokenizer,
-        "inference_pipeline_cls": VLLMInferencePipeline,
-        "inference_pipeline_kwargs": inference_pipeline_kwargs,
-        "vllm_server": vllm_server,
+        "inference_strategy_cls": cot_inference_strategy_cls,
+        "inference_strategy_kwargs": cot_inference_strategy_kwargs,
+        "vllm_server_cls": vllm_server,
         "vllm_gpu_memory_utilization": "auto",
         "wait_until_memory_release": True,
         "force_rerun": False,
         "every_n_checkpoints": 1,
-        "analyzers": [
-            TaskPerformanceAnalyzer(
-                task=task,
-                metrics_prefix="task_performance",
-            )
-        ],
+        "analysers_cls": analysers_cls,
+        "analysers_kwargs": analysers_kwargs,
     }
-    num_iterations = 500
+
     algorithm_cls = TrainLoop
     algorithm_kwargs = {
         "num_iterations": num_iterations,
         "verbose": 1,
-        "evaluation_freq": 10,
+        "evaluation_freq": 15,
         "checkpoint_freq": 10,
         "evaluator_cls": evaluator_cls,
         "evaluator_kwargs": evaluator_kwargs,
     }
 
-    # ----------- Runner -------------- #
+    # The main runner object
     runner = DistributedRunner(
         experiment_name=experiment_name,
         directory=experiment_dir,
         use_deepspeed=True,
-        policy_cls=actor_policy,
-        trainer_cls=grpo_trainer_class,
+        policy_cls=actor_critic_policy,
+        trainer_cls=ppo_trainer_class,
         episode_generator_cls=episode_generator,
         algorithm_cls=algorithm_cls,
-        policy_kwargs=actor_kwargs,
-        trainer_kwargs=grpo_trainer_kwargs,
+        policy_kwargs=actor_critic_kwargs,
+        trainer_kwargs=ppo_trainer_kwargs,
         episode_generator_kwargs=episode_generator_kwargs,
         algorithm_kwargs=algorithm_kwargs,
     )
 
-    # Start training
-    runner.run()
+    # Start train run
+    runner.policy.init_actor_engine_if_needed(
+        global_batch_size =8,
+        per_device_batch_size=4,
+        gradient_accumulation_steps=1,
+        total_num_training_steps= 20,
+    )
+
 
 
 def main():
     parser = argparse.ArgumentParser(description="Deepspeed training")
-    parser.add_argument("--local_rank", type=int, default=-1)
-    args, unknown = parser.parse_known_args()
+    # parser.add_argument("--local_rank", type=int, default=-1)
+    # args, unknown = parser.parse_known_args()
 
     hydra.initialize(config_path="../configs", version_base=None)
     cfg = hydra.compose(config_name="config")
-    grpo_gsm(cfg=cfg, local_rank=args.local_rank)
+    ppo_gsm(
+        cfg=cfg,
+        # local_rank=args.local_rank
+    )
 
 
 if __name__ == "__main__":
