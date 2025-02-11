@@ -394,16 +394,28 @@ class GRPOTrainer(BaseTrainer):
         # noinspection DuplicatedCode
         inputs = {k: v.to(self.policy.actor.device) for k, v in inputs.items()}
 
-        shifted_ref_log_probs = self._compute_ref_log_probs(inputs)
-        shifted_actor_log_probs = self._compute_actor_log_probs(inputs)
-
         input_ids = inputs["input_ids"]  # Shape: (batch_size, max_seq_len)
-        scores = inputs[
-            "scores"
-        ]  # make sure these are not hussled, on devices because they
+        scores = inputs[ "scores" ]  # make sure these are not hussled, on devices because they
         groups = inputs["group"]
         attention_mask = inputs["attention_mask"]  # Shape: (batch_size, max_seq_len)
+        labels = inputs["labels"]
 
+        # Step 1: Compute the rewards, advantages, and returns
+        ref_log_probs = self._compute_ref_log_probs(inputs)
+        actor_log_probs = self._compute_actor_log_probs(inputs)
+
+        # shift them accordingly
+        ...
+
+        shifted_labels = labels[
+            ..., 1:
+        ].contiguous()  # Shape: (batch_size, max_seq_len-1)
+        shifted_labels_mask = (shifted_labels != -100).to(
+            attention_mask.dtype
+        )  # Shape: (batch_size, max_seq_len-1)
+
+
+        # Compute the rewards, advantages, and returns
         mean_rewards, std_rewards, unique_group_ids, per_token_kl = (
             self._compute_rewards(
                 scores=scores,
@@ -423,18 +435,10 @@ class GRPOTrainer(BaseTrainer):
             shifted_actor_log_probs=shifted_actor_log_probs,
         )
 
-        shifted_labels = labels[
-            ..., 1:
-        ].contiguous()  # Shape: (batch_size, max_seq_len-1)
-        shifted_labels_mask = (shifted_labels != -100).to(
-            attention_mask.dtype
-        )  # Shape: (batch_size, max_seq_len-1)
-
-        # Note that this is the log probability of the actor model
-        # in the beginning of this iteration (aka the old log probs)
-        shifted_actor_logprobs = inputs[
-            COLUMN_ACTOR_SHIFTED_LOGPS
-        ]  # Shape: (batch_size, max_seq_len-1)
+        
+        # shifted_actor_logprobs = inputs[
+        #     COLUMN_ACTOR_SHIFTED_LOGPS
+        # ]  # Shape: (batch_size, max_seq_len-1)
         assert shifted_actor_logprobs.shape == shifted_labels_mask.shape
 
         #  Compute the rewards, advantages, and returns
