@@ -50,3 +50,8 @@ runner_test/
 *.arrow
 wandb/
 gitignore.py
+
+# Pixi
+.pixi/
+
+

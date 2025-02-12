@@ -40,7 +40,8 @@ def distributed_state_cpu_no_deepspeed():
     kwargs = {"backend": "gloo", "timeout": timedelta(seconds=ddp_timeout)}
     dist.init_process_group(init_method="env://", **kwargs)
 
-    return PartialState(True, **kwargs)
+    yield PartialState(True, **kwargs)
+    dist.destroy_process_group()
 
 
 @pytest.fixture
