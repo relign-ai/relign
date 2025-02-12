@@ -73,6 +73,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         timeout=1,
     )
 
+    
     num_episodes_per_iteration = 512 
     num_rollouts_per_sample = 8
     num_dataset_samples_per_iteration = (
@@ -81,6 +82,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
     num_iterations = 600
     sampling_temperature = 0.6
     num_epoch_per_iterations = 2
+    max_seq_length =2048 
     target_batch_size = 64
     gradient_accumulation_steps = 4
     max_concurrent_programs = 256 
@@ -146,7 +148,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "append_bos_to_query": True,
         "append_eos_to_response": True,
         "dataset_shuffle_on_each_iteration": True,
-        "max_sequence_length": 2048,
+        "max_sequence_length": max_seq_length,
         "max_question_length": 1512,
         "reward_function": reward_function,
         "fill_missing_episodes": True,
@@ -177,6 +179,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "target_batch_size": target_batch_size,
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "num_epochs_per_iteration": num_epoch_per_iterations,
+        "max_seq_length": max_seq_length,
         "dataloader_num_workers": 4,
         "dataloader_pin_memory": False,
     }

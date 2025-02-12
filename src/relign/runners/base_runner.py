@@ -137,7 +137,7 @@ class BaseRunner(ABC):
             # )
             wandb.init(
                 config={"seed": self.seed},
-                project="relign-01",
+                project="relign-02",
                 name=self.experiment_name,
                 resume="allow",
                 mode=mode,

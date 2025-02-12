@@ -78,6 +78,7 @@ class BaseTrainer(ABC):
         num_episodes_per_iteration: int = 1,
         gamma: int = 1,
         lam=0.95,
+        max_seq_length: int = None,
         logging_steps: int = 1,
         per_device_batch_size: Optional[int] = None,
         target_batch_size: Optional[int] = None,
@@ -117,6 +118,7 @@ class BaseTrainer(ABC):
         self.num_iterations = num_iterations
         self.target_batch_size = target_batch_size
         self.num_episodes_per_iteration = num_episodes_per_iteration
+        self.max_seq_length = max_seq_length
 
         self._compute_batch_size_and_steps()
 

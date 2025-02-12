@@ -2,8 +2,9 @@ import shutil
 from typing import Dict, Tuple, Union, Optional, Literal, List
 from pathlib import Path
 from dataclasses import dataclass
+from datasets import Dataset
+
 import torch
-from torch.utils.data import Dataset
 
 from tqdm import tqdm
 from deepspeed import comm as dist
@@ -128,7 +129,8 @@ class PPOTrainer(BaseTrainer):
         Performs a single update step using the dataset rollout under the current policy.
         Each update step can rum multiple epochs of optimization.
         """
-        #
+        
+        episodes = self._filter_episodes(episodes) 
         episodes = self._hydrate_ref_log_probs(episodes)
 
         # TODO: Make this one function in the policy
@@ -199,8 +201,6 @@ class PPOTrainer(BaseTrainer):
         logger.info(
             f"num_optimization_steps_in_iteration:{num_optimization_steps_in_iteration}"
         )
-
-        
 
         running_metrics = {}
         accumulated_metrics = {}
@@ -281,9 +281,39 @@ class PPOTrainer(BaseTrainer):
         logprobs and values under the current policy parameters.
         These will be the baseline logprobs and values i.e., pi_old(a|s)
         """
-
+        with_actor_log_probs_path = (
+            self.project_root_dir 
+            / 'trainer' 
+            / f"episodes__iter{self.state.iteration}" 
+            / 'w_actor_log_probs'
+        )
         episodes = self._hydrate_log_probs(episodes)
+        
+        if self._is_main_process():
+            episodes.save_to_disk(str(with_actor_log_probs_path))
+        self.distributed_state.wait_for_everyone()
+
+        del episodes
+        release_memory()
+
+        episodes = Dataset.load_from_disk(str(with_actor_log_probs_path))
+
+        with_actor_critic_log_probs_path = (
+            self.project_root_dir 
+            / 'trainer'
+            / f"episodes__iter{self.state.iteration}"
+            / 'w_actor_critic_log_probs'
+        ) 
+
         episodes = self._hydrate_values(episodes)
+        if self._is_main_process():
+            episodes.save_to_disk(str(with_actor_critic_log_probs_path))
+        self.distributed_state.wait_for_everyone() 
+
+        del episodes
+        release_memory()
+
+        episodes= Dataset.load_from_disk(str(with_actor_critic_log_probs_path))
         return episodes
 
     def _hydrate_log_probs(
@@ -439,6 +469,13 @@ class PPOTrainer(BaseTrainer):
     ) -> Dataset:
         logger.info("Computing refrence model logprobs")
 
+        with_ref_log_probs_path = (
+            self.project_root_dir
+            / 'trainer'
+            / f"episodes__iter{self.state.iteration:04d}"
+            / "w_ref_logp"
+        )
+
         self.policy.init_reference_engine_if_needed(
             self.global_batch_size,
             self.per_device_batch_size,
@@ -518,8 +555,15 @@ class PPOTrainer(BaseTrainer):
 
         with self.distributed_state.main_process_first():
             episodes = episodes.add_column(name=column_name, column=ref_log_probs_list)
+        if self._is_main_process():
+            episodes.save_to_disk(str(with_ref_log_probs_path))
+        self.distributed_state.wait_for_everyone()
 
         self.policy.destroy_reference_engine_if_not_cached()
+        del episodes
+        release_memory()
+
+        episodes = Dataset.load_from_disk(str(with_ref_log_probs_path))
         return episodes
 
     def _step(
@@ -759,6 +803,29 @@ class PPOTrainer(BaseTrainer):
         returns = advantages + valid_values
         return advantages.detach(), returns.detach()
 
+
+    log_keys_to_store_in_running_metrics = [
+        "_num_participating_tokens",
+    ]
+
+    log_keys_weighed_by_num_participating_tokens = [
+        "advantages/mean",
+        "advantages/std",
+        "rewards/mean",
+        "returns",
+        "non_score_rewards",
+        "actor/loss",
+        "actor/logit_entropy",
+        "actor/approx_kl",
+        "actor/policy_kl",
+        "actor/clip_frac",
+        "ratio",
+        "critic/loss",
+        "critic/value",
+        "critic/mse",
+        "critic/clip_frac",
+    ]
+
     def _log_training_metrics(
         self,
         _globalstep_last_logged: int,
@@ -788,10 +855,21 @@ class PPOTrainer(BaseTrainer):
             if metric_value is None:
                 continue
 
+            is_weighed_by_num_actions = (
+                metric_name in self.log_keys_weighed_by_num_participating_tokens
+            )
+
             if isinstance(metric_value, torch.Tensor):
+                metric_value = metric_value.to(self.policy.actor.device)
                 dist.all_reduce(metric_value, op=dist.ReduceOp.SUM)
                 metric_value = metric_value.item()
                 divisor = dist.get_world_size()
+            else:
+                assert not is_weighed_by_num_actions
+                divisor = 1
+
+            if is_weighed_by_num_actions:
+                metric_value /= num_participating_tokens
             else:
                 metric_value /= divisor * num_steps_since_last_log
 
@@ -799,6 +877,11 @@ class PPOTrainer(BaseTrainer):
 
         logs["epoch"] = round(self.state.epoch, 4)
         logs["step"] = self.state.global_step
+
+        logs["actor/ds_step"] = self.policy.actor.global_steps
+        if self.policy.critic is not None:
+                logs["critic/ds_step"] = self.policy.critic.global_steps
+
         # First log the metrics on the progress bar
         progress_bar.set_postfix(logs)
 
@@ -820,21 +903,19 @@ class PPOTrainer(BaseTrainer):
         dist.barrier()
 
         def get_initial_value(
-            val: Union[float, torch.Tensor],
+            val: Union[float, torch.Tensor]
         ) -> Union[float, torch.Tensor]:
             if isinstance(val, torch.Tensor):
-                return torch.tensor(0.0, dtype=val.dtype, device=val.device)
+                # Force to float from the start
+                return torch.tensor(0.0, dtype=torch.float32, device=val.device)
             return 0.0
 
         # Initialize running metrics if not already initialized
         for key in step_metrics.keys():
             if key in accumulated_metrics:
                 continue
-            log_keys_to_store_in_running_metrics = [
-                "_num_participating_tokens",
-            ]
             accumulated_metrics[key] = get_initial_value(step_metrics[key])
-            if key in log_keys_to_store_in_running_metrics:
+            if key in self.log_keys_to_store_in_running_metrics:
                 if key not in running_metrics:
                     running_metrics[key] = get_initial_value(step_metrics[key])
 
@@ -843,14 +924,23 @@ class PPOTrainer(BaseTrainer):
         for key, value in step_metrics.items():
             if value is None:
                 continue
-            if True:
+
+            # Debug print: If it's a tensor, check dtype
+            if isinstance(value, torch.Tensor):
+                if value.dtype not in (torch.float32, torch.float64):
+                    # This debug line helps identify the offending key
+                    logger.warning(
+                        f"[DEBUG] Found '{key}' as {value.dtype}; converting to float32."
+                    )
+                    value = value.to(torch.float32)
+
+            if key in self.log_keys_weighed_by_num_participating_tokens:
                 weight = num_tokens
+            else:
+                weight = 1
 
             value = value * weight
             accumulated_metrics[key] += value
-
-        # Update Running Metrics
-        running_metrics["_num_participating_tokens"] += num_tokens
 
     def _get_automatic_checkpoint_name(self) -> str:
         checkpoint_format = self.get_checkpoint_format()
@@ -863,3 +953,29 @@ class PPOTrainer(BaseTrainer):
 
     def get_checkpoint_format(self) -> str:
         return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
+
+
+    def _filter_episodes(self, episodes_dataset: Dataset) -> Dataset:
+        """
+        Filter out episodes that are too long.
+        """
+        if self.max_seq_length is not None:
+
+            max_seq_len = self.max_seq_length
+            orig_len = len(episodes_dataset)
+
+            def filter_fn(example):
+                return (
+                    len(example["query_token_ids"]) + len(example["response_token_ids"])
+                    <= max_seq_len
+                )
+
+            with self.distributed_state.main_process_first():
+                episodes_dataset = episodes_dataset.filter(filter_fn, desc="Filtering")
+
+            logger.error(
+                f"Filtered out {orig_len - len(episodes_dataset)} episodes "
+                f"that are too long. Remaining: {len(episodes_dataset)}"
+            )
+
+        return episodes_dataset
