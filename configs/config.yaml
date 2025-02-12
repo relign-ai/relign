@@ -1,7 +1,7 @@
 # configs/config.yaml
 defaults:
   - _self_
-  - deepspeed/zero_0
+  - deepspeed/zero_2
 
 lr: 'auto' 
 betas: 'auto' 

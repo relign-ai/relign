@@ -299,6 +299,72 @@ class ActorPolicy(DeepSpeedPolicy):
 
         return pg_loss, is_skipped, metrics, ref_kl
 
+    def actor_loss_grpo(
+        self,
+        model_inputs: dict,
+        shifted_labels_mask: torch.Tensor,
+        ref_logprobs: torch.Tensor,
+        advantages: torch.Tensor,
+        trainer_hparams: dict,
+        # optionally old_logprobs if needed for PPO, etc.
+    ):
+        """
+        Re-run forward pass with gradients for your actor network, compute
+        the RL objective (policy gradient + KL).
+        """
+        # 1) Forward pass on the actor model WITH grad
+        actor_outputs = self.actor.forward(**model_inputs)
+        logits = actor_outputs.logits  # shape (B, seq_len, vocab_size)
+
+        # 2) SHIFT the logits so that it matches the shape of ref_logprobs, etc.
+        #    Usually you skip the very last token. We'll do a minimal example:
+        shifted_actor_logits = logits[:, :-1].contiguous()
+
+        # 3) Convert logits -> logprobs for each real token
+        shifted_actor_logprobs = self._logprobs_from_logits(
+            shifted_actor_logits, model_inputs["labels"][:, 1:]
+        )
+        # shape (B, seq_len-1)
+
+        # 4) Now compute the final objective
+        #    a) Policy gradient part
+        #    b) KL part vs. ref_logprobs
+
+        # Example code for a typical step:
+        # ratio = exp(actor_logp - ref_logp) -- for KL or advantage might differ
+        # We'll do a minimal version:
+        kl = (
+            torch.exp(ref_logprobs - shifted_actor_logprobs)
+            - (ref_logprobs - shifted_actor_logprobs)
+            - 1
+        )
+        # shape: (B, seq_len-1)
+
+        # This is basically: advantage * exp(log_pi - STOP_GRAD(log_pi)) => advantage * 1
+        # but let's replicate the HF approach:
+        adv_term = (
+            torch.exp(shifted_actor_logprobs - shifted_actor_logprobs.detach())
+            * advantages
+        )
+
+        # You can combine kl, or keep them separate:
+        # e.g. total_loss = -( adv_term - self.beta * kl )
+        # Mask out padding if needed:
+        per_token_loss = -(adv_term - trainer_hparams.init_kl_coef * kl)
+        per_token_loss = per_token_loss * shifted_labels_mask  # zero out masked tokens
+
+        # Then average for final scalar
+        tokens_per_sample = shifted_labels_mask.sum(dim=1)
+        loss = (per_token_loss.sum(dim=1) / (tokens_per_sample + 1e-10)).mean()
+
+        # Return
+        actor_metrics = {
+            "actor_loss": loss.detach().cpu().item(),
+            "kl": (kl * shifted_labels_mask).sum().detach().cpu().item(),
+        }
+        approx_ref_kl = kl.mean().detach().cpu().item()  # an example quantity
+        return loss, False, actor_metrics, approx_ref_kl
+
     def destroy_actor_engine_if_not_cached(self) -> None:
         """
         Destroys the actor engine to free memory if engine caching is disabled.
@@ -642,3 +708,16 @@ class ActorPolicy(DeepSpeedPolicy):
                     shutil.rmtree(checkpoint)
 
         dist.barrier()
+
+    def _logprobs_from_logits(self, logits, labels):
+        """
+        Gathers the log probability for each 'labels' token from 'logits'.
+        """
+        # logits: (B, seq_len, vocab_size)
+        # labels: (B, seq_len)
+        log_probs = F.log_softmax(logits, dim=-1)
+        # gather log probs at each label
+        token_logprob = torch.gather(
+            log_probs, dim=2, index=labels.unsqueeze(-1)
+        ).squeeze(-1)
+        return token_logprob

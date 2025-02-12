@@ -76,8 +76,8 @@ def grpo_gsm(cfg, local_rank):
     )
 
     # --------- Inference (Chain-of-thought) Strategy --------- #
-    num_episodes_per_iteration = 8# num groups
-    num_rollouts_per_sample = 8# group size
+    num_episodes_per_iteration = 32  # num groups
+    num_rollouts_per_sample = 8  # group size
     # This is num_groups in grpo
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
@@ -175,10 +175,10 @@ def grpo_gsm(cfg, local_rank):
     # ----------- Trainer --------------- #
     grpo_trainer_class = GRPOTrainer
     grpo_trainer_kwargs = {
-        "target_batch_size": 1,
+        "target_batch_size": 2,
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "num_epochs_per_iteration": num_epoch_per_iterations,
-        "dataloader_num_workers": 1,
+        "dataloader_num_workers": 2,
         "dataloader_pin_memory": False,
     }
 
@@ -231,12 +231,11 @@ def grpo_gsm(cfg, local_rank):
     )
 
     # Start training
-    runner.run()
+    # runner.run()
 
-    # dataset_path="experiment/grpo-cot-rho1b-gsm/episodes/episodes_0000.js+on"
-    # episodes = Dataset.load_from_disk(dataset_path)
-    # runner.trainer._compute_batch_size_and_steps()
-    # runner.trainer.step(episodes)
+    dataset_path = "experiment/grpo-cot-rho1b-gsm/episodes/episodes_0000.json"
+    episodes = Dataset.load_from_disk(dataset_path)
+    runner.trainer.step(episodes)
 
 
 def main():

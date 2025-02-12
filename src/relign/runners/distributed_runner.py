@@ -149,12 +149,15 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
 
     def _cloud_log(self, *args, **kwargs):
         if self.distributed_state.is_main_process and self.cloud_logger is not None:
-            self.cloud_logger.log(*args, **kwargs)
+            # self.cloud_logger.log(*args, **kwargs)
+            pass
 
     def _cloud_save(self, *args, **kwargs):
         if self.distributed_state.is_main_process and self.cloud_logger is not None:
-            self.cloud_logger.save(*args, **kwargs)
+            # self.cloud_logger.save(*args, **kwargs)
+            pass
 
     def _cloud_update(self, *args, **kwargs):
         if self.distributed_state.is_main_process and self.cloud_logger is not None:
-            self.cloud_logger.summary.update(*args, **kwargs)
+            # self.cloud_logger.summary.update(*args, **kwargs)
+            pass

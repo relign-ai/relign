@@ -80,94 +80,106 @@ class GroupedBatchSampler(Sampler):
 
 class GRPODataCollator:
     """
-    Collates the given data instances into a batch.
-    Every data instance should have the following keys:
-    - "query_token_ids": The token ids of the query.
-    - "response_token_ids": The token ids of the response.
-    - "score": The reward of the response (single scalar per response)
-    - "advantages": The advantages of the response.
-    - "group: The group of the response. It is a scalar tensor.
-
-    Args:
-        data_instances (List[Dict[str, Any]]):
-            The data instances to collate.
-    Returns:
-        Dict[str, torch.Tensor]:
-            It contains the following keys:
-            - "input_ids": The token ids of the entire episode (query + responses).
-                    Description: Query + response tokens + padding
-                    Shape: (batch_size, max_seq_len)
-            - "labels": The token ids of the entire episode (query + responses).
-                    Description: -100 for padding and query tokens, response tokens for labels.
-                    Shape: (batch_size, max_seq_len)
-            - "attention_mask": The attention mask of the entire episode (query + responses),
-                    Description:  1 for input tokens, 0 for padding tokens.
-                    Shape: (batch_size, max_seq_len)
-            - "advantages": The advantages of the responses.
-                    Description: 0.0 for padding and query tokens, advantages at response token index
-                    Shape: (batch_size, max_seq_len)
-            - "scores": The scores of the responses. It should be a 1D scalar tensor.
-                    Description: The scores of the responses.
-                    Shape: (batch_size,)
-            - "values": The values of the response states.
-                    (batch_size, max_seq_len)
-            - "ref_shifted_log_probs": The reference log probabilities of the responses.
-                    Shape: (batch_size, max_seq_len-1)
-            - "actor_shifted_log_probs": The actor log probabilities of the responses.
-                    Shape: (batch_size, max_seq_len-1)
+    Collates the given data instances into a batch and normalizes scores by group if present.
     """
 
     def __call__(self, instances: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+        # 1. Identify the longest sequence length in the batch
         max_seq_length = max(
             len(instance["query_token_ids"]) + len(instance["response_token_ids"])
             for instance in instances
         )
 
-        # Create the batch
-        batch = {
-            "input_ids": [], 
-            "labels": [], 
-            "attention_mask": [], 
-            "len_query_token_ids": [],
-            "len_response_token_ids": [],
-            "max_seq_length": [],
-            "normalized_scores": [],
-        }
-
+        # 2. Determine which optional fields are present
         has_group = "group" in instances[0] and instances[0]["group"] is not None
-        if has_group:
-            batch["group"] = []
-
         has_advantages = (
             "advantages" in instances[0] and instances[0]["advantages"] is not None
         )
-
-        if has_advantages:
-            batch["advantages"] = []
-
         has_process_rewards = (
             "process_rewards" in instances[0]
             and instances[0]["process_rewards"] is not None
         )
-        if has_process_rewards:
-            batch["process_rewards"] = []
-
         has_scores = "scores" in instances[0] and instances[0]["scores"] is not None
-        if has_scores:
-            batch["scores"] = []
+        has_ref_shifted_logps = COLUMN_REF_SHIFTED_LOGPS in instances[0]
 
-        pad_token_id = 0  # It doesn't matter what the pad token id is, since we will mask it out anyway
-        pad_label = (
-            -100
-        )  # -100 is the default value for the padding token in the loss function
+        # 3. If we have group + scores, gather them first to compute group-based normalization
+        if has_group and has_scores:
+            group2scores = defaultdict(list)
+
+            # Collect raw scores by group
+            for inst in instances:
+                group_val = inst["group"]
+                score_val = inst["scores"]
+                group2scores[group_val].append(score_val)
+
+            # Compute mean & std for each group
+            group2meanstd = {}
+            for group_val, score_list in group2scores.items():
+                arr = np.array(score_list, dtype=np.float32)
+                mean = arr.mean()
+                std = arr.std()
+                group2meanstd[group_val] = (mean, std)
+
+            # Replace each instance's "scores" with its normalized version
+            for inst in instances:
+                g = inst["group"]
+                mean, std = group2meanstd[g]
+                # If group is degenerate (std=0), just set the normalized score to 0
+                if std < 1e-12:
+                    inst["scores"] = 0.0
+                else:
+                    inst["scores"] = (inst["scores"] - mean) / std
+
         pad_logp = -float(1e9)  # Crazy value to show up it in case of a bug
 
+        def prepare_shifted_logps(shifted_logps_with_query, query_len, response_len):
+            assert len(shifted_logps_with_query) == (query_len + response_len - 1), (
+                f"We assume the ref. log probs are provided for the entire sequence",
+                f"(query + response) but got {len(shifted_logps_with_query)}",
+                f"instead of {query_len + response_len - 1}",
+            )
+
+            shifted_logps_without_query = shifted_logps_with_query[query_len - 1 :]
+            assert len(shifted_logps_without_query) == response_len
+
+            n_pads_at_end = (max_seq_length - 1) - len(shifted_logps_with_query)
+            shifted_logs = (
+                [pad_logp] * (query_len - 1)
+                + shifted_logps_without_query
+                + [pad_logp] * n_pads_at_end
+            )
+            return shifted_logs
+
+        # 4. Initialize our batch dictionary
+        batch = {
+            "input_ids": [],
+            "labels": [],
+            "attention_mask": [],
+            "len_query_token_ids": [],
+            "len_response_token_ids": [],
+            "max_seq_length": [],
+        }
+        if has_group:
+            batch["group"] = []
+        if has_advantages:
+            batch["advantages"] = []
+        if has_process_rewards:
+            batch["process_rewards"] = []
+        if has_scores:
+            batch["scores"] = []
+        if has_ref_shifted_logps:
+            batch[COLUMN_REF_SHIFTED_LOGPS] = []
+
+        # 5. Padding/label specifics
+        pad_token_id = 0  # We'll mask it out anyway
+        pad_label = -100  # Default ignore index in HF training
+
+        # 6. Build out each field in the batch
         for instance in instances:
-            # attention masks: length: max_seq length, '1' for real tokens, '0' for padding tokens
-            # We want to send these to the batch in collation
             query_token_ids = instance["query_token_ids"]
             response_token_ids = instance["response_token_ids"]
-            # Create the input ids and attention mask
+
+            # Make input_ids and attention_mask
             input_ids = query_token_ids + response_token_ids
             attention_mask = [1] * len(input_ids)
             num_pad_at_end = max_seq_length - len(input_ids)
@@ -175,71 +187,51 @@ class GRPODataCollator:
             input_ids += [pad_token_id] * num_pad_at_end
             attention_mask += [0] * num_pad_at_end
 
-            batch["input_ids"].append(input_ids)
-            batch["attention_mask"].append(attention_mask)
-
-            batch["len_query_token_ids"].append(len(query_token_ids))
-            batch["len_response_token_ids"].append(len(response_token_ids))
-            batch["max_seq_length"].append(max_seq_length) 
-
-            # Create the labels
             labels = (
                 [pad_label] * len(query_token_ids)
                 + response_token_ids
                 + [pad_label] * num_pad_at_end
             )
-            batch["labels"].append(labels)
 
+            batch["input_ids"].append(input_ids)
+            batch["attention_mask"].append(attention_mask)
+            batch["labels"].append(labels)
+            batch["len_query_token_ids"].append(len(query_token_ids))
+            batch["len_response_token_ids"].append(len(response_token_ids))
+            batch["max_seq_length"].append(max_seq_length)
+
+            # Group
             if has_group:
                 batch["group"].append(instance["group"])
-                # calculate the mean for each group and add it to the instance
-                # calculate the std for each group and add it to the instance
 
+            # Advantages
             if has_advantages:
                 advantages = instance["advantages"]
-                # Advantages are the same length as the reponse_token_ids
+                # advantage vector should match response_token_ids in length
+                # but we prefix with 0.0 for the query tokens & pad with 0.0
                 advantages = (
                     [0.0] * len(query_token_ids) + advantages + [0.0] * num_pad_at_end
                 )
-                assert len(labels) == len(advantages)
                 batch["advantages"].append(advantages)
 
+            # Process rewards
+            if has_process_rewards:
+                batch["process_rewards"].append(instance["process_rewards"])
+
+            # Scores
             if has_scores:
-                assert isinstance(instance["scores"], float)
-                batch["scores"].append(instance["scores"])
+                sc = instance["scores"]
+                batch["scores"].append(sc)
 
-        group2scores = defaultdict(list)
-        for example in batch:
-            if "group" not in example:
-                raise KeyError(
-                    "Each example must have a 'group' key to enable group-based normalization."
+            if has_ref_shifted_logps:
+                shifted_ref_logps = prepare_shifted_logps(
+                    instance[COLUMN_REF_SHIFTED_LOGPS],
+                    len(query_token_ids),
+                    len(response_token_ids),
                 )
-            if "scores" not in example:
-                raise KeyError(
-                    "Each example must have a 'scores' key to enable group-based normalization."
-                )
-            group2scores[example["group"]].append(example["scores"])
+                assert len(shifted_ref_logps) == max_seq_length - 1
+                batch[COLUMN_REF_SHIFTED_LOGPS].append(shifted_ref_logps)
 
-        # Compute mean & std for each group in the episodes
-        group2meanstd = {}
-        for group, scores in group2scores.items():
-            arr = np.array(scores, dtype=np.float32)
-            mean = arr.mean()
-            std = arr.std()
-            group2meanstd[group] = (mean, std)
-
-        # 3. Replace 'scores' with normalized 'rewards'
-        for example in batch:
-            group = example["group"]
-            mean, std = group2meanstd[group]
-            if std < 1e-12:
-                example["rewards"] = 0.0
-            else:
-                example["rewards"] = (example["scores"] - mean) / std
-
-            # Remove the old 'scores' to ensure only normalized rewards remain
-            del example["scores"]
-
-        # Convert the lists to tensors
+        # 7. Convert the lists to tensors
         batch = {k: torch.tensor(v) for k, v in batch.items()}
         return batch
