@@ -200,9 +200,7 @@ class PPOTrainer(BaseTrainer):
             f"num_optimization_steps_in_iteration:{num_optimization_steps_in_iteration}"
         )
 
-        # Set everything in train mode
-        self.policy.actor.train()
-        self.policy.critic.train()
+        
 
         running_metrics = {}
         accumulated_metrics = {}
@@ -216,15 +214,27 @@ class PPOTrainer(BaseTrainer):
         )
         progress_bar.update(self.state.global_step)
 
+        # Set everything in train mode
+        self.policy.actor.train()
+        self.policy.critic.train()
+        
         dist.barrier()
         for epoch in range(self.num_epochs_per_iteration):
             for step, batch in enumerate(dataloader_iter):
                 is_grad_acc_boundary = (
                     self.policy.actor.is_gradient_accumulation_boundary()
                 )
+                if self.policy.critic is not None:
+                    assert (
+                        self.policy.critic.is_gradient_accumulation_boundary()
+                        == is_grad_acc_boundary
+                    ), "Actor and critic should have synchronized optimization steps"
+
 
                 metrics = self._step(batch)
+
                 self._update_metrics(running_metrics, accumulated_metrics, metrics)
+
                 if is_grad_acc_boundary:
                     self.state.global_step += 1
                     self.state.epoch = epoch + (step + 1) / steps_in_epoch
@@ -564,6 +574,32 @@ class PPOTrainer(BaseTrainer):
                 advantages, returns = self._compute_advantages(
                     valid_values, rewards, shifted_labels_mask
                 )
+            else:
+                logger.info("precomputed advanatags")
+                precomputed_advantages = inputs[
+                    "advantages"
+                ]  # Shape: (batch_size, max_seq_len)
+
+                # Shift the advantages to left to match the actions
+                advantages = precomputed_advantages[
+                    :, 1:
+                ]  # Shape: (batch_size, max_seq_len-1)
+                if self.trainer_hparams.whiten_advantages:
+                    advantages = masked_whiten(
+                        advantages,
+                        shifted_labels_mask,
+                        distributed=True,
+                        unbiased_variance=True,
+                    )
+                elif self.trainer_hparams.grayen_advantages:
+                    advantages = masked_rescale_by_std(
+                        advantages,
+                        shifted_labels_mask,
+                        distributed=True,
+                        unbiased_variance=True,
+                    )
+                valid_values = None
+                returns = None
 
             assert advantages.shape == shifted_actor_logprobs.shape
             assert rewards.shape == shifted_actor_logprobs.shape
@@ -585,27 +621,6 @@ class PPOTrainer(BaseTrainer):
 
         self.policy.actor.backward(actor_loss)
 
-        # Log gradient norms on actor parameters (especially normalization layers)
-        logger.debug("[_step] Actor backward call done. Checking gradient norms...")
-        if hasattr(self.policy.actor, "module"):
-            for name, param in self.policy.actor.module.named_parameters():
-                # Only check norm layers or group norm if you want to single them out:
-                if "norm" in name.lower():
-                    if param.grad is not None:
-                        grad_norm_val = param.grad.detach().norm().item()
-                        if grad_norm_val == 0.0:
-                            logger.warning(
-                                f"[_step] Actor param '{name}' has ZERO grad norm!"
-                            )
-                        else:
-                            logger.debug(
-                                f"[_step] Actor param '{name}' grad norm: {grad_norm_val:.6f}"
-                            )
-                    else:
-                        logger.debug(
-                            f"[_step] Actor param '{name}' grad is None (no gradient)"
-                        )
-
         self.policy.actor.step()
         # Get rid of actor's activations to free up memory
         actor_loss = actor_loss.detach().clone()
@@ -626,7 +641,7 @@ class PPOTrainer(BaseTrainer):
         # Get rid of critic's activations to free up memory
         critic_loss = critic_loss.detach().clone()
         release_memory()
-
+        logger.info(f"advantages {advantages}")
         metrics = {
             "advantages/mean": masked_mean(advantages, shifted_labels_mask).detach(),
             "rewards/mean": masked_mean(rewards, shifted_labels_mask).detach(),
@@ -736,7 +751,7 @@ class PPOTrainer(BaseTrainer):
                 valid_values[:, t + 1] if t < (actions_seq_len - 1) else 0.0
             )
             delta = rewards[:, t] + 1 * next_state_values - valid_values[:, t]
-            lastgaelam = delta + 1 * self.lam * lastgaelam
+            lastgaelam = delta + 1 * self.trainer_hparams.lam * lastgaelam
             advantages_reversed.append(lastgaelam)
         advantages = torch.stack(advantages_reversed[::-1]).transpose(0, 1)
         assert advantages.shape == rewards.shape

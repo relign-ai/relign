@@ -510,24 +510,72 @@ class ActorPolicy(DeepSpeedPolicy):
 
     def _compute_kl_penalty(
         self,
-        logprobs: torch.FloatTensor,
-        ref_logprobs: torch.FloatTensor,
-        estimation_type: str = "forward_kl",
-    ):
+        logprob: Union[torch.FloatTensor, np.ndarray],
+        ref_logprob: Union[torch.FloatTensor, np.ndarray],
+        estimation_type: Optional[str] = None,
+    ) -> Union[torch.FloatTensor, np.ndarray]:
         """
-        Basic example: forward_kl = (logprobs - ref_logprobs).
-        You might have a more sophisticated approach in your PPOTrainer.
-        """
-        if ref_logprobs is None:
-            return torch.zeros_like(logprobs)
+        Compute the per-token KL penalty between the log probabilities of the actor and the reference model.
 
-        kl = logprobs - ref_logprobs
-        # If you want reverse_kl or symmetric_kl, do so here
-        if estimation_type == "forward_kl":
-            # forward_kl = log p/q = log p - log q
-            pass  # already computed
-        # elif estimation_type == ...
-        return kl
+        Args:
+            logprob (`Union[torch.FloatTensor, np.ndarray]`):
+                Log probabilities of the actor, shape (`batch_size`, T)
+            ref_logprob (`Union[torch.FloatTensor, np.ndarray]`):
+                Log probabilities of the reference model, shape (`batch_size`, T)
+
+        Returns:
+            `Union[torch.FloatTensor, np.ndarray]`: KL penalty, shape (`batch_size`, `T`)
+        """
+
+        if estimation_type is None:
+            estimation_type = self.trainer_hparams.kl_penalty
+
+        if estimation_type == "kl":
+            return logprob - ref_logprob
+
+        if estimation_type == "abs":
+            return (logprob - ref_logprob).abs()
+
+        if estimation_type == "mse":
+            return 0.5 * (logprob - ref_logprob).square()
+
+        if estimation_type == "control_variate":
+            # Compute the per-token approximate KL penalty between the log probabilities of the actor
+            # and the reference model as suggested by Schulman in http://joschu.net/blog/kl-approx.html
+            #
+            # D_KL [π_θ || π_ref] =
+            #    π_ref(y_t | x, y_<t) / π_θ(y_t | x, y_<t) - log(π_ref(y_t | x, y_<t) / π_θ(y_t | x, y_<t)) - 1
+            #
+
+            log_ratio = ref_logprob - logprob
+            if isinstance(log_ratio, torch.Tensor):
+                kl = torch.exp(log_ratio) - log_ratio - 1
+            elif isinstance(log_ratio, np.ndarray):
+                kl = np.exp(log_ratio) - log_ratio - 1
+            else:
+                raise ValueError("Unsupported type for log_ratio.")
+            return kl
+
+        if estimation_type == "seq_control_variate":
+            log_ratio = ref_logprob - logprob
+            if isinstance(log_ratio, torch.Tensor):
+                prob_ratio = torch.exp(log_ratio.sum(dim=-1, keepdim=True))
+                kl = prob_ratio - log_ratio - 1
+            elif isinstance(log_ratio, np.ndarray):
+                prob_ratio = np.exp(log_ratio.sum(axis=-1, keepdims=True))
+                kl = prob_ratio - log_ratio - 1
+            else:
+                raise ValueError("Unsupported type for log_ratio.")
+            return kl
+
+        if estimation_type == "full":
+            # Flip is required due to this issue? :https://github.com/pytorch/pytorch/issues/57459
+            return F.kl_div(
+                ref_logprob, logprob, log_target=True, reduction="none"
+            ).sum(-1)
+
+        raise NotImplementedError
+
 
     def get_last_checkpoint(self, return_resumable_only: bool = False):
         checkpoints = list(self.checkpoints_dir.iterdir())
@@ -553,51 +601,3 @@ class ActorPolicy(DeepSpeedPolicy):
 
         grad_acc_kwargs = {"num_steps": self.args.gradient_accumulation_steps}
         # grad_acc_kwargs["sync_with_dataloader"] = False
-
-    # def _create_accelerator_and_postprocess(self):
-    #     grad_acc_kwargs = {"num_steps": self.args.gradient_accumulation_steps}
-    #     # grad_acc_kwargs["sync_with_dataloader"] = False
-    #     gradient_accumulation_plugin = GradientAccumulationPlugin(**grad_acc_kwargs)
-
-    #     # Create accelerator object
-    #     self.accelerator = Accelerator(
-    #         dispatch_batches=False,
-    #         deepspeed_plugin=self.deepspeed_plugin,
-    #         gradient_accumulation_plugin=gradient_accumulation_plugin,
-    #     )
-
-    #     # Deepspeed and Accelerate flags covering both trainer args and accelerate launcher
-    #     self.is_deepspeed_enabled = (
-    #         getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
-    #     )
-
-    #     if self.is_deepspeed_enabled:
-    #         from deepspeed.utils import logger as ds_logger
-    #         import logging
-
-    #         ds_logger.setLevel(logging.DEBUG)
-
-    #         if getattr(self.args, "hf_deepspeed_config", None) is None:
-    #             from transformers.deepspeed import HfTrainerDeepSpeedConfig
-
-    #             ds_plugin = self.accelerator.state.deepspeed_plugin
-
-    #             ds_plugin.hf_ds_config = HfTrainerDeepSpeedConfig(
-    #                 ds_plugin.hf_ds_config.config
-    #             )
-    #             ds_plugin.deepspeed_config = ds_plugin.hf_ds_config.config
-    #             ds_plugin.hf_ds_config.trainer_config_process(self.args)
-
-    #     if (
-    #         self.args.gradient_checkpointing
-    #         and not self.is_flash_attention_model
-    #         and not self.is_deepspeed_enabled
-    #     ):
-    #         from accelerate import DistributedDataParallelKwargs
-
-    #         self.accelerator.ddp_handler = DistributedDataParallelKwargs(
-    #             find_unused_parameters=False
-    #         )
-
-    #     # Add state to accelerator for checkpointing
-    #     self.accelerator.register_for_checkpointing(self.state)
