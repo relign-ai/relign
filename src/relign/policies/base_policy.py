@@ -1,3 +1,4 @@
+import logging
 from abc import abstractmethod
 from typing import Any, Optional, Union, NamedTuple, Dict, List
 from pathlib import Path
@@ -40,9 +41,9 @@ class BasePolicy:
         self,
         seed: int,
         project_root_dir: Path = None,
-        gradient_checkpointing: bool = False,
+        gradient_checkpointing: bool = True,
         temperature: float = 0.6,
-        weight_decay: float = 0.0,
+        weight_decay: float = 0.00,
         learning_rate: float = 1e-6,
         lr_scheduler_type: Optional[Union[SchedulerType, str]] = None,
         adam_beta1: float = 0.9,
@@ -50,9 +51,10 @@ class BasePolicy:
         adam_epsilon: float = 1e-8,
         max_grad_norm: float = 1.0,
         fp16: bool = False,
-        bf16: bool = False,
+        bf16: bool = True,
         bf16_full_eval: bool = False,
         warmup_steps: int = 0,
+        warmup_ratio : int = 0.00,
     ):
         self.seed = seed
         self.project_root_dir = project_root_dir
@@ -71,6 +73,7 @@ class BasePolicy:
         self.bf16 = bf16
         self.bf16_full_eval = bf16_full_eval
         self.warmup_steps = warmup_steps
+        self.warmup_ratio = warmup_ratio
 
     @abstractmethod
     def predict(self, episodes: EpisodeDataset):  # TODO Define response type
@@ -120,6 +123,7 @@ class BasePolicy:
         NotImplementedError("checkpoint method is not implemented yet.")
 
 
+
 class DeepSpeedPolicy(BasePolicy):
     """
     solely uses DeepSpeed (ds) for training and ditched the Accelerate library. The accelerate library does not support two models in a single
@@ -132,6 +136,7 @@ class DeepSpeedPolicy(BasePolicy):
         super().__init__(**kwargs)
         self.distributed_state = distributed_state
         self.cache_ds_engines = cache_ds_engines
+        self._set_process_log_level(logger)
 
     def create_optimizer(
         self,
@@ -185,6 +190,7 @@ class DeepSpeedPolicy(BasePolicy):
             "lr_scheduler": lr_scheduler,
             "config": deepspeed_config,
         }
+
         if isinstance(optimizer, DummyOptim):
             kwargs["model_parameters"] = optimizer.params
         else:
@@ -233,16 +239,21 @@ class DeepSpeedPolicy(BasePolicy):
         warmup_steps: int,
         learning_rate: float,
     ) -> None:
+        logger.info(f" ************** PATCHING LR SCHEDULER ******************")
         config.fill_only(
             "scheduler.params.total_num_steps",
             total_num_training_steps,
             "num_training_steps (calculated)",
         )
+        logger.info(f" patched scheduler params num train steps to : {total_num_training_steps}")
+
         config.fill_only(
             "scheduler.params.warmup_num_steps",
             warmup_steps,
             "warmup_steps",
         )
+
+        logger.info(f"patched waruup stpes to {warmup_steps}")
         config.fill_only(
             "scheduler.params.warmup_min_lr",
             0,
@@ -259,6 +270,7 @@ class DeepSpeedPolicy(BasePolicy):
         config: HfTrainerDeepSpeedConfig,
         global_batch_size: int,
     ) -> None:
+        logger.info(f"config pre patched {config}")
         config.fill_only(
             "train_micro_batch_size_per_gpu",
             self.per_device_batch_size,
@@ -338,6 +350,10 @@ class DeepSpeedPolicy(BasePolicy):
         """Deal with the distributed state"""
         return self.distributed_state.is_main_process
 
+    #TODO: move this to deepspeedpolicy class 
+    def _set_process_log_level(self, logger_obj: logging.Logger):
+        if not self.distributed_state.is_local_main_process:
+            logger_obj.setLevel(logging.WARNING)
 
 def get_optimizer_grouped_parameters(
     model: PreTrainedModel,
@@ -406,3 +422,5 @@ def get_optimizer_grouped_parameters(
         if group["params"]:
             non_empty_groups.append(group)
     return non_empty_groups
+
+    

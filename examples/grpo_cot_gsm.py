@@ -82,12 +82,12 @@ def grpo_gsm(cfg, local_rank):
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
     )
-    num_iterations = 1000
+    num_iterations = 600 
     sampling_temperature = 0.6
     num_epoch_per_iterations = 4
     gradient_accumulation_steps = 1
-    max_concurrent_programs = 32
-    max_concurrent_generations = 32
+    max_concurrent_programs = 256 
+    max_concurrent_generations = 128 
     guidance_llm_cls = OpenAIVLLM
     guidance_llm_kwargs = {
         "api_key": "EMPTY",

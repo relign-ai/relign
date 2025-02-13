@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from accelerate import Accelerator, PartialState
 from accelerate.utils import GradientAccumulationPlugin
+from deepspeed import DeepSpeedEngine 
 
 
 from datasets import Dataset
@@ -76,8 +77,7 @@ class BaseTrainer(ABC):
         num_epochs_per_iteration: int = 8,
         num_iterations: int = 1,
         num_episodes_per_iteration: int = 1,
-        gamma: int = 1,
-        lam=0.95,
+        max_seq_length: int = None,
         logging_steps: int = 1,
         per_device_batch_size: Optional[int] = None,
         target_batch_size: Optional[int] = None,
@@ -117,11 +117,9 @@ class BaseTrainer(ABC):
         self.num_iterations = num_iterations
         self.target_batch_size = target_batch_size
         self.num_episodes_per_iteration = num_episodes_per_iteration
+        self.max_seq_length = max_seq_length
 
         self._compute_batch_size_and_steps()
-
-        self.gamma = gamma
-        self.lam = lam
         self.logging_steps = logging_steps
         self._cloud_log = cloud_log
         # self._create_accelerator_and_postprocess()
@@ -214,6 +212,16 @@ class BaseTrainer(ABC):
         raise NotImplementedError
 
     def _compute_batch_size_and_steps(self):
+        # Log all values that will be used in the computation
+        logger.info(f"Starting batch size and step computation with values:")
+        logger.info(f"  target_batch_size: {self.target_batch_size}")
+        logger.info(f"  per_device_batch_size (initial): {self.per_device_batch_size}")
+        logger.info(f"  gradient_accumulation_steps (initial): {self.gradient_accumulation_steps}")
+        logger.info(f"  num_processes: {self.distributed_state.num_processes}")
+        logger.info(f"  num_iterations: {self.num_iterations}")
+        logger.info(f"  num_epochs_per_iteration: {self.num_epochs_per_iteration}")
+        logger.info(f"  num_episodes_per_iteration: {self.num_episodes_per_iteration}")
+
         if self.target_batch_size is not None:
             if (
                 self.per_device_batch_size is None
@@ -256,9 +264,10 @@ class BaseTrainer(ABC):
             * self.num_episodes_per_iteration
             // self.global_batch_size
         )
-        logger.info(f"Per device batch size: {self.per_device_batch_size}")
-        logger.info(f"Gradient accumulation steps: {self.gradient_accumulation_steps}")
-        logger.info(f"Num of total processes: {self.distributed_state.num_processes}")
+
+        # Finally, log the resulting computations
+        logger.info(f"Per device batch size (computed): {self.per_device_batch_size}")
+        logger.info(f"Gradient accumulation steps (computed): {self.gradient_accumulation_steps}")
         logger.info(
             f"Global batch size (w. parallel, distributed & accumulation): {self.global_batch_size}"
         )
@@ -436,3 +445,20 @@ class BaseTrainer(ABC):
         )
 
         return kls
+
+    def _get_learning_rate(self, engine: DeepSpeedEngine):
+        # with deepspeed's fp16 and dynamic loss scale enabled the optimizer/scheduler steps may
+        # not run for the first few dozen steps while loss scale is too large, and thus during
+        # that time `get_last_lr` will fail if called during that warm up stage, so work around it:
+        try:
+            return engine.get_lr()[0]
+        except AssertionError as e:
+            if "need to call step" in str(e):
+                logger.warning(
+                    "tried to get lr value before scheduler/optimizer started stepping, returning lr=0"
+                )
+                last_lr = 0
+            else:
+                raise
+
+        return last_lr

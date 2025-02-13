@@ -140,10 +140,10 @@ class VLLMServer:
     def __init__(
         self,
         seed: int = 42,
-        swap_space: int = 16,
+        swap_space: int = 8,
         gpu_memory_utilization: float = 0.9,
         max_num_seqs: int = 256,
-        enable_prefix_caching: bool = False,
+        enable_prefix_caching: bool = True,
         disable_sliding_window: bool = False,
         disable_frontend_multiprocessing: bool = False,
         max_model_len: Optional[int] = None,
