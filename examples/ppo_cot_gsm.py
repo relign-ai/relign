@@ -24,7 +24,7 @@ from relign.runners.distributed_runner import DistributedRunner
 from relign.common.vllm_server import VLLMServer
 from relign.guidance.llms import OpenAIVLLM
 from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor
-from relign.models.base_model import PreTrainedModelForCasualLM, DIPreTrainedTokenizer
+from relign.models.base_model import PreTrainedModelForCasualLM, DIPreTrainedTokenizer, PreTrainedModelForValueNetwork
 
 
 def ppo_gsm(cfg, local_rank: int = -1):
@@ -43,6 +43,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         # Load the base actor model from pretrained weights.
         return PreTrainedModelForCasualLM.from_di(
             hf_model_name=initial_model_name,
+            disable_dropout=True,
             pretrained_args={
                 "use_flash_attention_2": True,
             },
@@ -50,9 +51,15 @@ def ppo_gsm(cfg, local_rank: int = -1):
 
     def critic_model_fn():
         # Wrap the critic with the value head model.
-        critic_backbone = AutoModel.from_pretrained(initial_model_name)
-        return PretrainedModelValueHead(
-            pretrained_model=critic_backbone
+        pretrained_model = PreTrainedModelForCasualLM.from_di(
+            hf_model_name=initial_model_name,
+            disable_dropout=True,
+            pretrained_args={
+                "use_flash_attention_2": True,
+            },
+        )
+        return PreTrainedModelForValueNetwork.from_di(
+            pretrained_backbone_model=pretrained_model
         )  # critics need to be wrapped in a pretrained value head
 
     # --------- Task Definition ----------#
@@ -83,7 +90,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
     sampling_temperature = 0.6
     num_epoch_per_iterations = 2
     max_seq_length =2048 
-    target_batch_size = 64
+    target_batch_size = 64 
     gradient_accumulation_steps = 4
     max_concurrent_programs = 256 
     max_concurrent_generations = 128 
@@ -148,6 +155,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "append_bos_to_query": True,
         "append_eos_to_response": True,
         "dataset_shuffle_on_each_iteration": True,
+        "dataset_sample_with_replacement": True,
         "max_sequence_length": max_seq_length,
         "max_question_length": 1512,
         "reward_function": reward_function,
@@ -180,7 +188,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "num_epochs_per_iteration": num_epoch_per_iterations,
         "max_seq_length": max_seq_length,
-        "dataloader_num_workers": 4,
+        "dataloader_num_workers": 1,
         "dataloader_pin_memory": False,
     }
 

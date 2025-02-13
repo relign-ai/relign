@@ -100,6 +100,9 @@ class TrainLoop:
             logger.info(
                 f"Rank {self.distributed_state.process_index} done with episode generation."
             )
+            assert (
+                iteration == self.trainer.state.iteration
+            ), f"train loop iteration {iteration} does not match trainer iteration {self.trainer.state.iteration}"
 
             self.distributed_state.wait_for_everyone()
             dist.barrier()
@@ -109,6 +112,11 @@ class TrainLoop:
             ##################
             logger.info(f"Rank {self.distributed_state.process_index}: About to step.")
             current_policy_path = self.trainer.step(episodes=episodes)
+
+            assert(
+                iteration +1 == self.trainer.state.iteration
+            ), f"next iteration {iteration + 1} does not match {self.trainer.state.iteration}"
+
             logger.info(
                 f"Rank {self.distributed_state.process_index} done with trainer step."
             )

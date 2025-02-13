@@ -76,8 +76,6 @@ class BaseTrainer(ABC):
         num_epochs_per_iteration: int = 8,
         num_iterations: int = 1,
         num_episodes_per_iteration: int = 1,
-        gamma: int = 1,
-        lam=0.95,
         max_seq_length: int = None,
         logging_steps: int = 1,
         per_device_batch_size: Optional[int] = None,
@@ -121,9 +119,6 @@ class BaseTrainer(ABC):
         self.max_seq_length = max_seq_length
 
         self._compute_batch_size_and_steps()
-
-        self.gamma = gamma
-        self.lam = lam
         self.logging_steps = logging_steps
         self._cloud_log = cloud_log
         # self._create_accelerator_and_postprocess()

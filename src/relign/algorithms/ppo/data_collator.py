@@ -133,7 +133,6 @@ class PPODataCollator:
                     + [0.0] * num_pad_at_end
                 )
                 assert len(labels) == len(adv_padded)
-                logger.info(f"advantages = {advantages}")
                 batch["advantages"].append(adv_padded)
 
             if has_scores:

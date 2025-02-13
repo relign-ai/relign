@@ -13,7 +13,13 @@ from accelerate.utils import gather, pad_across_processes, release_memory
 from relign.common.deepspeed_utils import prepare_data_loader_for_inference
 from relign.common.dataset import EpisodeDataset
 from relign.algorithms.base_trainer import BaseTrainer
-from relign.utils.trainer import prepare_data_loader_for_training, masked_mean
+from relign.utils.trainer import (
+    prepare_data_loader_for_training, 
+    masked_mean, 
+    masked_rescale_by_std, 
+    masked_var, 
+    masked_whiten
+)
 
 from relign.algorithms.ppo.data_collator import (
     PPODataCollator,
@@ -152,6 +158,10 @@ class PPOTrainer(BaseTrainer):
             # engines are not cached, need to laod the latest weights from checkpoin path
             logger.info(f"Loading latest policy from latest policy path")
             self.policy.load_latest_policy_path()
+
+            dist.barrier()
+            self.distributed_state.wait_for_everyone()
+
             self.policy._clean_old_temp_checkpoints(
                 self.project_root_dir / "policy" / "cache"
             )
@@ -254,8 +264,15 @@ class PPOTrainer(BaseTrainer):
 
         dist.barrier()
 
-        self.state.iteration += 0
+        self.state.iteration += 1
         progress_bar.close()
+
+        for key, value in running_metrics.items():
+                value = torch.tensor(value, device=self.policy.actor.device)
+                dist.all_reduce(value, op=dist.ReduceOp.SUM)
+                value = value.cpu().item() / dist.get_world_size()
+                running_metrics[key] = value
+
         checkpoint_path = self.project_root_dir / "policy" / "cache"
         # checkpoint_name = self._get_automatic_checkpoint_name()
 
@@ -284,7 +301,7 @@ class PPOTrainer(BaseTrainer):
         with_actor_log_probs_path = (
             self.project_root_dir 
             / 'trainer' 
-            / f"episodes__iter{self.state.iteration}" 
+            / f"episodes__iter{self.state.iteration:04d}" 
             / 'w_actor_log_probs'
         )
         episodes = self._hydrate_log_probs(episodes)
@@ -301,7 +318,7 @@ class PPOTrainer(BaseTrainer):
         with_actor_critic_log_probs_path = (
             self.project_root_dir 
             / 'trainer'
-            / f"episodes__iter{self.state.iteration}"
+            / f"episodes__iter{self.state.iteration:04d}"
             / 'w_actor_critic_log_probs'
         ) 
 
@@ -577,6 +594,8 @@ class PPOTrainer(BaseTrainer):
         attention_mask = inputs["attention_mask"]  # Shape: (batch_size, max_seq_len)
         labels = inputs["labels"]  # Shape: (batch_size, max_seq_len)
         scores = inputs["scores"]  # Shape: (batch_size,)
+        logger.info(f"\n\n**********************8 Scores ********************")
+        logger.info(f"scores = {scores}")
 
         shifted_labels = labels[
             ..., 1:
@@ -585,6 +604,8 @@ class PPOTrainer(BaseTrainer):
         shifted_labels_mask = (shifted_labels != -100).to(
             attention_mask.dtype
         )  # Shape: (batch_size, max_seq_len-1)
+        logger.info(f"\n\n********************** Hsifted Label Masks ******************8")
+        logger.info(f"shifted label masks = {shifted_labels_mask}")
 
         # Note that this is the log probability of the actor model
         # in the beginning of this iteration (aka the old log probs)
@@ -603,9 +624,11 @@ class PPOTrainer(BaseTrainer):
 
             assert shifted_ref_logprobs != None
 
-            rewards, _, _ = self._compute_rewards(
+            rewards, non_score_rewards, kls = self._compute_rewards(
                 scores, shifted_actor_logprobs, shifted_ref_logprobs, attention_mask
             )
+            logger.info(f"\n\n********************** Rewards********************")
+            logger.info(f"scores = {rewards}")
             # The `advantages` is computed for the actions. That's why they are of shape (batch_size, max_seq_len-1)
             # Shape of `advantages`: (batch_size, max_seq_len-1)
             if "advantages" not in inputs:
@@ -617,7 +640,17 @@ class PPOTrainer(BaseTrainer):
                 valid_values = valid_values * shifted_labels_mask
                 advantages, returns = self._compute_advantages(
                     valid_values, rewards, shifted_labels_mask
+                )      
+                logger.info(
+                    "\n\n**********************COMPUTING ADVANTTAGES********************************"
                 )
+                logger.info(f"Computed advantatges {advantages}")
+                logger.info(f"Advantages shape: {advantages.shape}")
+                logger.info(f"Advantages mean: {advantages.mean()}")
+
+                logger.info(f"Computed returns {returns}")
+                logger.info(f"Returns shape: {returns.shape}")
+                logger.info(f"Returns mean: {returns.mean()}")
             else:
                 logger.info("precomputed advanatags")
                 precomputed_advantages = inputs[
@@ -685,7 +718,6 @@ class PPOTrainer(BaseTrainer):
         # Get rid of critic's activations to free up memory
         critic_loss = critic_loss.detach().clone()
         release_memory()
-        logger.info(f"advantages {advantages}")
         metrics = {
             "advantages/mean": masked_mean(advantages, shifted_labels_mask).detach(),
             "rewards/mean": masked_mean(rewards, shifted_labels_mask).detach(),
@@ -694,8 +726,21 @@ class PPOTrainer(BaseTrainer):
             **actor_metrics,
             **critic_metrics,
         }
+
         if returns is not None:
             metrics["returns"] = masked_mean(returns, shifted_labels_mask).detach()
+
+        if non_score_rewards is not None:
+            metrics['non_score_rewards'] = masked_mean(
+                non_score_rewards, shifted_labels_mask
+            )
+
+        if kls is not None or approx_ref_kl is not None:
+            if approx_ref_kl is not None:
+                kls = approx_ref_kl    
+            
+            metrics["kls"] = (kls * shifted_labels_mask).sum(dim=1).mean().detach()
+    
         metrics["actor/loss"] = actor_loss
         if critic_loss is not None:
             metrics["critic/loss"] = critic_loss
@@ -790,19 +835,49 @@ class PPOTrainer(BaseTrainer):
         # Make sure invalid rewards are masked
         rewards *= shifted_labels_mask
 
+        if self.trainer_hparams.whiten_rewards:
+            rewards = masked_whiten(
+                rewards, shifted_labels_mask, shift_mean=False, distributed=True
+            )
+
         for t in reversed(range(actions_seq_len)):
             next_state_values = (
                 valid_values[:, t + 1] if t < (actions_seq_len - 1) else 0.0
             )
-            delta = rewards[:, t] + 1 * next_state_values - valid_values[:, t]
-            lastgaelam = delta + 1 * self.trainer_hparams.lam * lastgaelam
+            delta = (
+                rewards[:, t]
+                + self.trainer_hparams.gamma * next_state_values
+                - valid_values[:, t]
+            )
+            lastgaelam = (
+                delta
+                + self.trainer_hparams.gamma * self.trainer_hparams.lam * lastgaelam
+            )
             advantages_reversed.append(lastgaelam)
+        
         advantages = torch.stack(advantages_reversed[::-1]).transpose(0, 1)
         assert advantages.shape == rewards.shape
 
-        returns = advantages + valid_values
-        return advantages.detach(), returns.detach()
+        logger.info(f" *************** Valid Values ***************** ")
+        logger.info(f"valid values = {valid_values}")
 
+        returns = advantages + valid_values
+        if self.trainer_hparams.whiten_advantages:
+            advantages = masked_whiten(
+                advantages,
+                shifted_labels_mask,
+                distributed=True,
+                unbiased_variance=True,
+            )
+        elif self.trainer_hparams.grayen_advantages:
+            advantages = masked_rescale_by_std(
+                advantages,
+                shifted_labels_mask,
+                distributed=True,
+                unbiased_variance=True,
+            )   
+          
+        return advantages.detach(), returns.detach()
 
     log_keys_to_store_in_running_metrics = [
         "_num_participating_tokens",

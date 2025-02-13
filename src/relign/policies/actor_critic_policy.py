@@ -79,8 +79,8 @@ class ActorCriticPolicy(ActorPolicy):
             critic_model.to(self.distributed_state.device)
             return critic_model
 
-        if self.gradient_checkpointing:
-            critic_model.gradient_checkpointing_enable()
+        # if self.gradient_checkpointing:
+        #     critic_model.gradient_checkpointing_enable()
 
         ds_config = HfTrainerDeepSpeedConfig(self.critic_config)
 
@@ -126,11 +126,6 @@ class ActorCriticPolicy(ActorPolicy):
         self._patch_ds_config_for_bucket_size(ds_config, critic_model.config)
 
         import json
-
-        logger.info(
-            "DS config after batch patching:\n%s",
-            json.dumps(ds_config.config, indent=2),
-        )
 
         engine = self._init_deepspeed_engine_for_training(
             critic_model,

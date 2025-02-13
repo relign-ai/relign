@@ -40,7 +40,7 @@ class BasePolicy:
         self,
         seed: int,
         project_root_dir: Path = None,
-        gradient_checkpointing: bool = False,
+        gradient_checkpointing: bool = True,
         temperature: float = 0.6,
         weight_decay: float = 0.0,
         learning_rate: float = 1e-6,
@@ -50,7 +50,7 @@ class BasePolicy:
         adam_epsilon: float = 1e-8,
         max_grad_norm: float = 1.0,
         fp16: bool = False,
-        bf16: bool = False,
+        bf16: bool = True,
         bf16_full_eval: bool = False,
         warmup_steps: int = 0,
     ):
@@ -261,6 +261,7 @@ class DeepSpeedPolicy(BasePolicy):
         config: HfTrainerDeepSpeedConfig,
         global_batch_size: int,
     ) -> None:
+        logger.info(f"config pre patched {config}")
         config.fill_only(
             "train_micro_batch_size_per_gpu",
             self.per_device_batch_size,

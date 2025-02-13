@@ -258,6 +258,11 @@ class ActorPolicy(DeepSpeedPolicy):
         kl_penalty_loss_clip_max = 10
         kl_penalty_loss_clip_min = 0
         kl_clt = 0.0001
+        logger.info(
+            f"\n\n********************************  pg loss ***************************"
+        )
+        logger.info(f"pg_loss: {pg_loss}")
+
         if kl_penalty_loss_type is not None:
             # _compute_kl_penalty is below
             ref_kl_tensor = self._compute_kl_penalty(
@@ -391,6 +396,8 @@ class ActorPolicy(DeepSpeedPolicy):
             ref_model,
             deepspeed_config=ref_config.config,
         )
+
+        engine.eval()
 
         if self.cache_ds_engines:
             self._reference_engine = engine
