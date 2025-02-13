@@ -26,10 +26,14 @@ from relign.guidance.llms import OpenAIVLLM
 from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor
 from relign.models.base_model import PreTrainedModelForCasualLM, DIPreTrainedTokenizer, PreTrainedModelForValueNetwork
 
+from relign.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 def ppo_gsm(cfg, local_rank: int = -1):
     ds_config = cfg.deepspeed
     ds_config = OmegaConf.to_container(ds_config, resolve=True)
+
     experiment_name = "relign-ppo-gsm8k"
     experiment_dir = "experiment"
     initial_model_name = "realtreetune/rho-1b-sft-GSM8K"
@@ -48,6 +52,16 @@ def ppo_gsm(cfg, local_rank: int = -1):
                 "use_flash_attention_2": True,
             },
         )
+
+    def reference_model_fn():
+        # Load the base actor model from pretrained weights.
+        return PreTrainedModelForCasualLM.from_di(
+            hf_model_name=initial_model_name,
+            disable_dropout=True,
+            pretrained_args={
+                "use_flash_attention_2": True,
+            },
+        ) 
 
     def critic_model_fn():
         # Wrap the critic with the value head model.
@@ -79,19 +93,18 @@ def ppo_gsm(cfg, local_rank: int = -1):
         unfinished_response_penalty=0.0,
         timeout=1,
     )
-
     
     num_episodes_per_iteration = 512 
     num_rollouts_per_sample = 8
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
     )
-    num_iterations = 600
+    num_iterations = 650 
     sampling_temperature = 0.6
     num_epoch_per_iterations = 2
     max_seq_length =2048 
     target_batch_size = 64 
-    gradient_accumulation_steps = 4
+    gradient_accumulation_steps = 1
     max_concurrent_programs = 256 
     max_concurrent_generations = 128 
     guidance_llm_cls = OpenAIVLLM
@@ -176,9 +189,11 @@ def ppo_gsm(cfg, local_rank: int = -1):
     actor_critic_kwargs = {
         "actor_model_fn": actor_model_fn,
         "critic_model_fn": critic_model_fn,
+        "reference_model_fn": reference_model_fn,
         "actor_config": ds_config,
         "critic_config": ds_config,
         "temperature": sampling_temperature,
+        "warmup_steps": 0, 
     }
 
     # ----------- Trainer ---------------#
@@ -187,6 +202,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "target_batch_size": target_batch_size,
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "num_epochs_per_iteration": num_epoch_per_iterations,
+        "num_iterations": num_iterations,
         "max_seq_length": max_seq_length,
         "dataloader_num_workers": 1,
         "dataloader_pin_memory": False,

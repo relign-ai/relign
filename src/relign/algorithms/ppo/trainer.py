@@ -1,3 +1,4 @@
+import logging
 import shutil
 from typing import Dict, Tuple, Union, Optional, Literal, List
 from pathlib import Path
@@ -9,6 +10,7 @@ import torch
 from tqdm import tqdm
 from deepspeed import comm as dist
 from accelerate.utils import gather, pad_across_processes, release_memory
+from transformers.trainer_pt_utils import get_model_param_count
 
 from relign.common.deepspeed_utils import prepare_data_loader_for_inference
 from relign.common.dataset import EpisodeDataset
@@ -32,6 +34,16 @@ from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+import hashlib 
+import io
+import os 
+
+def get_model_hash(model):
+    """Small helper function that returns the hash of a models weights"""
+    buffer = io.BytesIO()
+    torch.save(model.state_dict(), buffer)
+    buffer.seek(0)
+    return hashlib.sha256(buffer.read()).hexdigest()
 
 @dataclass
 class PPOHParams:
@@ -81,7 +93,6 @@ class PPOHParams:
         temperature (float):
             The temperature used for sampling.
     """
-
     adap_kl_ctrl: bool = True
     init_kl_coef: Optional[float] = 0.0001, 
     kl_penalty: Literal["kl", "abs", "mse", "full", "control_variate"] = "kl"
@@ -122,10 +133,16 @@ class PPOTrainer(BaseTrainer):
     PPO Trainer.
     Implementation of the PPO update rule.
     """
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.trainer_hparams = PPOHParams(**kwargs.get("ppo_hparams", {}))
+        self._set_process_log_level(logger)
+        #TODO temp actor weights logging
+        self.latest_actor_weights_hash = None
+        self.latest_critic_weights_hash = None
+        # TODO: pass this in combination with a trainer state 
+        # for checkpoint continuation
+        self.checkpoint_path_to_load = None
 
     def set_cloud_logger(self, cloud_log):
         self.cloud_log = cloud_log
@@ -154,7 +171,21 @@ class PPOTrainer(BaseTrainer):
             total_num_training_steps=self.total_num_training_steps,
         )
 
-        if not self.policy.cache_ds_engines:
+        # Initilaize the hashes if they are none
+        if self.latest_actor_weights_hash is None:
+            self.latest_actor_weights_hash = get_model_hash(self.policy.actor.module)
+        
+        if self.latest_critic_weights_hash is None:
+            self.latest_critic_weights_hash = get_model_hash(self.policy.critic.module)
+
+        if not self.policy.cache_ds_engines and self.checkpoint_path_to_load is not None:
+            # If we dont keep the engines in mem and we have already a checkpoint path from which we can load
+            # we load in the engines
+
+            # we also check if we loaded theocrrect engine here 
+            actor_pre_load_hash = get_model_hash(self.policy.actor.module)
+            critic_pre_load_hash = get_model_hash(self.policy.critic.module)
+
             # engines are not cached, need to laod the latest weights from checkpoin path
             logger.info(f"Loading latest policy from latest policy path")
             self.policy.load_latest_policy_path()
@@ -163,12 +194,31 @@ class PPOTrainer(BaseTrainer):
             self.distributed_state.wait_for_everyone()
 
             self.policy._clean_old_temp_checkpoints(
-                self.project_root_dir / "policy" / "cache"
+                self.checkpoint_path_to_load
+                # self.project_root_dir / "policy" / "cache"
             )
+
+            loaded_actor_weights_hash= get_model_hash(self.policy.actor.module)
+            loaded_critic_weights_hash= get_model_hash(self.policy.critic.module)
+
+            # the pre load default model weights should not be the same as the 
+            # cached weights (on iteration > 1)
+            if self.state.iteration != 0:
+                logger.info("checking loaded A/C weights")
+                assert actor_pre_load_hash != loaded_actor_weights_hash 
+                assert critic_pre_load_hash != loaded_critic_weights_hash 
+                # The loaded weights from the cash should be the same 
+                # as the latest weights hashses
+                assert self.latest_actor_weights_hash == loaded_actor_weights_hash 
+                assert self.latest_critic_weights_hash == loaded_critic_weights_hash
+            else:
+                logger.info("Intial state, we skip the A/C cache load check since the cache is empty")
 
         # change to appropriate input structure
         episodes = self._hydrate_episodes(episodes)
         episodes = self._rescale_and_clip_scores(episodes)
+
+        #TODO: eventually we can use these kls for K dapters 
         kls = self._log_episodes_metrics(episodes)
 
         dataloader = prepare_data_loader_for_training(
@@ -205,12 +255,24 @@ class PPOTrainer(BaseTrainer):
         )
         progress_bar.update(self.state.global_step)
 
+        logger.info(f"********* PPOtraining step {self.state.iteration}*************")
         logger.info(f"Per device batch size: {self.per_device_batch_size}")
         logger.info(f"Dataloder num workers: {self.dataloader_num_workers}")
         logger.info(f"total_num_optimization_steps: {self.total_num_training_steps}")
         logger.info(
             f"num_optimization_steps_in_iteration:{num_optimization_steps_in_iteration}"
         )
+        logger.info(f"current global step: {self.state.global_step}")
+
+        actor_trainable_params = get_model_param_count(
+            self.policy.actor, trainable_only=True
+        )
+        critic_trainable_params = get_model_param_count(
+            self.policy.critic, trainable_only=True
+        )
+
+        logger.info(f"Actor trainable params = {actor_trainable_params}")
+        logger.info(f"Critic trainable params = {critic_trainable_params}")
 
         running_metrics = {}
         accumulated_metrics = {}
@@ -241,7 +303,7 @@ class PPOTrainer(BaseTrainer):
                     ), "Actor and critic should have synchronized optimization steps"
 
 
-                metrics = self._step(batch)
+                metrics = self._epoch_step(batch)
 
                 self._update_metrics(running_metrics, accumulated_metrics, metrics)
 
@@ -264,33 +326,59 @@ class PPOTrainer(BaseTrainer):
 
         dist.barrier()
 
-        self.state.iteration += 1
-        progress_bar.close()
-
         for key, value in running_metrics.items():
                 value = torch.tensor(value, device=self.policy.actor.device)
                 dist.all_reduce(value, op=dist.ReduceOp.SUM)
                 value = value.cpu().item() / dist.get_world_size()
                 running_metrics[key] = value
+            
+        if len(running_metrics) > 0:
+            logger.info("Running metrics: {running_metrics}")
+        
+        self.state.iteration += 1
+        progress_bar.close()
 
-        checkpoint_path = self.project_root_dir / "policy" / "cache"
-        # checkpoint_name = self._get_automatic_checkpoint_name()
+        #TODO: delete this if it passes
+        # Verify we actually trained 
+        new_actor_hash = get_model_hash(self.policy.actor.module)
+        new_critic_hash = get_model_hash(self.policy.critic.module)
+        assert new_actor_hash != self.latest_actor_weights_hash
+        assert new_critic_hash != self.latest_critic_weights_hash
+        self.latest_actor_weights_hash = new_actor_hash
+        self.latest_critic_weights_hash = new_critic_hash
 
-        self.policy.save_latest_policy_path(checkpoint_path)
+        #TODO: do this conditioned on caching ds engine logic
+        # i.e., IF we cache the engines, we dont have to store their full state 
+        # in memory
+        checkpoint_dir = self.project_root_dir / "policy" / "checkpoints"
+        current_policy_checkpoint_path = (
+            checkpoint_dir / self._get_automatic_checkpoint_name()
+        )
+
+        # set the path of the policy we want to load in the next iteration
+        if not self.policy.cache_ds_engines:
+            logger.info(f"setting checkpoint path to load to {current_policy_checkpoint_path}")
+            self.checkpoint_path_to_load = current_policy_checkpoint_path
+            self.policy.checkpoint_latest_policy_path(current_policy_checkpoint_path)
+        dist.barrier()
+
+        # Clean the old checkpoint inside the checkpoint dir  
+        self.policy.clean_old_temp_checkpoints(
+            checkpoint_dir, 
+            exclude=[current_policy_checkpoint_path]
+        )
         dist.barrier()
 
         # destroy engines and release memory
         self.policy.destroy_ds_engines()
         release_memory()
         import gc
-
         gc.collect()
         torch.cuda.empty_cache()
 
-        latest_policy_path = checkpoint_path / "actor" / "hf_pretrained"
-        logger.info(f"Latest policy path: {latest_policy_path}")
-        # return latest policy path
-        return latest_policy_path
+        logger.info(f"Latest policy path: {current_policy_checkpoint_path}")
+        # Point this to the actors hf_pretrained for the inference / evaluation class
+        return current_policy_checkpoint_path / "actor"  / "hf_pretrained"
 
     def _hydrate_episodes(self, episodes: Dataset) -> Dataset:
         """
@@ -380,6 +468,7 @@ class PPOTrainer(BaseTrainer):
                     attention_mask=inputs["attention_mask"],
                     labels=inputs["labels"],
                     return_all_logp=True,
+                    trainer_hparams=self.trainer_hparams,
                 )
                 logps = outputs.all_logp.detach()
                 assert logps.shape[1] == inputs["input_ids"].shape[1] - 1
@@ -583,7 +672,7 @@ class PPOTrainer(BaseTrainer):
         episodes = Dataset.load_from_disk(str(with_ref_log_probs_path))
         return episodes
 
-    def _step(
+    def _epoch_step(
         self,
         inputs: Dict[str, torch.Tensor],
     ) -> Dict[str, Union[float, torch.Tensor]]:
@@ -616,6 +705,7 @@ class PPOTrainer(BaseTrainer):
 
         #  Compute the rewards, advantages, and returns
         with torch.no_grad():
+
             if not self.trainer_hparams.force_disable_kl_penalty:
                 shifted_ref_logprobs = inputs[COLUMN_REF_SHIFTED_LOGPS]
             else:
@@ -694,10 +784,10 @@ class PPOTrainer(BaseTrainer):
             old_logprobs=shifted_actor_logprobs,
             ref_logprobs=shifted_ref_logprobs,
             advantages=advantages,
+            trainer_hparams=self.trainer_hparams
         )
 
         self.policy.actor.backward(actor_loss)
-
         self.policy.actor.step()
         # Get rid of actor's activations to free up memory
         actor_loss = actor_loss.detach().clone()
@@ -720,6 +810,7 @@ class PPOTrainer(BaseTrainer):
         release_memory()
         metrics = {
             "advantages/mean": masked_mean(advantages, shifted_labels_mask).detach(),
+            "advantages/std": masked_var(advantages, shifted_labels_mask).detach().sqrt(),
             "rewards/mean": masked_mean(rewards, shifted_labels_mask).detach(),
             "num_tokens": shifted_labels_mask.sum().detach(),
             "_num_participating_tokens": shifted_labels_mask.sum().detach(),
@@ -774,7 +865,7 @@ class PPOTrainer(BaseTrainer):
         """
         if (
             shifted_ref_logprobs is not None
-            and self.trainer_hparams.kl_penalty is None
+            and self.trainer_hparams.kl_penalty_loss_type is None
         ):
             kl = self._compute_kl_penalty(
                 shifted_actor_logprobs,
@@ -784,6 +875,7 @@ class PPOTrainer(BaseTrainer):
             non_score_rewards = -self.kl_ctl.value * kl
         else:
             # KL penalty is not part of the reward
+            logger.info("KL Penalty not part of the reward")
             kl = None
             non_score_rewards = torch.zeros_like(shifted_actor_logprobs)
 
@@ -950,10 +1042,12 @@ class PPOTrainer(BaseTrainer):
 
             logs[metric_name] = round(metric_value, 8)
 
+        logs["actor/lr"] = self._get_learning_rate(self.policy.actor)
+        logs["critic/lr"] = self._get_learning_rate(self.policy.critic)
         logs["epoch"] = round(self.state.epoch, 4)
         logs["step"] = self.state.global_step
-
         logs["actor/ds_step"] = self.policy.actor.global_steps
+
         if self.policy.critic is not None:
                 logs["critic/ds_step"] = self.policy.critic.global_steps
 
@@ -962,6 +1056,7 @@ class PPOTrainer(BaseTrainer):
 
         # Add "train/" prefix for clarity.
         logs = {f"train/{k}": v for k, v in logs.items()}
+
         logger.info(f"LOGGING TRAINING METRICS {logs}")
         self._cloud_log({**logs, "train/global_step": self.state.global_step})
 
@@ -1017,18 +1112,7 @@ class PPOTrainer(BaseTrainer):
             value = value * weight
             accumulated_metrics[key] += value
 
-    def _get_automatic_checkpoint_name(self) -> str:
-        checkpoint_format = self.get_checkpoint_format()
-        checkpoint_name = checkpoint_format.format(
-            iteration=str(self.state.iteration).zfill(4),
-            epoch=f"{self.state.epoch:.2f}",
-            global_step=str(self.state.global_step).zfill(4),
-        )
-        return checkpoint_name
-
-    def get_checkpoint_format(self) -> str:
-        return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
-
+        running_metrics["_num_participating_tokens"] += num_tokens
 
     def _filter_episodes(self, episodes_dataset: Dataset) -> Dataset:
         """
@@ -1054,3 +1138,19 @@ class PPOTrainer(BaseTrainer):
             )
 
         return episodes_dataset
+    
+    def _set_process_log_level(self, logger_obj: logging.Logger):
+        if not self.distributed_state.is_local_main_process:
+            logger_obj.setLevel(logging.WARNING)
+
+    def _get_automatic_checkpoint_name(self) -> str:
+        checkpoint_format = self.get_checkpoint_format()
+        checkpoint_name = checkpoint_format.format(
+            iteration=str(self.state.iteration).zfill(4),
+            epoch=f"{self.state.epoch:.2f}",
+            global_step=str(self.state.global_step).zfill(4),
+        )
+        return checkpoint_name
+
+    def get_checkpoint_format(self) -> str:
+            return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"

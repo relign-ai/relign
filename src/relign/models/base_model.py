@@ -120,8 +120,6 @@ class PreTrainedModelForCasualLM(PreTrainedModel):
             **pretrained_args,
             **kwargs,
         )
-        if disable_dropout and is_main_process:
-            logger.info(f"Model config after disabling dropout: {model.config}")
         assert (
             lora_config is None or freeze_config is None
         ), "Only one of lora_config and freeze_config can be specified"

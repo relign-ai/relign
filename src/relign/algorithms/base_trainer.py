@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from accelerate import Accelerator, PartialState
 from accelerate.utils import GradientAccumulationPlugin
+from deepspeed import DeepSpeedEngine 
 
 
 from datasets import Dataset
@@ -433,3 +434,20 @@ class BaseTrainer(ABC):
         )
 
         return kls
+
+    def _get_learning_rate(self, engine: DeepSpeedEngine):
+        # with deepspeed's fp16 and dynamic loss scale enabled the optimizer/scheduler steps may
+        # not run for the first few dozen steps while loss scale is too large, and thus during
+        # that time `get_last_lr` will fail if called during that warm up stage, so work around it:
+        try:
+            return engine.get_lr()[0]
+        except AssertionError as e:
+            if "need to call step" in str(e):
+                logger.warning(
+                    "tried to get lr value before scheduler/optimizer started stepping, returning lr=0"
+                )
+                last_lr = 0
+            else:
+                raise
+
+        return last_lr

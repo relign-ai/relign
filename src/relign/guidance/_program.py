@@ -767,7 +767,7 @@ class DisplayThrottler():
         while True:
             await self._data_event.wait()
             now = time.time()
-            log.info("in DisplayThrottler run loop -- now: {}, last_time: {}, throttle_limit: {}".format(now, self.last_time, self.throttle_limit))
+            # log.info("in DisplayThrottler run loop -- now: {}, last_time: {}, throttle_limit: {}".format(now, self.last_time, self.throttle_limit))
             if self._done or now - self.last_time >= self.throttle_limit:
                 try:
                     self.display_function(last=self._done)
