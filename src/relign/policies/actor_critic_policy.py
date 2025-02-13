@@ -80,7 +80,6 @@ class ActorCriticPolicy(ActorPolicy):
             critic_model.to(self.distributed_state.device)
             return critic_model
 
-        
         # Here we  pass hte deepspeec citic config definded in the yamls
         # tio the Hftrainerrdeepspeec config object
         ds_config = HfTrainerDeepSpeedConfig(self.critic_config)
@@ -126,8 +125,6 @@ class ActorCriticPolicy(ActorPolicy):
         self._patch_ds_config_for_batch_size(ds_config, self.global_batch_size)
         self._patch_ds_config_for_dtype(ds_config)
         self._patch_ds_config_for_bucket_size(ds_config, critic_model.config)
-
-        
 
         engine = self._init_deepspeed_engine_for_training(
             critic_model,
@@ -258,7 +255,6 @@ class ActorCriticPolicy(ActorPolicy):
         self.gradient_accumulation_steps = gradient_accumulation_steps
         self.total_num_training_steps = total_num_training_steps
 
-
         logger.info("\n\n**************** Initilizing the critic ******************")
         logger.info(f"global_batch_size = {self.global_batch_size}")
         logger.info(f"total num training steps = {self.total_num_training_steps}")
@@ -326,11 +322,9 @@ class ActorCriticPolicy(ActorPolicy):
         if len(metrics) > 0:
             self._cloud_log({**metrics, "train/global_step": self.state.global_step})
 
-    def load_latest_policy_path(self, project_root_dir: Optional[Path] = None) -> None:
+    def load_latest_policy_path(self, checkpoint_path_to_load: Optional[Path] = None) -> None:
         """loads both actor and critic from "policy/cache" folder"""
-        if not project_root_dir:
-            project_root_dir = self.project_root_dir
-        self._load_checkpoint_to_ds_engines(project_root_dir / "policy" / "cache")
+        self._load_checkpoint_to_ds_engines(checkpoint_path_to_load)
 
     def load_checkpoint(self, checkpoint: Union[Checkpoint, Path]) -> None:
         super().load_checkpoint(checkpoint)
@@ -370,32 +364,36 @@ class ActorCriticPolicy(ActorPolicy):
                 shutil.rmtree(checkpoint_path)
             checkpoint_path.mkdir(parents=True, exist_ok=True)
 
-            # save the trainer state here potentially 
-            if self.actor is not None:
-                self._save_hf_pretrained(self.actor, checkpoint_path /"hf_pretrained")
-                self.actor.save_checkpoint(str(checkpoint_path / "actor"))
+        # save the trainer state here potentially 
+        if self.actor is not None:
+            logger.info(f"Saving actor engine to {checkpoint_path / 'hf_pretrained'}")
+            self._save_hf_pretrained(self.actor, checkpoint_path /"hf_pretrained")
+            self.actor.save_checkpoint(str(checkpoint_path / "actor"))
+        if self.critic is not None:
+            logger.info(f"Saving critic engine to {checkpoint_path / 'crritic'/ 'hf_pretrained'}")
+            self._save_hf_pretrained(self.critic, checkpoint_path / "critic"/ "hf_pretrained")
+            self.critic.save_checkpoint(str(checkpoint_path / "critic"))
 
-            if self.critic is not None:
-                self._save_hf_pretrained(self.critic, checkpoint_path / "critic"/ "hf_pretrained")
-                self.critic.save_checkpoint(str(checkpoint_path / "critic"))
-
-        # Save the HF-pretrained actor weights
-        dist.barrier()
-    
     def get_checkpoint_format(self) -> str:
         return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
 
     def clean_old_temp_checkpoints(
-        self, checkpoint_dir, exclude: Optional[List[Path]] = None
+        self, 
+        checkpoint_dir: Path,
+        exclude: Optional[List[Path]] = None
+
     ) -> None:
         if exclude is None:
             exclude = []
 
         if self._is_main_process():
             for checkpoint in checkpoint_dir.iterdir():
-                if checkpoint.is_dir():
+                if (
+                    checkpoint.is_dir()
+                    and checkpoint.name.startswith("ckpt--")
+                    and checkpoint not in exclude
+                ):
                     logger.info(f"Removing old temp checkpoint {checkpoint}")
                     shutil.rmtree(checkpoint)
 
-        dist.barrier()
 

@@ -212,6 +212,16 @@ class BaseTrainer(ABC):
         raise NotImplementedError
 
     def _compute_batch_size_and_steps(self):
+        # Log all values that will be used in the computation
+        logger.info(f"Starting batch size and step computation with values:")
+        logger.info(f"  target_batch_size: {self.target_batch_size}")
+        logger.info(f"  per_device_batch_size (initial): {self.per_device_batch_size}")
+        logger.info(f"  gradient_accumulation_steps (initial): {self.gradient_accumulation_steps}")
+        logger.info(f"  num_processes: {self.distributed_state.num_processes}")
+        logger.info(f"  num_iterations: {self.num_iterations}")
+        logger.info(f"  num_epochs_per_iteration: {self.num_epochs_per_iteration}")
+        logger.info(f"  num_episodes_per_iteration: {self.num_episodes_per_iteration}")
+
         if self.target_batch_size is not None:
             if (
                 self.per_device_batch_size is None
@@ -254,9 +264,10 @@ class BaseTrainer(ABC):
             * self.num_episodes_per_iteration
             // self.global_batch_size
         )
-        logger.info(f"Per device batch size: {self.per_device_batch_size}")
-        logger.info(f"Gradient accumulation steps: {self.gradient_accumulation_steps}")
-        logger.info(f"Num of total processes: {self.distributed_state.num_processes}")
+
+        # Finally, log the resulting computations
+        logger.info(f"Per device batch size (computed): {self.per_device_batch_size}")
+        logger.info(f"Gradient accumulation steps (computed): {self.gradient_accumulation_steps}")
         logger.info(
             f"Global batch size (w. parallel, distributed & accumulation): {self.global_batch_size}"
         )

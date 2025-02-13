@@ -188,15 +188,10 @@ class PPOTrainer(BaseTrainer):
 
             # engines are not cached, need to laod the latest weights from checkpoin path
             logger.info(f"Loading latest policy from latest policy path")
-            self.policy.load_latest_policy_path()
+            self.policy.load_latest_policy_path(self.checkpoint_path_to_load)
 
             dist.barrier()
             self.distributed_state.wait_for_everyone()
-
-            self.policy._clean_old_temp_checkpoints(
-                self.checkpoint_path_to_load
-                # self.project_root_dir / "policy" / "cache"
-            )
 
             loaded_actor_weights_hash= get_model_hash(self.policy.actor.module)
             loaded_critic_weights_hash= get_model_hash(self.policy.critic.module)
@@ -360,14 +355,16 @@ class PPOTrainer(BaseTrainer):
             logger.info(f"setting checkpoint path to load to {current_policy_checkpoint_path}")
             self.checkpoint_path_to_load = current_policy_checkpoint_path
             self.policy.checkpoint_latest_policy_path(current_policy_checkpoint_path)
+
+        # Put up a block here such that other processes dont go delete the critic 
         dist.barrier()
+        self.distributed_state.wait_for_everyone()
 
         # Clean the old checkpoint inside the checkpoint dir  
         self.policy.clean_old_temp_checkpoints(
             checkpoint_dir, 
             exclude=[current_policy_checkpoint_path]
         )
-        dist.barrier()
 
         # destroy engines and release memory
         self.policy.destroy_ds_engines()
@@ -378,7 +375,7 @@ class PPOTrainer(BaseTrainer):
 
         logger.info(f"Latest policy path: {current_policy_checkpoint_path}")
         # Point this to the actors hf_pretrained for the inference / evaluation class
-        return current_policy_checkpoint_path / "actor"  / "hf_pretrained"
+        return current_policy_checkpoint_path / "hf_pretrained"
 
     def _hydrate_episodes(self, episodes: Dataset) -> Dataset:
         """

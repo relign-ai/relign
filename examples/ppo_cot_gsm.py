@@ -202,6 +202,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "target_batch_size": target_batch_size,
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "num_epochs_per_iteration": num_epoch_per_iterations,
+        "num_episodes_per_iteration": num_episodes_per_iteration,
         "num_iterations": num_iterations,
         "max_seq_length": max_seq_length,
         "dataloader_num_workers": 1,

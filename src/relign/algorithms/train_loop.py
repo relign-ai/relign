@@ -108,7 +108,7 @@ class TrainLoop:
             dist.barrier()
 
             ##################
-            # Trainer step   #
+            #  Trainer step  #
             ##################
             logger.info(f"Rank {self.distributed_state.process_index}: About to step.")
             current_policy_path = self.trainer.step(episodes=episodes)
@@ -121,6 +121,21 @@ class TrainLoop:
                 f"Rank {self.distributed_state.process_index} done with trainer step."
             )
 
+            self.distributed_state.wait_for_everyone()
+            dist.barrier()
+
+            ##################
+            # save tokenizer #
+            ##################
+            if (
+                current_policy_path is not None
+                and self.episode_generator.tokenizer is not None
+                and is_local_main_process
+            ):
+                logger.info(f"Saving the tokenizer at {current_policy_path}")
+                self.episode_generator.tokenizer.save_pretrained(current_policy_path)
+
+            # Synchronize after checkpointing.
             self.distributed_state.wait_for_everyone()
             dist.barrier()
 
@@ -143,29 +158,19 @@ class TrainLoop:
             #################
             #   Checkpoint  #
             #################
-            logger.info(
-                f"Rank {self.distributed_state.process_index} done with evaluation."
-            )
-            # Checkpointing (e.g. saving tokenizer) -- only on main process.
-            logger.info(
-                f"Rank {self.distributed_state.process_index} about to checkpoint."
-            )
-            if (
-                current_policy_path is not None
-                and self.episode_generator.tokenizer is not None
-                and is_local_main_process
-            ):
-                logger.info(f"Saving the tokenizer at {current_policy_path}")
-                self.episode_generator.tokenizer.save_pretrained(current_policy_path)
-
-            # Synchronize after checkpointing.
-            self.distributed_state.wait_for_everyone()
-            dist.barrier()
+            # logger.info(
+            #     f"Rank {self.distributed_state.process_index} done with evaluation."
+            # )
+            # # Checkpointing (e.g. saving tokenizer) -- only on main process.
+            # logger.info(
+            #     f"Rank {self.distributed_state.process_index} about to checkpoint."
+            # )
 
             ##################
             #  HouseCleaning #
             ##################
             self._clean_episodes()
+
             self.distributed_state.wait_for_everyone()
             dist.barrier()
 
