@@ -32,7 +32,7 @@ logger = get_logger(__name__)
 @dataclass
 class GRPOParams:
     """
-    Configuration class for PPOTrainer.
+    Configuration class for GRPOTrainer.
 
     Parameters:
         adap_kl_ctrl (bool):
@@ -123,8 +123,8 @@ def get_model_hash(model):
 
 class GRPOTrainer(BaseTrainer):
     """
-    PPO Trainer.
-    Impelmentation of the PPO update rule.
+    GRPO Trainer.
+    Impelmentation of the GRPO update rule.
     """
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -266,11 +266,11 @@ class GRPOTrainer(BaseTrainer):
                     should_log = self.state.global_step % self.logging_steps == 0
                     if should_log:
                         logger.info(" logging training metrics")
-                        # self._log_training_metrics(
-                        #     global_step_last_logged,
-                        #     accumulated_metrics,
-                        #     progress_bar,
-                        # )
+                        self._log_training_metrics(
+                            global_step_last_logged,
+                            accumulated_metrics,
+                            progress_bar,
+                        )
                         global_step_last_logged = self.state.global_step
 
             dataloader_iter = iter(dataloader)
@@ -564,90 +564,91 @@ class GRPOTrainer(BaseTrainer):
         # Update Running Metrics
         running_metrics["_num_participating_tokens"] += num_tokens
 
-    def _hydrate_ref_log_probs(
-        self, episodes: Dataset, column_name: str = COLUMN_REF_SHIFTED_LOGPS
-    ) -> Dataset:
-        logger.info("Computing refrence model logprobs")
-
-        self.policy.init_reference_engine_if_needed(
-            self.global_batch_size,
-            self.per_device_batch_size,
-            self.gradient_accumulation_steps,
-            self.total_num_training_steps,
-        )
-
-        ## update the episodes
-        data_loader = prepare_data_loader_for_inference(
-            episodes,
-            per_device_batch_size=self.per_device_batch_size,
-            data_loader_kwargs={
-                "collate_fn": GRPODataCollator(),
-                "num_workers": self.dataloader_num_workers,
-                "pin_memory": self.dataloader_pin_memory,
-            },
-        )
-
-        self.policy.reference.eval()  # put the referenc emodel in non-training mode
+    def _log_training_metrics(
+        self,
+        _globalstep_last_logged: int,
+        accumulated_metrics: Dict[str, Union[float, torch.Tensor]],
+        progress_bar: tqdm,
+    ):
+        # Wait for all processes to reach this point
         dist.barrier()
 
-        ref_log_probs_list = []
-        for inputs in tqdm(
-            data_loader,
-            desc="Computing reference log probs",
-            disable=not self._is_main_process(),
-        ):
-            with torch.no_grad():
-                # Asume every sequence is padded from the right
-                # noinspection DuplicatedCode
-                assert torch.all(inputs["attention_mask"][:, 0] == 1)
-                assert inputs["input_ids"].shape[0] == self.per_device_batch_size, (
-                    f"We expect on all processes to have the same batch size of "
-                    f"{self.per_device_batch_size}."
-                )
+        logs: Dict[str, float] = {}
 
-                inputs = {
-                    k: v.to(self.policy.reference.device) for k, v in inputs.items()
-                }
+        # Compute the log values over all processes
+        num_steps_since_last_log = (
+            self.state.global_step - _globalstep_last_logged
+        ) * self.gradient_accumulation_steps
 
-                # Compute the sequence lengths as we need to extract
-                # the log probs of the non-padded tokens
-                seq_lengths = inputs["attention_mask"].sum(dim=1).detach().clone()
-                seq_lengths = seq_lengths.unsqueeze(1)  # Shape: (batch_size, 1)
+        if "_num_participating_tokens" in accumulated_metrics:
+            num_participating_tokens = accumulated_metrics["_num_participating_tokens"]
+            dist.all_reduce(num_participating_tokens, op=dist.ReduceOp.SUM)
+            num_participating_tokens = num_participating_tokens.item()
+        else:
+            num_participating_tokens = 1
 
-                # Compute the log probabilities for each token
-                outputs = self.policy.forward_reference(
-                    input_ids=inputs["input_ids"],
-                    attention_mask=inputs["attention_mask"],
-                    labels=inputs["labels"],
-                    return_all_logp=True,
-                )
+        for metric_name, metric_value in accumulated_metrics.items():
+            if metric_name.startswith("_"):
+                continue
+            if metric_value is None:
+                continue
 
-                logps = outputs.all_logp.detach()
-                assert logps.shape[1] == inputs["input_ids"].shape[1] - 1
+            is_weighed_by_num_actions = (
+                metric_name in self.log_keys_weighed_by_num_participating_tokens
+            )
 
-                seq_lengths = seq_lengths.to(self.policy.reference.device)
-                seq_lengths = gather(seq_lengths).cpu()
-                logps = gather(
-                    pad_across_processes(logps, dim=1, pad_index=0.0, pad_first=False)
-                ).cpu()
+            if isinstance(metric_value, torch.Tensor):
+                metric_value = metric_value.to(self.policy.actor.device)
+                dist.all_reduce(metric_value, op=dist.ReduceOp.SUM)
+                metric_value = metric_value.item()
+                divisor = dist.get_world_size()
+            else:
+                assert not is_weighed_by_num_actions
+                divisor = 1
 
-                assert (
-                    logps.shape[0]
-                    == inputs["input_ids"].shape[0] * dist.get_world_size()
-                )
+            if is_weighed_by_num_actions:
+                metric_value /= num_participating_tokens
+            else:
+                metric_value /= divisor * num_steps_since_last_log
 
-                # Convert 2d tensors to a list of lists
-                logps_seq_lengths = seq_lengths - 1
-                for i, seq_len in enumerate(logps_seq_lengths.squeeze().tolist()):
-                    assert seq_len <= logps.shape[1]
-                    ref_log_probs_list.append(logps[i, :seq_len].tolist())
+            logs[metric_name] = round(metric_value, 8)
 
-        ref_log_probs_list = ref_log_probs_list[
-            : len(episodes)
-        ]  # remove any extra log probs that were added due to global paddingS
+        logs["actor/lr"] = self._get_learning_rate(self.policy.actor)
+        logs["epoch"] = round(self.state.epoch, 4)
+        logs["step"] = self.state.global_step
+        logs["actor/ds_step"] = self.policy.actor.global_steps
 
-        with self.distributed_state.main_process_first():
-            episodes = episodes.add_column(name=column_name, column=ref_log_probs_list)
+        # First log the metrics on the progress bar
+        progress_bar.set_postfix(logs)
 
-        self.policy.destroy_reference_engine_if_not_cached()
-        return episodes
+        # Add "train/" prefix for clarity.
+        logs = {f"train/{k}": v for k, v in logs.items()}
+
+        logger.info(f"LOGGING TRAINING METRICS {logs}")
+        self._cloud_log({**logs, "train/global_step": self.state.global_step})
+
+        # Reset the accumulated metrics
+        for key in accumulated_metrics.keys():
+            accumulated_metrics[key] -= accumulated_metrics[key]
+        
+    log_keys_to_store_in_running_metrics = [
+        "_num_participating_tokens",
+    ]
+
+    log_keys_weighed_by_num_participating_tokens = [
+        "advantages/mean",
+        "advantages/std",
+        "rewards/mean",
+        "returns",
+        "non_score_rewards",
+        "actor/loss",
+        "actor/logit_entropy",
+        "actor/approx_kl",
+        "actor/policy_kl",
+        "actor/clip_frac",
+        "ratio",
+        "critic/loss",
+        "critic/value",
+        "critic/mse",
+        "critic/clip_frac",
+    ]

@@ -2,15 +2,16 @@ import pytest
 
 from relign.algorithms.base_trainer import BaseTrainer
 from relign.algorithms.ppo.trainer import PPOTrainer
-from relign.algorithms.grpo.trainer import GRPOTrainer 
+from relign.algorithms.grpo.trainer import GRPOTrainer
 from relign.algorithms.train_loop import TrainLoop
+
 
 @pytest.fixture
 def ppo_trainer(
-    experiment_dir, 
-    actor_policy, 
-    distributed_single_gpu
-) -> BaseTrainer: 
+    experiment_dir,
+    actor_policy,
+    distributed_state_cpu_no_deepspeed,
+) -> BaseTrainer:
     """
     Returns a mock or real PPO trainer for integration tests.
     """
@@ -18,7 +19,7 @@ def ppo_trainer(
         project_root_dir=experiment_dir,
         seed=69,
         policy=actor_policy,
-        distributed_state=distributed_single_gpu,
+        distributed_state=distributed_state_cpu_no_deepspeed,
         per_device_batch_size=4,
         dataloader_num_workers=0,
         dataloader_pin_memory=False,
@@ -26,11 +27,7 @@ def ppo_trainer(
 
 
 @pytest.fixture
-def grpo_trainer(
-    experiment_dir, 
-    actor_policy, 
-    distributed_single_gpu
-) -> BaseTrainer:
+def grpo_trainer(experiment_dir, actor_policy, distributed_single_gpu) -> BaseTrainer:
     """
     Returns a mock or real GRPO trainer for integration tests.
     """
