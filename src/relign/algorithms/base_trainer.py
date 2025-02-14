@@ -507,3 +507,6 @@ class BaseTrainer(ABC):
 
     def get_checkpoint_format(self) -> str:
         return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
+
+    def set_cloud_logger(self, cloud_log):
+        self.cloud_log = cloud_log

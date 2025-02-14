@@ -148,9 +148,6 @@ class PPOTrainer(BaseTrainer):
         # for checkpoint continuation
         self.checkpoint_path_to_load = None
 
-    def set_cloud_logger(self, cloud_log):
-        self.cloud_log = cloud_log
-
     def step(self, episodes: EpisodeDataset) -> Path:
         """
         Performs a single update step using the dataset rollout under the current policy.

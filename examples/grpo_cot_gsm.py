@@ -88,7 +88,7 @@ def grpo_gsm(cfg, local_rank):
     # --------- Inference (Chain-of-thought) Strategy --------- #
     max_seq_length = 2048
     num_episodes_per_iteration = 512 
-    num_rollouts_per_sample = 16 # group size
+    num_rollouts_per_sample = 8 # group size
 
     # num groups
     num_dataset_samples_per_iteration = (
