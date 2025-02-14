@@ -55,6 +55,16 @@ def grpo_gsm(cfg, local_rank):
             },
         )
 
+    def reference_model_fn():
+        # Load the base actor model from pretrained weights.
+        return PreTrainedModelForCasualLM.from_di(
+            hf_model_name=initial_model_name,
+            disable_dropout=True,
+            pretrained_args={
+                "use_flash_attention_2": True,
+            },
+        )
+
     # --------- Task Definition ---------- #
     answer_prefix = "\n####"
     task = GSM8K(
@@ -76,18 +86,20 @@ def grpo_gsm(cfg, local_rank):
     )
 
     # --------- Inference (Chain-of-thought) Strategy --------- #
+    max_seq_length = 2048
     num_episodes_per_iteration = 32  # num groups
     num_rollouts_per_sample = 8  # group size
     # This is num_groups in grpo
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
     )
-    num_iterations = 600 
+    target_batch_size = 16
+    num_iterations = 650
     sampling_temperature = 0.6
     num_epoch_per_iterations = 4
     gradient_accumulation_steps = 1
-    max_concurrent_programs = 256 
-    max_concurrent_generations = 128 
+    max_concurrent_programs = 256
+    max_concurrent_generations = 128
     guidance_llm_cls = OpenAIVLLM
     guidance_llm_kwargs = {
         "api_key": "EMPTY",
@@ -149,7 +161,8 @@ def grpo_gsm(cfg, local_rank):
         "append_bos_to_query": True,
         "append_eos_to_response": True,
         "dataset_shuffle_on_each_iteration": True,
-        "max_sequence_length": 2048,
+        "dataset_sample_with_replacement": True,
+        "max_sequence_length": max_seq_length,
         "max_question_length": 1512,
         "reward_function": reward_function,
         "fill_missing_episodes": True,
@@ -168,16 +181,21 @@ def grpo_gsm(cfg, local_rank):
     actor_policy = ActorPolicy
     actor_kwargs = {
         "actor_model_fn": actor_model_fn,
+        "reference_model_fn": reference_model_fn,
         "actor_config": ds_config,
         "temperature": sampling_temperature,
+        "warmup_steps": 0,
     }
 
     # ----------- Trainer --------------- #
     grpo_trainer_class = GRPOTrainer
     grpo_trainer_kwargs = {
-        "target_batch_size": 2,
+        "target_batch_size": target_batch_size,
         "gradient_accumulation_steps": gradient_accumulation_steps,
         "num_epochs_per_iteration": num_epoch_per_iterations,
+        "num_episodes_per_iteration": num_episodes_per_iteration,
+        "num_iterations": num_iterations,
+        "max_seq_length": max_seq_length,
         "dataloader_num_workers": 2,
         "dataloader_pin_memory": False,
     }
@@ -231,11 +249,7 @@ def grpo_gsm(cfg, local_rank):
     )
 
     # Start training
-    # runner.run()
-
-    dataset_path = "experiment/grpo-cot-rho1b-gsm/episodes/episodes_0000.json"
-    episodes = Dataset.load_from_disk(dataset_path)
-    runner.trainer.step(episodes)
+    runner.run()
 
 
 def main():
