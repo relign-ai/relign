@@ -1,9 +1,6 @@
 import hydra
-from datasets import Dataset
 from textwrap import dedent
 import argparse
-from pathlib import Path
-from transformers import AutoModelForCausalLM, AutoTokenizer
 from omegaconf import OmegaConf
 
 from relign.tasks import GSM8K
@@ -26,13 +23,10 @@ from relign.runners.distributed_runner import DistributedRunner
 from relign.common.vllm_server import VLLMServer
 from relign.guidance.llms import OpenAIVLLM
 
-from relign.inference.inference_pipeline import VLLMInferencePipeline
-from relign.eval.evaluator import Evaluator
-from relign.eval.analyzer import TaskPerformanceAnalyzer
 from relign.models.base_model import DIPreTrainedTokenizer, PreTrainedModelForCasualLM
 
 
-def grpo_gsm(cfg, local_rank):
+def grpo_gsm(cfg, local_rank=None):
     # ------ Deepspeed Config ------ #
     ds_config = cfg.deepspeed
     ds_config = OmegaConf.to_container(ds_config, resolve=True)
@@ -87,8 +81,8 @@ def grpo_gsm(cfg, local_rank):
 
     # --------- Inference (Chain-of-thought) Strategy --------- #
     max_seq_length = 2048
-    num_episodes_per_iteration = 512 
-    num_rollouts_per_sample = 8 # group size
+    num_episodes_per_iteration = 512
+    num_rollouts_per_sample = 8  # group size
 
     # num groups
     num_dataset_samples_per_iteration = (
@@ -255,12 +249,10 @@ def grpo_gsm(cfg, local_rank):
 
 def main():
     parser = argparse.ArgumentParser(description="Deepspeed training")
-    parser.add_argument("--local_rank", type=int, default=-1)
-    args, unknown = parser.parse_known_args()
 
     hydra.initialize(config_path="../configs", version_base=None)
     cfg = hydra.compose(config_name="config")
-    grpo_gsm(cfg=cfg, local_rank=args.local_rank)
+    grpo_gsm(cfg=cfg)
 
 
 if __name__ == "__main__":

@@ -329,9 +329,6 @@ class PPOTrainer(BaseTrainer):
             value = value.cpu().item() / dist.get_world_size()
             running_metrics[key] = value
 
-        if len(running_metrics) > 0:
-            logger.info("Running metrics: {running_metrics}")
-
         self.state.iteration += 1
         progress_bar.close()
 
@@ -780,7 +777,7 @@ class PPOTrainer(BaseTrainer):
             "attention_mask": attention_mask,
             "labels": labels,
         }
-        
+
         #################
         #   Actor Loss  #
         #################

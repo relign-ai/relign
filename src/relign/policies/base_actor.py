@@ -16,11 +16,7 @@ from deepspeed import comm as dist
 
 from relign.policies.base_policy import DeepSpeedPolicy
 from relign.policies.base_policy import ActorForwardOutput
-from relign.utils.trainer import (
-    masked_mean, 
-    monitor_tensor_anomalies, 
-    masked_whiten
-)
+from relign.utils.trainer import masked_mean, monitor_tensor_anomalies, masked_whiten
 from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -77,7 +73,7 @@ class ActorPolicy(DeepSpeedPolicy):
         self.actor_config = actor_config
         self.enable_reference = enable_reference
         self.reference = None
-        
+
     def _init_actor_model(
         self,
         actor_model_fn: Callable[[], PreTrainedModel],
@@ -370,7 +366,6 @@ class ActorPolicy(DeepSpeedPolicy):
         Re-run forward pass with gradients for your actor network, compute
         the RL objective (policy gradient + KL).
         """
-        action_maks = shifted_labels_mask
 
         # 1) Forward pass on the actor model WITH grad
         actor_outputs = self.forward_actor(
@@ -382,8 +377,9 @@ class ActorPolicy(DeepSpeedPolicy):
             return_sequence_logp=False,
             trainer_hparams=trainer_hparams,
         )
-        shifted_actor_logprobs = actor_outputs.all_logp# shape (B, seq_len, vocab_size)
-
+        shifted_actor_logprobs = (
+            actor_outputs.all_logp
+        )  # shape (B, seq_len, vocab_size)
 
         #########################
         # compute KL divergence #
@@ -397,13 +393,12 @@ class ActorPolicy(DeepSpeedPolicy):
         ###################################
         # Compute the per token advantage #
         ###################################
-        # shifted actor log probs is of size 16 * 1184 while advantages is of size 16. 
+        # shifted actor log probs is of size 16 * 1184 while advantages is of size 16.
         # we want to do each row, ie..e, sample, times its advantage however, we get an error
-        per_token_advantages = (
-            torch.exp(shifted_actor_logprobs - shifted_actor_logprobs.detach())
-            * advantages.unsqueeze(1)
-        )
-        
+        per_token_advantages = torch.exp(
+            shifted_actor_logprobs - shifted_actor_logprobs.detach()
+        ) * advantages.unsqueeze(1)
+
         # noramlize the advantages to zero mean 1 var
         if trainer_hparams.whiten_advantages:
             pass
@@ -423,7 +418,7 @@ class ActorPolicy(DeepSpeedPolicy):
 
         # Then average for final scalar
         # tokens_per_sample = shifted_labels_mask.sum(dim=1)
-        pg_loss = masked_mean(per_token_loss, shifted_labels_mask) 
+        pg_loss = masked_mean(per_token_loss, shifted_labels_mask)
 
         logger.info(f"\n\n *************** Loss ********************")
         logger.info(f"Loss: {pg_loss}\n\n")
@@ -435,7 +430,7 @@ class ActorPolicy(DeepSpeedPolicy):
         }
 
         approx_ref_kl = masked_mean(kl, shifted_labels_mask).detach().cpu().item()
-        return pg_loss, False, actor_metrics, approx_ref_kl, per_token_advantages 
+        return pg_loss, False, actor_metrics, approx_ref_kl, per_token_advantages
 
     def destroy_actor_engine_if_not_cached(self) -> None:
         """
@@ -694,11 +689,9 @@ class ActorPolicy(DeepSpeedPolicy):
         if len(metrics) > 0:
             self._cloud_log({**metrics, "train/global_step": self.state.global_step})
 
-    def load_latest_policy_path(self, project_root_dir: Optional[Path] = None) -> None:
+    def load_latest_policy_path(self, checkpoint_path: Optional[Path] = None) -> None:
         """loads both actor and critic from "policy/cache" folder"""
-        if not project_root_dir:
-            project_root_dir = self.project_root_dir
-        self._load_checkpoint_to_ds_engines(project_root_dir / "policy" / "cache")
+        self._load_checkpoint_to_ds_engines(checkpoint_path)
 
     def _save_hf_pretrained(self, engine: DeepSpeedEngine, path: Path) -> None:
         """Saves a huggingface model that can be used for inference"""
@@ -790,10 +783,7 @@ class ActorPolicy(DeepSpeedPolicy):
         return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
 
     def clean_old_temp_checkpoints(
-        self, 
-        checkpoint_dir: Path,
-        exclude: Optional[List[Path]] = None
-
+        self, checkpoint_dir: Path, exclude: Optional[List[Path]] = None
     ) -> None:
         if exclude is None:
             exclude = []
@@ -806,7 +796,7 @@ class ActorPolicy(DeepSpeedPolicy):
                     and checkpoint not in exclude
                 ):
                     logger.info(f"Removing old temp checkpoint {checkpoint}")
-                    shutil.rmtree(checkpoint) 
+                    shutil.rmtree(checkpoint)
 
     def _logprobs_from_logits(self, logits, labels):
         """
@@ -821,10 +811,7 @@ class ActorPolicy(DeepSpeedPolicy):
         ).squeeze(-1)
         return token_logprob
 
-    def checkpoint_latest_policy_path(
-        self, 
-        checkpoint_path: Path
-    ) -> Path:
+    def checkpoint_latest_policy_path(self, checkpoint_path: Path) -> Path:
         """
         Saves both the actor and critic engines and returns the path of the actor for inference.
 
@@ -835,15 +822,12 @@ class ActorPolicy(DeepSpeedPolicy):
         """
         if self._is_main_process():
             if checkpoint_path.exists():
-                logger.warning(
-                    f"checkpoin tpath {checkpoint_path} exists. overwriting"
-                )
+                logger.warning(f"checkpoin tpath {checkpoint_path} exists. overwriting")
                 shutil.rmtree(checkpoint_path)
             checkpoint_path.mkdir(parents=True, exist_ok=True)
 
-        # save the trainer state here potentially 
+        # save the trainer state here potentially
         if self.actor is not None:
             logger.info(f"Saving actor engine to {checkpoint_path / 'hf_pretrained'}")
-            self._save_hf_pretrained(self.actor, checkpoint_path /"hf_pretrained")
+            self._save_hf_pretrained(self.actor, checkpoint_path / "hf_pretrained")
             self.actor.save_checkpoint(str(checkpoint_path / "actor"))
-        

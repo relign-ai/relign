@@ -126,6 +126,7 @@ class GRPOTrainer(BaseTrainer):
     GRPO Trainer.
     Impelmentation of the GRPO update rule.
     """
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.trainer_hparams = GRPOParams(**kwargs.get("grpo_params", {}))
@@ -138,7 +139,8 @@ class GRPOTrainer(BaseTrainer):
         Performs a single update step using the dataset rollout under the current policy.
         Each updatestep can rum multiple epochs of optimization.
         """
-        # compute the
+
+        episodes = self._filter_episodes(episodes)
         episodes = self._hydrate_ref_log_probs(
             episodes, column_name=COLUMN_REF_SHIFTED_LOGPS
         )
@@ -255,7 +257,7 @@ class GRPOTrainer(BaseTrainer):
                 is_grad_acc_boundary = (
                     self.policy.actor.is_gradient_accumulation_boundary()
                 )
-                
+
                 metrics = self._epoch_step(batch)
                 self._update_metrics(running_metrics, accumulated_metrics, metrics)
 
@@ -281,20 +283,17 @@ class GRPOTrainer(BaseTrainer):
             value = value.cpu().item() / dist.get_world_size()
             running_metrics[key] = value
 
-        if len(running_metrics) > 0:
-            logger.info("Running metrics: {running_metrics}")
-
         self.state.iteration += 1
         progress_bar.close()
 
-        #TODO: delete this if it passes
-        # Verify we actually trained 
+        # TODO: delete this if it passes
+        # Verify we actually trained
         new_actor_hash = get_model_hash(self.policy.actor.module)
         assert new_actor_hash != self.latest_actor_weights_hash
         self.latest_actor_weights_hash = new_actor_hash
 
-        #TODO: do this conditioned on caching ds engine logic
-        # i.e., IF we cache the engines, we dont have to store their full state 
+        # TODO: do this conditioned on caching ds engine logic
+        # i.e., IF we cache the engines, we dont have to store their full state
         # in memory
         checkpoint_dir = self.project_root_dir / "policy" / "checkpoints"
         current_policy_checkpoint_path = (
@@ -306,28 +305,27 @@ class GRPOTrainer(BaseTrainer):
             self.checkpoint_path_to_load = current_policy_checkpoint_path
             self.policy.checkpoint_latest_policy_path(current_policy_checkpoint_path)
 
-        # Put up a block here such that other processes dont go delete the critic 
+        # Put up a block here such that other processes dont go delete the critic
         dist.barrier()
         self.distributed_state.wait_for_everyone()
 
-        # Clean the old checkpoint inside the checkpoint dir  
+        # Clean the old checkpoint inside the checkpoint dir
         self.policy.clean_old_temp_checkpoints(
-            checkpoint_dir, 
-            exclude=[current_policy_checkpoint_path]
+            checkpoint_dir, exclude=[current_policy_checkpoint_path]
         )
 
         # destroy engines and release memory
         self.policy.destroy_ds_engines()
-
         release_memory()
         import gc
+
         gc.collect()
         torch.cuda.empty_cache()
 
         logger.info(f"Latest policy path: {current_policy_checkpoint_path}")
         # Point this to the actors hf_pretrained for the inference / evaluation class
         return current_policy_checkpoint_path / "hf_pretrained"
-        
+
     def _hydrate_ref_log_probs(
         self, episodes: Dataset, column_name: str = COLUMN_REF_SHIFTED_LOGPS
     ) -> Dataset:
@@ -461,7 +459,9 @@ class GRPOTrainer(BaseTrainer):
         logger.info(f"input_ids shape: {input_ids.shape}")
         logger.info(f"attention_mask shape: {attention_mask.shape}")
         logger.info(f"labels shape: {labels.shape}")
-        logger.info(f"advantages shape: {advantages.shape}, sample scores: {advantages[:5]}")
+        logger.info(
+            f"advantages shape: {advantages.shape}, sample scores: {advantages[:5]}"
+        )
         logger.info(f"groups shape: {groups.shape}, sample groups: {groups[:5]}")
         logger.info(
             f"len_query_token_ids shape: {len_query_token_ids.shape}, "
@@ -491,7 +491,7 @@ class GRPOTrainer(BaseTrainer):
         logger.info(f"device {self.distributed_state.process_index} going into loss")
 
         # Step 2: Compute the actor loss
-        actor_loss, is_skipped, actor_metrics, approx_ref_kl, per_token_advantages= (
+        actor_loss, is_skipped, actor_metrics, approx_ref_kl, per_token_advantages = (
             self.policy.actor_loss_grpo(
                 model_inputs=model_inputs,
                 shifted_labels_mask=shifted_labels_mask,
@@ -515,7 +515,9 @@ class GRPOTrainer(BaseTrainer):
         #####################
         assert per_token_advantages.shape == shifted_labels_mask.shape
         metrics = {
-            "advantages/mean": masked_mean(per_token_advantages, shifted_labels_mask).detach(),
+            "advantages/mean": masked_mean(
+                per_token_advantages, shifted_labels_mask
+            ).detach(),
             # "rewards/mean": mean_rewards,
             # masked_mean(mean_rewards, shifted_labels_mask).detach(),
             "num_tokens": shifted_labels_mask.sum().detach(),
@@ -579,7 +581,9 @@ class GRPOTrainer(BaseTrainer):
         progress_bar: tqdm,
     ):
         # Wait for all processes to reach this point
-        logger.info(f"\n\n{self.distributed_state.process_index} waiting to log training metrics")
+        logger.info(
+            f"\n\n{self.distributed_state.process_index} waiting to log training metrics"
+        )
         dist.barrier()
 
         logs: Dict[str, float] = {}
@@ -632,13 +636,14 @@ class GRPOTrainer(BaseTrainer):
 
         # Add "train/" prefix for clarity.
         logs = {f"train/{k}": v for k, v in logs.items()}
+        logger.info(f"logs {logs}")
 
         self._cloud_log({**logs, "train/global_step": self.state.global_step})
 
         # Reset the accumulated metrics
         for key in accumulated_metrics.keys():
             accumulated_metrics[key] -= accumulated_metrics[key]
-        
+
     log_keys_to_store_in_running_metrics = [
         "_num_participating_tokens",
     ]
@@ -660,4 +665,3 @@ class GRPOTrainer(BaseTrainer):
         "critic/mse",
         "critic/clip_frac",
     ]
-

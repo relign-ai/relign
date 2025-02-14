@@ -1,13 +1,10 @@
 import hydra
 from textwrap import dedent
 import argparse
-from pathlib import Path
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModel
 from omegaconf import OmegaConf
 
 from relign.tasks import GSM8K
 from relign.policies.actor_critic_policy import ActorCriticPolicy
-from relign.policies.base_critic import PretrainedModelValueHead
 from relign.algorithms.train_loop import TrainLoop
 from relign.algorithms.ppo.trainer import PPOTrainer
 from relign.episode_generators.envs.math_episode_generator import (
@@ -99,7 +96,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         timeout=1,
     )
 
-    num_episodes_per_iteration = 512
+    num_episodes_per_iteration = 512 
     num_rollouts_per_sample = 8
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
@@ -108,8 +105,8 @@ def ppo_gsm(cfg, local_rank: int = -1):
     sampling_temperature = 0.6
     num_epoch_per_iterations = 2
     max_seq_length = 2048
-    target_batch_size = 64
-    gradient_accumulation_steps = 1
+    target_batch_size = 16
+    gradient_accumulation_steps = 2
     max_concurrent_programs = 256
     max_concurrent_generations = 128
     guidance_llm_cls = OpenAIVLLM
