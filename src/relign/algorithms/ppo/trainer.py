@@ -689,7 +689,7 @@ class PPOTrainer(BaseTrainer):
         attention_mask = inputs["attention_mask"]  # Shape: (batch_size, max_seq_len)
         labels = inputs["labels"]  # Shape: (batch_size, max_seq_len)
         scores = inputs["scores"]  # Shape: (batch_size,)
-        logger.info(f"\n\n**********************8 Scores ********************")
+        logger.info(f"\n\n********************** Scores ********************")
         logger.info(f"scores = {scores}")
 
         shifted_labels = labels[
@@ -700,7 +700,7 @@ class PPOTrainer(BaseTrainer):
             attention_mask.dtype
         )  # Shape: (batch_size, max_seq_len-1)
         logger.info(
-            f"\n\n********************** Hsifted Label Masks ******************8"
+            f"\n\n********************** shifted Label Masks ******************8"
         )
         logger.info(f"shifted label masks = {shifted_labels_mask}")
 
@@ -711,7 +711,9 @@ class PPOTrainer(BaseTrainer):
         ]  # Shape: (batch_size, max_seq_len-1)
         assert shifted_actor_logprobs.shape == shifted_labels_mask.shape
 
-        #  Compute the rewards, advantages, and returns
+        ###########################################
+        # Compute rewards, retruns and advantages #
+        ###########################################
         with torch.no_grad():
             if not self.trainer_hparams.force_disable_kl_penalty:
                 shifted_ref_logprobs = inputs[COLUMN_REF_SHIFTED_LOGPS]
@@ -783,8 +785,10 @@ class PPOTrainer(BaseTrainer):
             "attention_mask": attention_mask,
             "labels": labels,
         }
-
-        # Step 2: Compute the policy/actor loss
+        
+        #################
+        #   Actor Loss  #
+        #################
         actor_loss, is_skipped, actor_metrics, approx_ref_kl = self.policy.actor_loss(
             model_inputs=model_inputs,
             shifted_labels_mask=shifted_labels_mask,
@@ -800,9 +804,10 @@ class PPOTrainer(BaseTrainer):
         # Get rid of actor's activations to free up memory
         actor_loss = actor_loss.detach().clone()
         release_memory()
-        # training step complete
 
-        # Step 3: Compute critic loss
+        ###################
+        #   Critic Loss   #
+        ###################
         critic_loss, critic_metrics = self.policy.critic_loss(
             model_inputs=model_inputs,
             shifted_labels_mask=shifted_labels_mask,
@@ -817,6 +822,10 @@ class PPOTrainer(BaseTrainer):
         critic_loss = critic_loss.detach().clone()
 
         release_memory()
+
+        #########################
+        #  Metrics Bookkeeping  #
+        #########################
         metrics = {
             "advantages/mean": masked_mean(advantages, shifted_labels_mask).detach(),
             "advantages/std": masked_var(advantages, shifted_labels_mask)
@@ -840,7 +849,6 @@ class PPOTrainer(BaseTrainer):
         if kls is not None or approx_ref_kl is not None:
             if approx_ref_kl is not None:
                 kls = approx_ref_kl
-
             metrics["kls"] = (kls * shifted_labels_mask).sum(dim=1).mean().detach()
 
         metrics["actor/loss"] = actor_loss

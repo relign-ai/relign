@@ -91,26 +91,30 @@ class GSM8K(Task):
                 sol_without_answer, answer = solution_parts
 
         # ========== Tag-Based Extraction ========== #
-        # If we do want to look for <think>...</think> blocks:
-        if self.intermediate_step_tags is not None:
-            # If we are matching a *single* <think> block plus answer prefix (or just ####), simplify logic:
-            if self.match_single_think_tag:
-                import re
+        # If we want to use <think>...</think> blocks:
+        if self.intermediate_step_tags is not None and self.match_single_think_tag:
+            import re
+            # Build a pattern to find all think blocks.
+            pattern_think = rf"{re.escape(self.intermediate_step_tags[0])}.*?{re.escape(self.intermediate_step_tags[1])}"
+            think_matches = re.findall(pattern_think, solution, flags=re.DOTALL)
 
-                # Example: match <think> ... </think> followed eventually by ####
-                pattern = (
-                    rf"{re.escape(self.intermediate_step_tags[0])}"  # e.g. <think>
-                    r".*?"  # capture any text
-                    rf"{re.escape(self.intermediate_step_tags[1])}"  # e.g. </think>
-                    r".*?"  # capture any text (including newlines)
-                    r"####"  # the literal ####
-                )
+            # Do not reward if there are zero or more than one <think> blocks.
+            if len(think_matches) != 1:
+                return []
 
-                # Use DOTALL so that '.' matches across newlines
-                if re.search(pattern, solution, flags=re.DOTALL):
-                    return [1]
-                else:
-                    return []
+            # Check the text following the closing think tag:
+            end_tag = self.intermediate_step_tags[1]
+            end_idx = solution.rfind(end_tag)
+            suffix = solution[end_idx + len(end_tag):]
+
+            # We require that after the closing tag there's only whitespace (including newlines)
+            # until the answer prefix. If not, we don't reward.
+            # Instead of matching the entire answer_prefix literally, we can do:
+            if not re.match(r'^[\s]*#### ', suffix.lstrip()):
+                return [] 
+
+            # If the criteria are met, return a single reward index.
+            return [1]
 
         # ===== Delimiter-based splitting (existing logic) =====
         steps = sol_without_answer.split(delimiter)

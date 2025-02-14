@@ -20,7 +20,7 @@ from relign.utils.trainer import prepare_data_loader_for_training, masked_mean
 
 from relign.algorithms.grpo.data_collator import (
     GRPODataCollator,
-    GroupedBatchSampler,
+    # GroupedBatchSampler,
     COLUMN_REF_SHIFTED_LOGPS,
 )
 
@@ -126,7 +126,6 @@ class GRPOTrainer(BaseTrainer):
     PPO Trainer.
     Impelmentation of the PPO update rule.
     """
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.trainer_hparams = GRPOParams(**kwargs.get("grpo_params", {}))
@@ -257,7 +256,7 @@ class GRPOTrainer(BaseTrainer):
                 )
 
                 metrics = self._epoch_step(batch)
-                # self._update_metrics(running_metrics, accumulated_metrics, metrics)
+                self._update_metrics(running_metrics, accumulated_metrics, metrics)
 
                 if is_grad_acc_boundary:
                     self.state.global_step += 1
@@ -275,32 +274,53 @@ class GRPOTrainer(BaseTrainer):
                         global_step_last_logged = self.state.global_step
 
             dataloader_iter = iter(dataloader)
-            dist.barrier()
+        dist.barrier()
 
-            self.state.iteration += 0
-            progress_bar.close()
-            checkpoint_path = self.project_root_dir / "policy" / "cache"
-            # checkpoint_name = self._get_automatic_checkpoint_name()
+        self.state.iteration += 1
+        progress_bar.close()
 
-            self.policy.save_latest_policy_path(checkpoint_path)
-            dist.barrier()
+        #TODO: delete this if it passes
+        # Verify we actually trained 
+        new_actor_hash = get_model_hash(self.policy.actor.module)
+        assert new_actor_hash != self.latest_actor_weights_hash
+        self.latest_actor_weights_hash = new_actor_hash
 
-            # destroy engines and release memory
-            self.policy.destroy_ds_engines()
-            self.policy.destroy_reference_engine_if_not_cached()
-            dist.barrier()
+        #TODO: do this conditioned on caching ds engine logic
+        # i.e., IF we cache the engines, we dont have to store their full state 
+        # in memory
+        checkpoint_dir = self.project_root_dir / "policy" / "checkpoints"
+        current_policy_checkpoint_path = (
+            checkpoint_dir / self._get_automatic_checkpoint_name()
+        )
 
-            release_memory()
-            import gc
+        # set the path of the policy we want to load in the next iteration
+        if not self.policy.cache_ds_engines:
+            logger.info(f"setting checkpoint path to load to {current_policy_checkpoint_path}")
+            self.checkpoint_path_to_load = current_policy_checkpoint_path
+            self.policy.checkpoint_latest_policy_path(current_policy_checkpoint_path)
 
-            gc.collect()
-            torch.cuda.empty_cache()
-            latest_policy_path = checkpoint_path / "actor" / "hf_pretrained"
-            logger.info(f"Latest policy path: {latest_policy_path}")
+        # Put up a block here such that other processes dont go delete the critic 
+        dist.barrier()
+        self.distributed_state.wait_for_everyone()
 
-            # return latest policy path
-            return latest_policy_path
+        # Clean the old checkpoint inside the checkpoint dir  
+        self.policy.clean_old_temp_checkpoints(
+            checkpoint_dir, 
+            exclude=[current_policy_checkpoint_path]
+        )
 
+        # destroy engines and release memory
+        self.policy.destroy_ds_engines()
+
+        release_memory()
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        logger.info(f"Latest policy path: {current_policy_checkpoint_path}")
+        # Point this to the actors hf_pretrained for the inference / evaluation class
+        return current_policy_checkpoint_path / "hf_pretrained"
+        
     def _hydrate_ref_log_probs(
         self, episodes: Dataset, column_name: str = COLUMN_REF_SHIFTED_LOGPS
     ) -> Dataset:
@@ -423,7 +443,7 @@ class GRPOTrainer(BaseTrainer):
         input_ids = inputs["input_ids"]  # (B, seq_len)
         attention_mask = inputs["attention_mask"]
         labels = inputs["labels"]
-        scores = inputs["scores"]  # shape (B,)
+        advantages = inputs["advantages"]  # shape (B,)
         groups = inputs["group"]  # shape (B,)
         len_query_token_ids = inputs["len_query_token_ids"]  # shape (B,)
         len_response_token_ids = inputs["len_response_token_ids"]  # shape (B,)
@@ -434,7 +454,7 @@ class GRPOTrainer(BaseTrainer):
         logger.info(f"input_ids shape: {input_ids.shape}")
         logger.info(f"attention_mask shape: {attention_mask.shape}")
         logger.info(f"labels shape: {labels.shape}")
-        logger.info(f"scores shape: {scores.shape}, sample scores: {scores[:5]}")
+        logger.info(f"scores shape: {advantages.shape}, sample scores: {advantages[:5]}")
         logger.info(f"groups shape: {groups.shape}, sample groups: {groups[:5]}")
         logger.info(
             f"len_query_token_ids shape: {len_query_token_ids.shape}, "
@@ -463,34 +483,44 @@ class GRPOTrainer(BaseTrainer):
         }
 
         # Step 2: Compute the actor loss
-        actor_loss, is_skipped, actor_metrics, approx_ref_kl = (
+        actor_loss, is_skipped, actor_metrics, approx_ref_kl, per_token_advantages= (
             self.policy.actor_loss_grpo(
                 model_inputs=model_inputs,
                 shifted_labels_mask=shifted_labels_mask,
                 ref_logprobs=inputs[COLUMN_REF_SHIFTED_LOGPS],
-                advantages=scores,
+                advantages=advantages,
                 trainer_hparams=self.trainer_hparams,
             )
         )
 
         self.policy.actor.backward(actor_loss)
         self.policy.actor.step()
-
+        
         # Get rid of actor's activations to free up memory
         actor_loss = actor_loss.detach().clone()
         release_memory()
+
+        #####################
+        # Log epoch metrics #
+        #####################
+        assert per_token_advantages.shape == shifted_labels_mask.shape
         metrics = {
-            # "advantages/mean": masked_mean(advantages, shifted_labels_mask).detach(),
+            "advantages/mean": masked_mean(per_token_advantages, shifted_labels_mask).detach(),
             # "rewards/mean": mean_rewards,
             # masked_mean(mean_rewards, shifted_labels_mask).detach(),
             "num_tokens": shifted_labels_mask.sum().detach(),
             "_num_participating_tokens": shifted_labels_mask.sum().detach(),
             **actor_metrics,
         }
+
         # if returns is not None:
         #     metrics["returns"] = masked_mean(returns, shifted_labels_mask).detach()
         metrics["actor/loss"] = actor_loss
-        # assert advantages.shape == shifted_actor_log_probs.shape
+        if approx_ref_kl is not None:
+            if approx_ref_kl is not None:
+                kls = approx_ref_kl
+            metrics["kls"] = (kls * shifted_labels_mask).sum(dim=1).mean().detach()
+
         return metrics
 
     def _update_metrics(

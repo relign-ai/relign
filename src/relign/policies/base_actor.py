@@ -16,7 +16,11 @@ from deepspeed import comm as dist
 
 from relign.policies.base_policy import DeepSpeedPolicy
 from relign.policies.base_policy import ActorForwardOutput
-from relign.utils.trainer import masked_mean, monitor_tensor_anomalies
+from relign.utils.trainer import (
+    masked_mean, 
+    monitor_tensor_anomalies, 
+    masked_whiten
+)
 from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -365,62 +369,78 @@ class ActorPolicy(DeepSpeedPolicy):
         Re-run forward pass with gradients for your actor network, compute
         the RL objective (policy gradient + KL).
         """
+        action_maks = shifted_labels_mask
+
         # 1) Forward pass on the actor model WITH grad
-        actor_outputs = self.actor.forward(**model_inputs)
-        logits = actor_outputs.logits  # shape (B, seq_len, vocab_size)
-
-        # 2) SHIFT the logits so that it matches the shape of ref_logprobs, etc.
-        #    Usually you skip the very last token. We'll do a minimal example:
-        shifted_actor_logits = logits[:, :-1].contiguous()
-
-        # 3) Convert logits -> logprobs for each real token
-        shifted_actor_logprobs = self._logprobs_from_logits(
-            shifted_actor_logits, model_inputs["labels"][:, 1:]
+        actor_outputs = self.forward_actor(
+            input_ids=model_inputs["input_ids"],
+            attention_mask=model_inputs["attention_mask"],
+            labels=model_inputs["labels"],
+            return_all_logp=True,
+            return_logits=False,
+            return_sequence_logp=False,
+            trainer_hparams=trainer_hparams,
         )
-        # shape (B, seq_len-1)
+        shifted_actor_logprobs = actor_outputs.all_logp# shape (B, seq_len, vocab_size)
 
-        # ratio = exp(actor_logp - ref_logp) -- for KL or advantage might differ
-        # We'll do a minimal version:
+
+        #########################
+        # compute KL divergence #
+        #########################
+        logger.info(f"\n\n***************KL divergence*********************")
+        logger.info(f"ref log probs = {ref_logprobs}\n\n ref logprobs shape = {ref_logprobs.shape}")
+        logger.info(f"actor log probs = {shifted_actor_logprobs}\n\n actorlogprobs shape = {shifted_actor_logprobs.shape}")
+        # Calculate the kl diverence of the ref log probs and the actor shifted log probs
         kl = (
             torch.exp(ref_logprobs - shifted_actor_logprobs)
             - (ref_logprobs - shifted_actor_logprobs)
             - 1
         )
 
-        # logger.info(f"\n\n *************** KL divergence ********************")
-        # logger.info(f"KL: {kl}\n\n")
-
-        # shape: (B, seq_len-1)
-        # This is basically: advantage * exp(log_pi - STOP_GRAD(log_pi)) => advantage * 1
-        # but let's replicate the HF approach:
-        # logger.info(f"\n\n *************** Advantage ********************")
-        # logger.info(f"Advantages: {advantages}\n\n")
-        adv_term = (
+        ###################################
+        # Compute the per token advantage #
+        ###################################
+        # shifted actor log probs is of size 16 * 1184 while advantages is of size 16. 
+        # we want to do each row, ie..e, sample, times its advantage however, we get an error
+        logger.info(f"***************  Advantages *************")
+        per_token_advantages = (
             torch.exp(shifted_actor_logprobs - shifted_actor_logprobs.detach())
-            * advantages
+            * advantages.unsqueeze(1)
         )
+        logger.info(f"advantages = {per_token_advantages}")
+        logger.info(f"advantages_mean =  {advantages}")
+        
+        # noramlize the advantages to zero mean 1 var
+        if trainer_hparams.whiten_advantages:
+            advantages = masked_whiten(
+                per_token_advantages,
+                shifted_labels_mask,
+                distributed=True,
+                unbiased_variance=True,
+            )
 
-        # You can combine kl, or keep them separate:
-        # e.g. total_loss = -( adv_term - self.beta * kl )
-        # Mask out padding if needed:
-        per_token_loss = -(adv_term - trainer_hparams.init_kl_coef * kl)
+        ###################################
+        #         Compute the loss        #
+        ###################################
+        per_token_loss = -(per_token_advantages - trainer_hparams.init_kl_coef * kl)
         per_token_loss = per_token_loss * shifted_labels_mask  # zero out masked tokens
 
         # Then average for final scalar
         tokens_per_sample = shifted_labels_mask.sum(dim=1)
-        loss = (per_token_loss.sum(dim=1) / (tokens_per_sample + 1e-10)).mean()
+        pg_loss = masked_mean(per_token_loss, shifted_labels_mask) 
+
         logger.info(f"\n\n *************** Loss ********************")
-        logger.info(f"Loss: {loss}\n\n")
+        logger.info(f"Loss: {pg_loss}\n\n")
 
         # Return
         actor_metrics = {
-            "actor_loss": loss.detach().cpu().item(),
+            "actor_loss": pg_loss.detach().cpu().item(),
             "kl": (kl * shifted_labels_mask).sum().detach().cpu().item(),
         }
 
         approx_ref_kl = masked_mean(kl, shifted_labels_mask).detach().cpu().item()
         # kl.masked_maen().detach().cpu().item()  # an example quantity
-        return loss, False, actor_metrics, approx_ref_kl
+        return pg_loss, False, actor_metrics, approx_ref_kl, advantages
 
     def destroy_actor_engine_if_not_cached(self) -> None:
         """
@@ -774,7 +794,7 @@ class ActorPolicy(DeepSpeedPolicy):
     def get_checkpoint_format(self) -> str:
         return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
 
-    def _clean_old_temp_checkpoints(
+    def clean_old_temp_checkpoints(
         self, checkpoint_dir, exclude: Optional[List[Path]] = None
     ) -> None:
         if exclude is None:
@@ -800,3 +820,30 @@ class ActorPolicy(DeepSpeedPolicy):
             log_probs, dim=2, index=labels.unsqueeze(-1)
         ).squeeze(-1)
         return token_logprob
+
+    def checkpoint_latest_policy_path(
+        self, 
+        checkpoint_path: Path
+    ) -> Path:
+        """
+        Saves both the actor and critic engines and returns the path of the actor for inference.
+
+        The caller can specify an arbitrary checkpoint path (for example:
+        Path("/some/storage/path/policy/TIMESTAMP") ).
+        We will append '/actor/hf_pretrained' and '/critic/hf_pretrained'
+        accordingly here.
+        """
+        if self._is_main_process():
+            if checkpoint_path.exists():
+                logger.warning(
+                    f"checkpoin tpath {checkpoint_path} exists. overwriting"
+                )
+                shutil.rmtree(checkpoint_path)
+            checkpoint_path.mkdir(parents=True, exist_ok=True)
+
+        # save the trainer state here potentially 
+        if self.actor is not None:
+            logger.info(f"Saving actor engine to {checkpoint_path / 'hf_pretrained'}")
+            self._save_hf_pretrained(self.actor, checkpoint_path /"hf_pretrained")
+            self.actor.save_checkpoint(str(checkpoint_path / "actor"))
+        

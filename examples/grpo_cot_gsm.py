@@ -87,16 +87,17 @@ def grpo_gsm(cfg, local_rank):
 
     # --------- Inference (Chain-of-thought) Strategy --------- #
     max_seq_length = 2048
-    num_episodes_per_iteration = 32  # num groups
-    num_rollouts_per_sample = 8  # group size
-    # This is num_groups in grpo
+    num_episodes_per_iteration = 512 
+    num_rollouts_per_sample = 16 # group size
+
+    # num groups
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
     )
     target_batch_size = 16
     num_iterations = 650
     sampling_temperature = 0.6
-    num_epoch_per_iterations = 4
+    num_epoch_per_iterations = 2
     gradient_accumulation_steps = 1
     max_concurrent_programs = 256
     max_concurrent_generations = 128
@@ -129,9 +130,9 @@ def grpo_gsm(cfg, local_rank):
     question_template = dedent("""\
     [MATH_TASK] Problem:
     {query}
-    first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning
-    process and answer are enclosed within <think> </think> followed by an answer tag ####, respectively, i.e.,
-    <think> reasoning process here </think> \n#### answer 
+    first thinks about the reasoning process in and provides the the answer. The reasoning
+    process and answer are enclosed within <think> </think> followed by an answer tag: \n####, respectively, i.e.,
+    <think> reasoning process here </think> \n#### final answer 
     """)
 
     # ---- Chain of Thought Strategy Instance --- #
