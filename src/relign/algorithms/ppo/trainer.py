@@ -108,7 +108,7 @@ class PPOHParams:
     target: Optional[float] = 6.0
     horizon: Optional[int] = 10000
     gamma: float = 1
-    lam: float = 0.95
+    lam: float = 0.96
     cliprange: float = 0.2
     cliprange_value: float = 0.2
     vf_coef: float = 0.1

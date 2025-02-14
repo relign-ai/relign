@@ -195,7 +195,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
         "actor_config": ds_config,
         "critic_config": ds_config,
         "temperature": sampling_temperature,
-        "warmup_steps": 0,
+        # "warmup_steps": 0, #Auto calculate it 
     }
 
     # ----------- Trainer ---------------#
@@ -240,7 +240,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
     algorithm_kwargs = {
         "num_iterations": num_iterations,
         "verbose": 1,
-        "evaluation_freq": 15,
+        "evaluation_freq": 5,
         "checkpoint_freq": 10,
         "evaluator_cls": evaluator_cls,
         "evaluator_kwargs": evaluator_kwargs,
