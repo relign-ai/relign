@@ -482,15 +482,16 @@ class ActorPolicy(DeepSpeedPolicy):
         self._patch_ds_config_for_dtype(ds_config)
         self._patch_ds_config_for_bucket_size(ds_config, ref_model.config)
 
-        import copy 
+        import copy
+
         ref_config = copy.deepcopy(ds_config)
 
         # remove the optimizer and zero optimization
-        # from the critic model 
-        if 'optimizer' in  ref_config.config:
+        # from the critic model
+        if "optimizer" in ref_config.config:
             del ref_config.config["optimizer"]
-        if 'zero_optimization' in ref_config.config:
-            del ref_config.config['zero_optimization']
+        if "zero_optimization" in ref_config.config:
+            del ref_config.config["zero_optimization"]
 
         engine = self._init_deepspeed_engine_for_inference(
             ref_model,

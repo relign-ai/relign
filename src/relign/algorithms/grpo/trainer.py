@@ -98,7 +98,7 @@ class GRPOParams:
     target_kl: float = 1
     compare_steps: int = 1
     ratio_threshold: float = 10.0
-    use_score_scaling: bool = False
+    use_score_scaling: bool = True  # Since our scores fall between [0, 2]  we scale
     use_score_norm: bool = False
     score_clip: Optional[float] = None
     whiten_advantages: bool = True
@@ -141,6 +141,7 @@ class GRPOTrainer(BaseTrainer):
         """
 
         episodes = self._filter_episodes(episodes)
+        episodes = self._rescale_and_clip_scores(episodes)
         episodes = self._hydrate_ref_log_probs(
             episodes, column_name=COLUMN_REF_SHIFTED_LOGPS
         )
@@ -185,7 +186,6 @@ class GRPOTrainer(BaseTrainer):
                     "Intial state, we skip the A/C cache load check since the cache is empty"
                 )
 
-        episodes = self._rescale_and_clip_scores(episodes)
         kls = self._log_episodes_metrics(episodes)
 
         num_groups = len(episodes.unique("group"))
@@ -501,8 +501,6 @@ class GRPOTrainer(BaseTrainer):
             )
         )
 
-        logger.info(f"device {self.distributed_state.process_index} out off loss")
-
         self.policy.actor.backward(actor_loss)
         self.policy.actor.step()
 
@@ -518,8 +516,7 @@ class GRPOTrainer(BaseTrainer):
             "advantages/mean": masked_mean(
                 per_token_advantages, shifted_labels_mask
             ).detach(),
-            # "rewards/mean": mean_rewards,
-            # masked_mean(mean_rewards, shifted_labels_mask).detach(),
+            "rewards/mean": masked_mean(rewards, shifted_labels_mask).detach(),
             "num_tokens": shifted_labels_mask.sum().detach(),
             "_num_participating_tokens": shifted_labels_mask.sum().detach(),
             **actor_metrics,
