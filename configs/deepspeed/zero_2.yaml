@@ -1,7 +1,7 @@
 defaults:
   - base
 
-zero_2:
+zero_optimization:
   stage: 2
   allgather_partitions: true
   allgather_bucket_size: 5e8 

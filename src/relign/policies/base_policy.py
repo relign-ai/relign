@@ -36,7 +36,6 @@ class BasePolicy:
     """
     A policy takes an observation and returns an action.
     """
-
     def __init__(
         self,
         seed: int,
@@ -54,7 +53,7 @@ class BasePolicy:
         bf16: bool = True,
         bf16_full_eval: bool = False,
         warmup_steps: int = 0,
-        warmup_ratio : int = 0.00,
+        warmup_ratio : int = 0.03,
     ):
         self.seed = seed
         self.project_root_dir = project_root_dir
