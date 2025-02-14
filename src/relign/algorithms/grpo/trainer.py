@@ -129,6 +129,7 @@ class GRPOTrainer(BaseTrainer):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.trainer_hparams = GRPOParams(**kwargs.get("grpo_params", {}))
+        # self._set_process_log_level(logger)
         self.latest_actor_weights_hash = None
         self.checkpoint_path_to_load = None
 
@@ -254,7 +255,7 @@ class GRPOTrainer(BaseTrainer):
                 is_grad_acc_boundary = (
                     self.policy.actor.is_gradient_accumulation_boundary()
                 )
-
+                
                 metrics = self._epoch_step(batch)
                 self._update_metrics(running_metrics, accumulated_metrics, metrics)
 
@@ -265,16 +266,23 @@ class GRPOTrainer(BaseTrainer):
 
                     should_log = self.state.global_step % self.logging_steps == 0
                     if should_log:
-                        logger.info(" logging training metrics")
                         self._log_training_metrics(
                             global_step_last_logged,
                             accumulated_metrics,
                             progress_bar,
                         )
                         global_step_last_logged = self.state.global_step
-
             dataloader_iter = iter(dataloader)
         dist.barrier()
+
+        for key, value in running_metrics.items():
+            value = torch.tensor(value, device=self.policy.actor.device)
+            dist.all_reduce(value, op=dist.ReduceOp.SUM)
+            value = value.cpu().item() / dist.get_world_size()
+            running_metrics[key] = value
+
+        if len(running_metrics) > 0:
+            logger.info("Running metrics: {running_metrics}")
 
         self.state.iteration += 1
         progress_bar.close()
@@ -295,7 +303,6 @@ class GRPOTrainer(BaseTrainer):
 
         # set the path of the policy we want to load in the next iteration
         if not self.policy.cache_ds_engines:
-            logger.info(f"setting checkpoint path to load to {current_policy_checkpoint_path}")
             self.checkpoint_path_to_load = current_policy_checkpoint_path
             self.policy.checkpoint_latest_policy_path(current_policy_checkpoint_path)
 
@@ -454,7 +461,7 @@ class GRPOTrainer(BaseTrainer):
         logger.info(f"input_ids shape: {input_ids.shape}")
         logger.info(f"attention_mask shape: {attention_mask.shape}")
         logger.info(f"labels shape: {labels.shape}")
-        logger.info(f"scores shape: {advantages.shape}, sample scores: {advantages[:5]}")
+        logger.info(f"advantages shape: {advantages.shape}, sample scores: {advantages[:5]}")
         logger.info(f"groups shape: {groups.shape}, sample groups: {groups[:5]}")
         logger.info(
             f"len_query_token_ids shape: {len_query_token_ids.shape}, "
@@ -481,6 +488,7 @@ class GRPOTrainer(BaseTrainer):
             "attention_mask": attention_mask,
             "labels": labels,
         }
+        logger.info(f"device {self.distributed_state.process_index} going into loss")
 
         # Step 2: Compute the actor loss
         actor_loss, is_skipped, actor_metrics, approx_ref_kl, per_token_advantages= (
@@ -493,9 +501,11 @@ class GRPOTrainer(BaseTrainer):
             )
         )
 
+        logger.info(f"device {self.distributed_state.process_index} out off loss")
+
         self.policy.actor.backward(actor_loss)
         self.policy.actor.step()
-        
+
         # Get rid of actor's activations to free up memory
         actor_loss = actor_loss.detach().clone()
         release_memory()
@@ -513,8 +523,6 @@ class GRPOTrainer(BaseTrainer):
             **actor_metrics,
         }
 
-        # if returns is not None:
-        #     metrics["returns"] = masked_mean(returns, shifted_labels_mask).detach()
         metrics["actor/loss"] = actor_loss
         if approx_ref_kl is not None:
             if approx_ref_kl is not None:
@@ -571,6 +579,7 @@ class GRPOTrainer(BaseTrainer):
         progress_bar: tqdm,
     ):
         # Wait for all processes to reach this point
+        logger.info(f"\n\n{self.distributed_state.process_index} waiting to log training metrics")
         dist.barrier()
 
         logs: Dict[str, float] = {}
@@ -624,7 +633,6 @@ class GRPOTrainer(BaseTrainer):
         # Add "train/" prefix for clarity.
         logs = {f"train/{k}": v for k, v in logs.items()}
 
-        logger.info(f"LOGGING TRAINING METRICS {logs}")
         self._cloud_log({**logs, "train/global_step": self.state.global_step})
 
         # Reset the accumulated metrics

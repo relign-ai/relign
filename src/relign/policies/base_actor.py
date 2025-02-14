@@ -71,12 +71,13 @@ class ActorPolicy(DeepSpeedPolicy):
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self._set_process_log_level(logger)
         self.actor_model_fn = actor_model_fn
         self.reference_model_fn = reference_model_fn
         self.actor_config = actor_config
         self.enable_reference = enable_reference
         self.reference = None
-
+        
     def _init_actor_model(
         self,
         actor_model_fn: Callable[[], PreTrainedModel],
@@ -387,10 +388,6 @@ class ActorPolicy(DeepSpeedPolicy):
         #########################
         # compute KL divergence #
         #########################
-        logger.info(f"\n\n***************KL divergence*********************")
-        logger.info(f"ref log probs = {ref_logprobs}\n\n ref logprobs shape = {ref_logprobs.shape}")
-        logger.info(f"actor log probs = {shifted_actor_logprobs}\n\n actorlogprobs shape = {shifted_actor_logprobs.shape}")
-        # Calculate the kl diverence of the ref log probs and the actor shifted log probs
         kl = (
             torch.exp(ref_logprobs - shifted_actor_logprobs)
             - (ref_logprobs - shifted_actor_logprobs)
@@ -402,22 +399,21 @@ class ActorPolicy(DeepSpeedPolicy):
         ###################################
         # shifted actor log probs is of size 16 * 1184 while advantages is of size 16. 
         # we want to do each row, ie..e, sample, times its advantage however, we get an error
-        logger.info(f"***************  Advantages *************")
         per_token_advantages = (
             torch.exp(shifted_actor_logprobs - shifted_actor_logprobs.detach())
             * advantages.unsqueeze(1)
         )
-        logger.info(f"advantages = {per_token_advantages}")
-        logger.info(f"advantages_mean =  {advantages}")
         
         # noramlize the advantages to zero mean 1 var
         if trainer_hparams.whiten_advantages:
-            advantages = masked_whiten(
-                per_token_advantages,
-                shifted_labels_mask,
-                distributed=True,
-                unbiased_variance=True,
-            )
+            pass
+            # per_token_advantages = masked_whiten(
+            #     per_token_advantages,
+            #     shifted_labels_mask,
+            #     distributed=True,
+            #     unbiased_variance=True,
+            # )
+            # logger.info(f"Per token advantage: {per_token_advantage}")
 
         ###################################
         #         Compute the loss        #
@@ -426,7 +422,7 @@ class ActorPolicy(DeepSpeedPolicy):
         per_token_loss = per_token_loss * shifted_labels_mask  # zero out masked tokens
 
         # Then average for final scalar
-        tokens_per_sample = shifted_labels_mask.sum(dim=1)
+        # tokens_per_sample = shifted_labels_mask.sum(dim=1)
         pg_loss = masked_mean(per_token_loss, shifted_labels_mask) 
 
         logger.info(f"\n\n *************** Loss ********************")
@@ -439,8 +435,7 @@ class ActorPolicy(DeepSpeedPolicy):
         }
 
         approx_ref_kl = masked_mean(kl, shifted_labels_mask).detach().cpu().item()
-        # kl.masked_maen().detach().cpu().item()  # an example quantity
-        return pg_loss, False, actor_metrics, approx_ref_kl, advantages
+        return pg_loss, False, actor_metrics, approx_ref_kl, per_token_advantages 
 
     def destroy_actor_engine_if_not_cached(self) -> None:
         """
@@ -795,18 +790,23 @@ class ActorPolicy(DeepSpeedPolicy):
         return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
 
     def clean_old_temp_checkpoints(
-        self, checkpoint_dir, exclude: Optional[List[Path]] = None
+        self, 
+        checkpoint_dir: Path,
+        exclude: Optional[List[Path]] = None
+
     ) -> None:
         if exclude is None:
             exclude = []
 
         if self._is_main_process():
             for checkpoint in checkpoint_dir.iterdir():
-                if checkpoint.is_dir():
+                if (
+                    checkpoint.is_dir()
+                    and checkpoint.name.startswith("ckpt--")
+                    and checkpoint not in exclude
+                ):
                     logger.info(f"Removing old temp checkpoint {checkpoint}")
-                    shutil.rmtree(checkpoint)
-
-        dist.barrier()
+                    shutil.rmtree(checkpoint) 
 
     def _logprobs_from_logits(self, logits, labels):
         """

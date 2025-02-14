@@ -374,26 +374,4 @@ class ActorCriticPolicy(ActorPolicy):
             self._save_hf_pretrained(self.critic, checkpoint_path / "critic"/ "hf_pretrained")
             self.critic.save_checkpoint(str(checkpoint_path / "critic"))
 
-    def get_checkpoint_format(self) -> str:
-        return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
-
-    def clean_old_temp_checkpoints(
-        self, 
-        checkpoint_dir: Path,
-        exclude: Optional[List[Path]] = None
-
-    ) -> None:
-        if exclude is None:
-            exclude = []
-
-        if self._is_main_process():
-            for checkpoint in checkpoint_dir.iterdir():
-                if (
-                    checkpoint.is_dir()
-                    and checkpoint.name.startswith("ckpt--")
-                    and checkpoint not in exclude
-                ):
-                    logger.info(f"Removing old temp checkpoint {checkpoint}")
-                    shutil.rmtree(checkpoint)
-
 

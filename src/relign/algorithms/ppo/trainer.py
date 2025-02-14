@@ -303,7 +303,6 @@ class PPOTrainer(BaseTrainer):
                     ), "Actor and critic should have synchronized optimization steps"
 
                 metrics = self._epoch_step(batch)
-
                 self._update_metrics(running_metrics, accumulated_metrics, metrics)
 
                 if is_grad_acc_boundary:
@@ -322,7 +321,6 @@ class PPOTrainer(BaseTrainer):
                         global_step_last_logged = self.state.global_step
 
             dataloader_iter = iter(dataloader)
-
         dist.barrier()
 
         for key, value in running_metrics.items():

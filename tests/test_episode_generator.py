@@ -44,11 +44,11 @@ class TestMathGroupedEpisodeGenerator:
         ]
         collected_indices = []
         for example_solution in example_solutions:
-            indices = gsm8k.split_solution_into_intermediate_steps(example_solution)
+            indices = gsm8k.get_format_rewards(example_solution)
             collected_indices.append(indices)
 
         print("collected indices", collected_indices)
-        assert collected_indices == [[1], [], [], [1], [], []]
+        assert collected_indices == [1, 0, 0, 1, 0, 0]
 
     def test_math_grouped_episod_generator(self, math_grouped_episode_generator):
         """

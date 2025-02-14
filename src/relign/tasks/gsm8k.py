@@ -64,6 +64,35 @@ class GSM8K(Task):
     def extract_gold_answer_from_text(self, text: str) -> str:
         return text.split("####")[1].strip()
 
+    def get_format_rewards(self, solution: str) -> int:
+        """
+        Check for proper tag-based formatting and return 1 if the format criteria are met, else 0.
+        """
+        if self.intermediate_step_tags is not None and self.match_single_think_tag:
+            import re
+            # Build a pattern to find all think blocks.
+            pattern_think = rf"{re.escape(self.intermediate_step_tags[0])}.*?{re.escape(self.intermediate_step_tags[1])}"
+            think_matches = re.findall(pattern_think, solution, flags=re.DOTALL)
+
+            # Do not reward if there are zero or more than one <think> blocks.
+            if len(think_matches) != 1:
+                return 0
+
+            # Check the text following the closing think tag:
+            end_tag = self.intermediate_step_tags[1]
+            end_idx = solution.rfind(end_tag)
+            suffix = solution[end_idx + len(end_tag):]
+
+            # We require that after the closing tag there's only whitespace (including newlines)
+            # until the answer prefix. If not, we don't reward.
+            if not re.match(r'^[\s]*#### ', suffix.lstrip()):
+                return 0
+
+            # If the criteria are met, return a single reward.
+            return 1
+
+        return 0
+
     def split_solution_into_intermediate_steps(self, solution: str) -> List[int]:
         """
         Split the solution into reasoning steps.
@@ -91,29 +120,10 @@ class GSM8K(Task):
                 sol_without_answer, answer = solution_parts
 
         # ========== Tag-Based Extraction ========== #
-        # If we want to use <think>...</think> blocks:
-        if self.intermediate_step_tags is not None and self.match_single_think_tag:
-            import re
-            # Build a pattern to find all think blocks.
-            pattern_think = rf"{re.escape(self.intermediate_step_tags[0])}.*?{re.escape(self.intermediate_step_tags[1])}"
-            think_matches = re.findall(pattern_think, solution, flags=re.DOTALL)
-
-            # Do not reward if there are zero or more than one <think> blocks.
-            if len(think_matches) != 1:
-                return []
-
-            # Check the text following the closing think tag:
-            end_tag = self.intermediate_step_tags[1]
-            end_idx = solution.rfind(end_tag)
-            suffix = solution[end_idx + len(end_tag):]
-
-            # We require that after the closing tag there's only whitespace (including newlines)
-            # until the answer prefix. If not, we don't reward.
-            # Instead of matching the entire answer_prefix literally, we can do:
-            if not re.match(r'^[\s]*#### ', suffix.lstrip()):
-                return [] 
-
-            # If the criteria are met, return a single reward index.
+        # Now handled by get_format_rewards
+        format_reward = self.get_format_rewards(solution)
+        if format_reward == 1:
+            # If properly formatted with one <think> block, return a single reward index
             return [1]
 
         # ===== Delimiter-based splitting (existing logic) =====
