@@ -1,13 +1,10 @@
 import hydra
 from textwrap import dedent
 import argparse
-from pathlib import Path
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModel
 from omegaconf import OmegaConf
 
 from relign.tasks import GSM8K
 from relign.policies.actor_critic_policy import ActorCriticPolicy
-from relign.policies.base_critic import PretrainedModelValueHead
 from relign.algorithms.train_loop import TrainLoop
 from relign.algorithms.ppo.trainer import PPOTrainer
 from relign.episode_generators.envs.math_episode_generator import (
@@ -24,11 +21,16 @@ from relign.runners.distributed_runner import DistributedRunner
 from relign.common.vllm_server import VLLMServer
 from relign.guidance.llms import OpenAIVLLM
 from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor
-from relign.models.base_model import PreTrainedModelForCasualLM, DIPreTrainedTokenizer, PreTrainedModelForValueNetwork
+from relign.models.base_model import (
+    PreTrainedModelForCasualLM,
+    DIPreTrainedTokenizer,
+    PreTrainedModelForValueNetwork,
+)
 
 from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
 
 def ppo_gsm(cfg, local_rank: int = -1):
     ds_config = cfg.deepspeed
@@ -61,7 +63,7 @@ def ppo_gsm(cfg, local_rank: int = -1):
             pretrained_args={
                 "use_flash_attention_2": True,
             },
-        ) 
+        )
 
     def critic_model_fn():
         # Wrap the critic with the value head model.
@@ -93,20 +95,20 @@ def ppo_gsm(cfg, local_rank: int = -1):
         unfinished_response_penalty=0.0,
         timeout=1,
     )
-    
+
     num_episodes_per_iteration = 512 
     num_rollouts_per_sample = 8
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
     )
-    num_iterations = 650 
+    num_iterations = 650
     sampling_temperature = 0.6
     num_epoch_per_iterations = 2
-    max_seq_length =2048 
-    target_batch_size = 64 
-    gradient_accumulation_steps = 1
-    max_concurrent_programs = 256 
-    max_concurrent_generations = 128 
+    max_seq_length = 2048
+    target_batch_size = 16
+    gradient_accumulation_steps = 2
+    max_concurrent_programs = 256
+    max_concurrent_generations = 128
     guidance_llm_cls = OpenAIVLLM
     guidance_llm_kwargs = {
         "api_key": "EMPTY",

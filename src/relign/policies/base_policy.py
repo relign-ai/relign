@@ -43,7 +43,7 @@ class BasePolicy:
         gradient_checkpointing: bool = True,
         temperature: float = 0.6,
         weight_decay: float = 0.00,
-        learning_rate: float = 1e-6,
+        learning_rate: float = 5e-7,
         lr_scheduler_type: Optional[Union[SchedulerType, str]] = None,
         adam_beta1: float = 0.9,
         adam_beta2: float = 0.999,
@@ -120,7 +120,6 @@ class BasePolicy:
     @abstractmethod
     def checkpoint(self):
         NotImplementedError("checkpoint method is not implemented yet.")
-
 
 
 class DeepSpeedPolicy(BasePolicy):
@@ -238,13 +237,14 @@ class DeepSpeedPolicy(BasePolicy):
         warmup_steps: int,
         learning_rate: float,
     ) -> None:
-        logger.info(f" ************** PATCHING LR SCHEDULER ******************")
         config.fill_only(
             "scheduler.params.total_num_steps",
             total_num_training_steps,
             "num_training_steps (calculated)",
         )
-        logger.info(f" patched scheduler params num train steps to : {total_num_training_steps}")
+        logger.info(
+            f" patched scheduler params num train steps to : {total_num_training_steps}"
+        )
 
         config.fill_only(
             "scheduler.params.warmup_num_steps",
@@ -349,10 +349,11 @@ class DeepSpeedPolicy(BasePolicy):
         """Deal with the distributed state"""
         return self.distributed_state.is_main_process
 
-    #TODO: move this to deepspeedpolicy class 
+    # TODO: move this to deepspeedpolicy class
     def _set_process_log_level(self, logger_obj: logging.Logger):
         if not self.distributed_state.is_local_main_process:
             logger_obj.setLevel(logging.WARNING)
+
 
 def get_optimizer_grouped_parameters(
     model: PreTrainedModel,
@@ -421,5 +422,3 @@ def get_optimizer_grouped_parameters(
         if group["params"]:
             non_empty_groups.append(group)
     return non_empty_groups
-
-    

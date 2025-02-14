@@ -109,9 +109,9 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
         for instance in inference_results:
             tree = json.loads(instance["_treetune__reasoning_tree"])
             paths = self.extract_paths_from_tree(tree)
-
             all_rewards = []
             all_responses = []
+
             for path in paths:
                 # noinspection DuplicatedCode
                 assert len(path["node_chain"]) == 2, "Does not support multi-hop paths."
@@ -231,6 +231,11 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
                 metrics["trajectory_bleu"]
             )
 
+        if "format_rewards" in metrics:
+            metrics["format_rewrrds"] = sum(metrics["format_rewrads"]) / len(
+                len(metrics["format_rewards"])
+            )
+
         if len(metrics) > 0:
             logs = {f"episodes_metric/{k}": v for k, v in metrics.items()}
             self.cloud_log({**logs, "train/global_iteration": iteration})
@@ -268,7 +273,7 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
 class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
     def __init__(
         self,
-        with_process_reward: bool = True,
+        with_process_reward: bool = False,
         reward_entire_span: bool = False,
         **kwargs,
     ):
@@ -297,19 +302,32 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                 query_text = path["node_chain"][0]["text"]
                 full_text = path["node_chain"][-1]["full_text"]
                 response_text = full_text[len(query_text) :]
+               
+                ################################ 
+                #    Exctract reasoning steps  #
+                ################################ 
+                # try:
+                #     #TODO: fix this 
+                #     reasoning_steps = self._extract_reasoning_steps(response_text)
+                #     metrics.setdefault("num_reasoning_steps", []).append(reasoning_steps)
+                # except Exception as e:
+                #     metrics.setdefault("parse_failed", []).append(True)
+                #     reasonong_steps = 0.0  # Default/fallback to avoid unbound variable
 
+                ################################ 
+                #      Get Format Rewards      #
+                ################################ 
                 try:
-                    num_reasoning_steps, reasoning_indices = (
-                        self._extract_reasoning_steps(response_text)
-                    )
-
-                    metrics.setdefault("num_reasoning_steps", []).append(
-                        num_reasoning_steps
-                    )
-                    metrics.setdefault("parse_failed", []).append(False)
+                    format_rewards = self._extract_format_rewards(response_text)
+                    metrics.setdefault("format_rewards", []).append(format_rewards)
                 except Exception as e:
                     metrics.setdefault("parse_failed", []).append(True)
+                    # logger.info(f"failed to extract format rewards {e}")
+                    format_rewards = 0
 
+                ###############################
+                #       Get the rewards       #
+                ###############################
                 if finish_reason != "length":
                     # Generation stopped because the model hit <eos>
                     reward, is_unfinished_response = self.reward_function(
@@ -319,7 +337,6 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                     # Generation stopped because the model hit the `max_tokens` limit
                     reward = self.reward_function.get_unfinished_response_penalty()
                     is_unfinished_response = True
-
                 try:
                     query_token_ids, response_token_ids, offsets = (
                         self._tokenize_query_and_response(
@@ -356,10 +373,11 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                 metrics.setdefault("is_unfinished_response", []).append(
                     is_unfinished_response
                 )
+
                 episode_kwargs = {
                     "query_token_ids": query_token_ids,
                     "response_token_ids": response_token_ids,
-                    "scores": float(reward),
+                    "scores": float(reward) + float(format_rewards),
                     "group": int(i),
                 }
 
@@ -373,7 +391,6 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                         query_token_ids,
                         response_token_ids,
                         offsets,
-                        reasoning_indices,
                         process_reward_value=1,
                         reward_entire_span=self.reward_entire_span,
                     )
@@ -383,7 +400,7 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                 episode = Episode(**episode_kwargs)
 
                 episodes.append(episode)
-                all_rewards.append(float(reward))
+                all_rewards.append(float(reward) + float(format_rewards))
 
             if len(all_rewards) > 0:
                 once_hit = any([r == 1.0 for r in all_rewards])
@@ -427,7 +444,8 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
 
         if len(metrics) > 0:
             logs = {f"episodes_metric/{k}": v for k, v in metrics.items()}
-            self._cloud_log({**logs, "train/global_iteration": iteration})
+            if self.cloud_log is not None:
+                self.cloud_log({**logs, "train/global_iteration": iteration})
 
         return episodes
 
@@ -437,8 +455,19 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
         with the character of the indices of the FINAL token of each reasoning step
         <think>.... </think> will give the index of the last character of the </think>
         """
-        indices = self.task.split_solution_into_intermediate_steps(response_text)
-        return len(indices) - 1, indices
+        try:
+            indices = self.task.split_solution_into_intermediate_steps(response_text)
+        except Exception as e:
+            logger.info(f"Error! in split solution into intermediates {e}")
+        logger.info(f"found indices = {indices}")
+        return len(indices)
+
+    def _extract_format_rewards(self, response_text: str) -> Tuple[int, List[int]]:
+        """ 
+        check whether the model adhered to the response format 
+        """
+        format_rewards = self.task.get_format_rewards(response_text)
+        return format_rewards
 
     def _compute_process_reward_tokens(
         self,

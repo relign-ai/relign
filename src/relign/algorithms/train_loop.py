@@ -88,9 +88,9 @@ class TrainLoop:
                 logger.info(f"Running iteration {iteration}")
                 logger.info("*" * 80)
 
-            ####################
-            # Generate episodes#
-            ####################
+            #####################
+            # Generate episodes #
+            #####################
             logger.info(
                 f"Rank {self.distributed_state.process_index}: About to _generate_episodes() for iteration {iteration}"
             )

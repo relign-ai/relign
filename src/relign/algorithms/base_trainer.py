@@ -1,13 +1,12 @@
+import logging
 import json
-import os
-import shutil
 from typing import Dict, Any, Union, Optional, List
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from accelerate import Accelerator, PartialState
 from accelerate.utils import GradientAccumulationPlugin
-from deepspeed import DeepSpeedEngine 
+from deepspeed import DeepSpeedEngine
 
 
 from datasets import Dataset
@@ -216,7 +215,9 @@ class BaseTrainer(ABC):
         logger.info(f"Starting batch size and step computation with values:")
         logger.info(f"  target_batch_size: {self.target_batch_size}")
         logger.info(f"  per_device_batch_size (initial): {self.per_device_batch_size}")
-        logger.info(f"  gradient_accumulation_steps (initial): {self.gradient_accumulation_steps}")
+        logger.info(
+            f"  gradient_accumulation_steps (initial): {self.gradient_accumulation_steps}"
+        )
         logger.info(f"  num_processes: {self.distributed_state.num_processes}")
         logger.info(f"  num_iterations: {self.num_iterations}")
         logger.info(f"  num_epochs_per_iteration: {self.num_epochs_per_iteration}")
@@ -267,7 +268,9 @@ class BaseTrainer(ABC):
 
         # Finally, log the resulting computations
         logger.info(f"Per device batch size (computed): {self.per_device_batch_size}")
-        logger.info(f"Gradient accumulation steps (computed): {self.gradient_accumulation_steps}")
+        logger.info(
+            f"Gradient accumulation steps (computed): {self.gradient_accumulation_steps}"
+        )
         logger.info(
             f"Global batch size (w. parallel, distributed & accumulation): {self.global_batch_size}"
         )
@@ -382,6 +385,7 @@ class BaseTrainer(ABC):
 
         scores = np.array(scores)
         response_lengths = np.array(response_lengths)
+
         actor_logprobs = np.array(actor_logprobs)
         metrics = {
             "scores/mean": np.mean(scores),
@@ -390,12 +394,14 @@ class BaseTrainer(ABC):
             "response_lengths/mean": np.mean(response_lengths),
             "response_lengths/std": np.std(response_lengths),
             "response_lengths/dist": response_lengths,
-            "actor_logprobs/sum": np.mean(actor_logprobs),
-            "actor_logprobs/normalized_by_response_len": np.mean(
-                actor_logprobs / response_lengths
-            ),
             "actor_logprobs/dist": actor_logprobs,
         }
+
+        if len(actor_logprobs) > 0:
+            metrics["actor_logprobs/mean"] = np.mean(actor_logprobs)
+            metrics["actor_logprobs/normalized_by_response_len"] = np.mean(
+                actor_logprobs / response_lengths
+            )
 
         if len(kls) > 0:
             kls = np.array(kls)
@@ -462,3 +468,45 @@ class BaseTrainer(ABC):
                 raise
 
         return last_lr
+
+    def _filter_episodes(self, episodes_dataset: Dataset) -> Dataset:
+        """
+        Filter out episodes that are too long.
+        """
+        if self.max_seq_length is not None:
+            max_seq_len = self.max_seq_length
+            orig_len = len(episodes_dataset)
+
+            def filter_fn(example):
+                return (
+                    len(example["query_token_ids"]) + len(example["response_token_ids"])
+                    <= max_seq_len
+                )
+
+            with self.distributed_state.main_process_first():
+                episodes_dataset = episodes_dataset.filter(filter_fn, desc="Filtering")
+
+            logger.error(
+                f"Filtered out {orig_len - len(episodes_dataset)} episodes "
+                f"that are too long. Remaining: {len(episodes_dataset)}"
+            )
+        return episodes_dataset
+
+    def _set_process_log_level(self, logger_obj: logging.Logger):
+        if not self.distributed_state.is_local_main_process:
+            logger_obj.setLevel(logging.WARNING)
+
+    def _get_automatic_checkpoint_name(self) -> str:
+        checkpoint_format = self.get_checkpoint_format()
+        checkpoint_name = checkpoint_format.format(
+            iteration=str(self.state.iteration).zfill(4),
+            epoch=f"{self.state.epoch:.2f}",
+            global_step=str(self.state.global_step).zfill(4),
+        )
+        return checkpoint_name
+
+    def get_checkpoint_format(self) -> str:
+        return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
+
+    def set_cloud_logger(self, cloud_log):
+        self.cloud_log = cloud_log

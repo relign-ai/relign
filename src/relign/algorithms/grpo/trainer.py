@@ -1,5 +1,8 @@
-from typing import Dict, Tuple, Union, Optional, Literal
+import io
+import hashlib
+from typing import Dict, Tuple, Union, Optional, Literal, List
 from dataclasses import dataclass
+
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -9,16 +12,15 @@ from accelerate.utils import gather, pad_across_processes, release_memory
 from datasets import Dataset
 from tqdm import tqdm
 
-
+from transformers.trainer_pt_utils import get_model_param_count
 from relign.common.deepspeed_utils import prepare_data_loader_for_inference
 from relign.common.dataset import EpisodeDataset
 from relign.algorithms.base_trainer import BaseTrainer
-from relign.utils.trainer import prepare_data_loader_for_training
+from relign.utils.trainer import prepare_data_loader_for_training, masked_mean
 
 from relign.algorithms.grpo.data_collator import (
     GRPODataCollator,
-    GroupedBatchSampler,
-    COLUMN_ACTOR_SHIFTED_LOGPS,
+    # GroupedBatchSampler,
     COLUMN_REF_SHIFTED_LOGPS,
 )
 
@@ -30,7 +32,7 @@ logger = get_logger(__name__)
 @dataclass
 class GRPOParams:
     """
-    Configuration class for PPOTrainer.
+    Configuration class for GRPOTrainer.
 
     Parameters:
         adap_kl_ctrl (bool):
@@ -96,7 +98,7 @@ class GRPOParams:
     target_kl: float = 1
     compare_steps: int = 1
     ratio_threshold: float = 10.0
-    use_score_scaling: bool = False
+    use_score_scaling: bool = True  # Since our scores fall between [0, 2]  we scale
     use_score_norm: bool = False
     score_clip: Optional[float] = None
     whiten_advantages: bool = True
@@ -111,48 +113,95 @@ class GRPOParams:
         ), "Either whiten or grayen advantages, not both."
 
 
+def get_model_hash(model):
+    """Small helper function that returns the hash of a models weights"""
+    buffer = io.BytesIO()
+    torch.save(model.state_dict(), buffer)
+    buffer.seek(0)
+    return hashlib.sha256(buffer.read()).hexdigest()
+
+
 class GRPOTrainer(BaseTrainer):
     """
-    PPO Trainer.
-    Impelmentation of the PPO update rule.
+    GRPO Trainer.
+    Impelmentation of the GRPO update rule.
     """
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.grpo_params = GRPOParams(**kwargs.get("grpo_params", {}))
+        self.trainer_hparams = GRPOParams(**kwargs.get("grpo_params", {}))
+        # self._set_process_log_level(logger)
+        self.latest_actor_weights_hash = None
+        self.checkpoint_path_to_load = None
 
     def step(self, episodes: EpisodeDataset) -> None:
         """
         Performs a single update step using the dataset rollout under the current policy.
         Each updatestep can rum multiple epochs of optimization.
         """
-        self.policy.init_actor_engine_if_needed()
 
-        # change to appropriate input structure
-        episodes = self._hydrate_episodes(episodes)
-        dataloader = DataLoader(
-            episodes,
-            batch_sampler=GroupedBatchSampler(
-                episodes,
-                group_column="group",
-                groups_per_step=1,
-            ),
-            collate_fn=GRPODataCollator(),
-            num_workers=self.dataloader_num_workers,
-            pin_memory=self.dataloader_pin_memory,
+        episodes = self._filter_episodes(episodes)
+        episodes = self._rescale_and_clip_scores(episodes)
+        episodes = self._hydrate_ref_log_probs(
+            episodes, column_name=COLUMN_REF_SHIFTED_LOGPS
         )
 
-        # dataloader = prepare_data_loader_for_training(
-        #     episodes,
-        #     per_device_batch_size=self.per_device_batch_size,
-        #     seed=self.seed,
-        #     drop_last=False,
-        #     data_loader_kwargs={
-        #         "collate_fn": GRPODataCollator(),
-        #         "num_workers": self.dataloader_num_workers,
-        #         "pin_memory": self.dataloader_pin_memory,
-        #     }
-        # )
+        self.policy.init_actor_engine_if_needed(
+            global_batch_size=self.global_batch_size,
+            per_device_batch_size=self.per_device_batch_size,
+            gradient_accumulation_steps=self.gradient_accumulation_steps,
+            total_num_training_steps=self.total_num_training_steps,
+        )
+
+        # Initilaize the hashes if they are none
+        if self.latest_actor_weights_hash is None:
+            self.latest_actor_weights_hash = get_model_hash(self.policy.actor.module)
+
+        if (
+            not self.policy.cache_ds_engines
+            and self.checkpoint_path_to_load is not None
+        ):
+            # we also check if we loaded theocrrect engine here
+            actor_pre_load_hash = get_model_hash(self.policy.actor.module)
+
+            # engines are not cached, need to laod the latest weights from checkpoin path
+            logger.info(f"Loading latest policy from latest policy path")
+            self.policy.load_latest_policy_path(self.checkpoint_path_to_load)
+
+            dist.barrier()
+            self.distributed_state.wait_for_everyone()
+
+            loaded_actor_weights_hash = get_model_hash(self.policy.actor.module)
+
+            # the pre load default model weights should not be the same as the
+            # cached weights (on iteration > 1)
+            if self.state.iteration != 0:
+                logger.info("checking loaded A/C weights")
+                assert actor_pre_load_hash != loaded_actor_weights_hash
+                # The loaded weights from the cash should be the same
+                # as the latest weights hashses
+                assert self.latest_actor_weights_hash == loaded_actor_weights_hash
+            else:
+                logger.info(
+                    "Intial state, we skip the A/C cache load check since the cache is empty"
+                )
+
+        kls = self._log_episodes_metrics(episodes)
+
+        num_groups = len(episodes.unique("group"))
+        logger.info(f"Number of groups: {num_groups}")
+
+        dataloader = prepare_data_loader_for_training(
+            episodes,
+            per_device_batch_size=self.per_device_batch_size,
+            seed=self.seed,
+            drop_last=False,
+            data_loader_kwargs={
+                "collate_fn": GRPODataCollator(),
+                "num_workers": self.dataloader_num_workers,
+                "pin_memory": self.dataloader_pin_memory,
+            },
+        )
 
         steps_in_epoch = len(dataloader)
         optim_steps_in_epoch = steps_in_epoch // self.gradient_accumulation_steps
@@ -167,7 +216,6 @@ class GRPOTrainer(BaseTrainer):
         )
 
         dataloader_iter = iter(dataloader)
-
         progress_bar = tqdm(
             total=total_num_optimization_steps,
             disable=not self._is_main_process(),
@@ -176,123 +224,126 @@ class GRPOTrainer(BaseTrainer):
         )
         progress_bar.update(self.state.global_step)
 
+        logger.info(f"Per device batch size: {self.per_device_batch_size}")
+        logger.info(f"Dataloder num workers: {self.dataloader_num_workers}")
+        logger.info(f"total_num_optimization_steps: {self.total_num_training_steps}")
+        logger.info(
+            f"num_optimization_steps_in_iteration:{num_optimization_steps_in_iteration}"
+        )
+
+        actor_trainable_params = get_model_param_count(
+            self.policy.actor, trainable_only=True
+        )
+
+        running_metrics = {}
+        accumulated_metrics = {}
+        global_step_last_logged = self.state.global_step
+
+        progress_bar = tqdm(
+            total=total_num_optimization_steps,
+            disable=not self._is_main_process(),
+            desc=f"Iteration {self.state.iteration}: Training",
+            dynamic_ncols=True,
+        )
+
+        progress_bar.update(self.state.global_step)
+
         # Set the actor in train mode
         self.policy.actor.train()
 
-        for epoch in tqdm(
-            range(self.num_epochs_per_iteration),
-            desc="Epoch",
-            disable=not self._is_main_process(),
-        ):
-            for _, batch in enumerate(dataloader_iter):
+        dist.barrier()
+        for epoch in range(self.num_epochs_per_iteration):
+            for step, batch in enumerate(dataloader_iter):
                 is_grad_acc_boundary = (
                     self.policy.actor.is_gradient_accumulation_boundary()
                 )
-                self._step(batch)
 
-                metrics = self._step(batch)
-                # self._update_metrics(running_metrics, accumulated_metrics, metrics)
+                metrics = self._epoch_step(batch)
+                self._update_metrics(running_metrics, accumulated_metrics, metrics)
+
                 if is_grad_acc_boundary:
                     self.state.global_step += 1
-                    # self.state.epoch = epoch + (step + 1) / steps_in_epoch
+                    self.state.epoch = epoch + (step + 1) / steps_in_epoch
                     progress_bar.update(1)
 
                     should_log = self.state.global_step % self.logging_steps == 0
                     if should_log:
-                        # self._log_training_metrics(
-                        #     global_step_last_logged,
-                        #     accumulated_metrics,
-                        #     progress_bar,
-                        # )
+                        self._log_training_metrics(
+                            global_step_last_logged,
+                            accumulated_metrics,
+                            progress_bar,
+                        )
                         global_step_last_logged = self.state.global_step
-
-    def _hydrate_log_probs(
-        self, episodes: Dataset, column_name: str = COLUMN_ACTOR_SHIFTED_LOGPS
-    ) -> Dataset:
-        """
-        Compute logprobs under the current (actor) policy and add them to the dataset.
-        """
-        # Create a distributed data loader such that the order of
-        # episodes is preserved when batches are distributed across multiple processes.
-        data_loader = prepare_data_loader_for_inference(
-            episodes,
-            per_device_batch_size=self.per_device_batch_size,
-            data_loader_kwargs={
-                "collate_fn": GRPODataCollator(),
-                "num_workers": self.dataloader_num_workers,
-                "pin_memory": self.dataloader_pin_memory,
-            },
-        )
-
-        # Switch actor to eval mode before doing inference
-        self.policy.actor.eval()
+            dataloader_iter = iter(dataloader)
         dist.barrier()
 
-        list_of_log_probs = []
-        for inputs in tqdm(
-            data_loader, desc="Computing log probs", disable=not self._is_main_process()
-        ):
-            with torch.no_grad():
-                assert torch.all(
-                    inputs["attention_mask"][:, 0] == 1
-                ), "Expected first token to be unmasked (attention_mask=1)."
-                assert inputs["input_ids"].shape[0] == self.per_device_batch_size, (
-                    f"We expect on all processes to have the same batch size of "
-                    f"{self.per_device_batch_size}."
-                )
+        for key, value in running_metrics.items():
+            value = torch.tensor(value, device=self.policy.actor.device)
+            dist.all_reduce(value, op=dist.ReduceOp.SUM)
+            value = value.cpu().item() / dist.get_world_size()
+            running_metrics[key] = value
 
-                # Move inputs to the actor device
-                inputs = {k: v.to(self.policy.actor.device) for k, v in inputs.items()}
+        self.state.iteration += 1
+        progress_bar.close()
 
-                seq_lengths = inputs["attention_mask"].sum(dim=1).detach().clone()
-                seq_lengths = seq_lengths.unsqueeze(1)  # Shape: (batch_size,
+        # TODO: delete this if it passes
+        # Verify we actually trained
+        new_actor_hash = get_model_hash(self.policy.actor.module)
+        assert new_actor_hash != self.latest_actor_weights_hash
+        self.latest_actor_weights_hash = new_actor_hash
 
-                # Forward pass on actor to get log probabilities for each token
-                outputs = self.policy.forward_actor(
-                    input_ids=inputs["input_ids"],
-                    attention_mask=inputs["attention_mask"],
-                    labels=inputs["labels"],
-                    return_all_logp=True,
-                )
-                logps = outputs.all_logp.detach()
-                assert logps.shape[1] == inputs["input_ids"].shape[1] - 1
+        # TODO: do this conditioned on caching ds engine logic
+        # i.e., IF we cache the engines, we dont have to store their full state
+        # in memory
+        checkpoint_dir = self.project_root_dir / "policy" / "checkpoints"
+        current_policy_checkpoint_path = (
+            checkpoint_dir / self._get_automatic_checkpoint_name()
+        )
 
-                # Check that seq_lengths is indeed on CUDA
-                seq_lengths = seq_lengths.to(self.policy.actor.device)
-                seq_lengths = gather(seq_lengths).cpu()
-                logps = pad_across_processes(
-                    logps, dim=1, pad_index=0.0, pad_first=False
-                )
-                logps = gather(logps).cpu()
+        # set the path of the policy we want to load in the next iteration
+        if not self.policy.cache_ds_engines:
+            self.checkpoint_path_to_load = current_policy_checkpoint_path
+            self.policy.checkpoint_latest_policy_path(current_policy_checkpoint_path)
 
-                assert (
-                    logps.shape[0]
-                    == inputs["input_ids"].shape[0] * dist.get_world_size()
-                )
+        # Put up a block here such that other processes dont go delete the critic
+        dist.barrier()
+        self.distributed_state.wait_for_everyone()
 
-                # Convert 2D tensors to a list of lists
-                logps_seq_lengths = seq_lengths - 1
-                for i, seq_len in enumerate(logps_seq_lengths.squeeze().tolist()):
-                    assert (
-                        seq_len <= logps.shape[1]
-                    ), f"seq_len={seq_len} is out of bounds for logps dim={logps.shape[1]}"
-                    list_of_log_probs.append(logps[i, :seq_len].tolist())
+        # Clean the old checkpoint inside the checkpoint dir
+        self.policy.clean_old_temp_checkpoints(
+            checkpoint_dir, exclude=[current_policy_checkpoint_path]
+        )
 
-        # Remove any extra log probs that were added due to global padding
-        list_of_log_probs = list_of_log_probs[: len(episodes)]
+        # destroy engines and release memory
+        self.policy.destroy_ds_engines()
+        release_memory()
+        import gc
 
-        # Safely add the new column only once on the main process
-        with self.distributed_state.main_process_first():
-            episodes = episodes.add_column(name=column_name, column=list_of_log_probs)
+        gc.collect()
+        torch.cuda.empty_cache()
 
-        return episodes
+        logger.info(f"Latest policy path: {current_policy_checkpoint_path}")
+        # Point this to the actors hf_pretrained for the inference / evaluation class
+        return current_policy_checkpoint_path / "hf_pretrained"
 
-    def _hydrate_reference_log_probs(
+    def _hydrate_ref_log_probs(
         self, episodes: Dataset, column_name: str = COLUMN_REF_SHIFTED_LOGPS
     ) -> Dataset:
         logger.info("Computing refrence model logprobs")
 
-        self.policy.init_reference_engine_if_needed()
+        with_ref_log_probs_path = (
+            self.project_root_dir
+            / "trainer"
+            / f"episodes__iter{self.state.iteration:04d}"
+            / "w_ref_logp"
+        )
+
+        self.policy.init_reference_engine_if_needed(
+            self.global_batch_size,
+            self.per_device_batch_size,
+            self.gradient_accumulation_steps,
+            self.total_num_training_steps,
+        )
 
         ## update the episodes
         data_loader = prepare_data_loader_for_inference(
@@ -366,94 +417,88 @@ class GRPOTrainer(BaseTrainer):
 
         with self.distributed_state.main_process_first():
             episodes = episodes.add_column(name=column_name, column=ref_log_probs_list)
+        if self._is_main_process():
+            episodes.save_to_disk(str(with_ref_log_probs_path))
+        self.distributed_state.wait_for_everyone()
 
+        self.policy.destroy_reference_engine_if_not_cached()
+        del episodes
+        release_memory()
+
+        episodes = Dataset.load_from_disk(str(with_ref_log_probs_path))
         return episodes
 
-    def _hydrate_episodes(self, episodes: Dataset) -> Dataset:
+    def _epoch_step(self, inputs: dict) -> dict:
         """
-        Hydrate the episodes with the log probabilities of the actor and the reference model.
+        One iteration step of your GRPO training.
         """
-        episodes = self._hydrate_log_probs(episodes)
-        episodes = self._hydrate_reference_log_probs(episodes)
-        return episodes
+        # Move everything to the correct device
+        device = self.policy.actor.device
+        for k, v in inputs.items():
+            inputs[k] = v.to(device)
 
-    def _step(
-        self,
-        inputs: Dict[str, torch.Tensor],
-    ) -> Dict[str, Union[float, torch.Tensor]]:
-        # noinspection DuplicatedCode
-        inputs = {k: v.to(self.policy.actor.device) for k, v in inputs.items()}
+        batch_size = inputs["input_ids"].size(0)
 
-        # Turn this into a dataclass
-        input_ids = inputs["input_ids"]  # Shape: (batch_size, max_seq_len)
-        attention_mask = inputs["attention_mask"]  # Shape: (batch_size, max_seq_len)
-        labels = inputs["labels"]  # Shape: (batch_size, max_seq_len)
-        scores = inputs["scores"]  # Shape: (batch_size,)
-        groups = inputs["group"]  # Shape: (batch_size,)
+        # There's either a single max_seq_len per sample or we assume they're all identical.
+        # If in your collator we appended the same int for every sample,
+        # we can just take the first's value:
+        max_seq_len = int(inputs["max_seq_length"][0].item())
+
+        # Gather shapes
+        input_ids = inputs["input_ids"]  # (B, seq_len)
+        attention_mask = inputs["attention_mask"]
+        labels = inputs["labels"]
+        advantages = inputs["advantages"]  # shape (B,)
+        groups = inputs["group"]  # shape (B,)
+        len_query_token_ids = inputs["len_query_token_ids"]  # shape (B,)
+        len_response_token_ids = inputs["len_response_token_ids"]  # shape (B,)
+
+        # Log some basic batch information
+        logger.info(f"Batch size: {batch_size}")
+        logger.info(f"max_seq_len: {max_seq_len}")
+        logger.info(f"input_ids shape: {input_ids.shape}")
+        logger.info(f"attention_mask shape: {attention_mask.shape}")
+        logger.info(f"labels shape: {labels.shape}")
+        logger.info(
+            f"advantages shape: {advantages.shape}, sample scores: {advantages[:5]}"
+        )
+        logger.info(f"groups shape: {groups.shape}, sample groups: {groups[:5]}")
+        logger.info(
+            f"len_query_token_ids shape: {len_query_token_ids.shape}, "
+            f"sample: {len_query_token_ids[:5]}"
+        )
+        logger.info(
+            f"len_response_token_ids shape: {len_response_token_ids.shape}, "
+            f"sample: {len_response_token_ids[:5]}"
+        )
 
         shifted_labels = labels[
             ..., 1:
         ].contiguous()  # Shape: (batch_size, max_seq_len-1)
+
         shifted_labels_mask = (shifted_labels != -100).to(
             attention_mask.dtype
         )  # Shape: (batch_size, max_seq_len-1)
 
-        # Note that this is the log probability of the actor model
-        # in the beginning of this iteration (aka the old log probs)
-        shifted_actor_logprobs = inputs[
-            COLUMN_ACTOR_SHIFTED_LOGPS
-        ]  # Shape: (batch_size, max_seq_len-1)
-        assert shifted_actor_logprobs.shape == shifted_labels_mask.shape
-
-        #  Compute the rewards, advantages, and returns
-        with torch.no_grad():
-            # TODO: add KL Penalty Here
-            if self._is_kl_penalty_enabled():
-                shifted_ref_logprobs = inputs[COLUMN_REF_SHIFTED_LOGPS]
-            else:
-                shifted_ref_logprobs = None
-
-            # Shape of rewards: (batch_size, max_seq_len-1)
-            mean_rewards, std_rewards, unique_ids, per_token_kl = self._compute_rewards(
-                scores=scores,
-                groups=groups,
-                shifted_actor_logprobs=shifted_actor_logprobs,
-                shifted_ref_logprobs=shifted_ref_logprobs,
-            )
-
-            # Shape of `advantages`: (batch_size, max_seq_len-1)
-            if "advantages" not in inputs:
-                advantages = self._compute_advantages(
-                    rewards=scores,
-                    groups=groups,
-                    unique_ids=unique_ids,
-                    mean_rewards=mean_rewards,
-                    std_rewards=std_rewards,
-                    per_token_kl=per_token_kl,
-                    shifted_actor_log_probs=shifted_actor_logprobs,
-                    shifted_labels_mask=shifted_labels_mask,
-                    attention_mask=attention_mask,
-                )
-            else:
-                precomputed_advantages = inputs["advantages"]
-                advantages = precomputed_advantages[:, 1:]
-
-            assert advantages.shape == shifted_actor_logprobs.shape
-            # assert rewards.shape == shifted_actor_logprobs.shape
-
+        ##################################################
+        #              Compute the actor loss            $
+        ##################################################
         model_inputs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
         }
+        logger.info(f"device {self.distributed_state.process_index} going into loss")
 
         # Step 2: Compute the actor loss
-        actor_loss, is_skipped, actor_metrics, approx_ref_kl = self.policy.actor_loss(
-            model_inputs=model_inputs,
-            shifted_labels_mask=shifted_labels_mask,
-            old_logprobs=shifted_actor_logprobs,
-            ref_logprobs=shifted_ref_logprobs,
-            advantages=advantages,
+        actor_loss, is_skipped, actor_metrics, approx_ref_kl, per_token_advantages = (
+            self.policy.actor_loss_grpo(
+                model_inputs=model_inputs,
+                shifted_labels_mask=shifted_labels_mask,
+                ref_logprobs=inputs[COLUMN_REF_SHIFTED_LOGPS],
+                advantages=advantages,
+                trainer_hparams=self.trainer_hparams,
+            )
         )
 
         self.policy.actor.backward(actor_loss)
@@ -463,108 +508,157 @@ class GRPOTrainer(BaseTrainer):
         actor_loss = actor_loss.detach().clone()
         release_memory()
 
-    def _compute_rewards(
+        #####################
+        # Log epoch metrics #
+        #####################
+        assert per_token_advantages.shape == shifted_labels_mask.shape
+        metrics = {
+            "advantages/mean": masked_mean(
+                per_token_advantages, shifted_labels_mask
+            ).detach(),
+            "rewards/mean": masked_mean(rewards, shifted_labels_mask).detach(),
+            "num_tokens": shifted_labels_mask.sum().detach(),
+            "_num_participating_tokens": shifted_labels_mask.sum().detach(),
+            **actor_metrics,
+        }
+
+        metrics["actor/loss"] = actor_loss
+        if approx_ref_kl is not None:
+            if approx_ref_kl is not None:
+                kls = approx_ref_kl
+            metrics["kls"] = (kls * shifted_labels_mask).sum(dim=1).mean().detach()
+
+        return metrics
+
+    def _update_metrics(
         self,
-        scores,
-        groups,
-        shifted_ref_logprobs=None,
-        shifted_actor_logprobs=None,
-    ) -> Tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        """
-        Compute per token rewards from scores and KL-penalty.
-        Args:
-            scores (`torch.FloatTensor`):
-                Outcome Scores from the episodes; one scalar per episode, shape (`batch_size`)
-            shifted_actor_logprobs (`torch.FloatTensor`):
-                Log probabilities of the actor, shape (`batch_size`, `max_seq_len-1`)
-            shifted_ref_logprobs (`torch.FloatTensor`):
-                Log probabilities of the reference model, shape (`batch_size`, `max_seq_len-1`)
-            attention_mask (`torch.LongTensor`):
-                Mask for the input, shape (`batch_size`,`max_seq_len`)
-            groups (`torch.LongTensor`):
-                Group indices, shape `)
+        running_metrics: Dict[str, Union[torch.Tensor, float]],
+        accumulated_metrics: Dict[str, Union[torch.Tensor, float]],
+        step_metrics: Dict[str, Union[torch.Tensor, float]],
+    ):
+        dist.barrier()
 
-        Returns:
-            `torch.FloatTensor`: Per token rewards, shape (`batch_size`, `max_seq_len-1`)
-            `torch.FloatTensor`: Non-score rewards, shape (`batch_size`, `max_seq_len-1`)
-            `torch.FloatTensor`: KL penalty, shape (`batch_size`, `max_seq_len-1`)
-        """
-        if (
-            shifted_ref_logprobs is not None
-            and self.grpo_params.kl_penalty_loss_type is None
-        ):
-            per_token_kl = self._compute_kl_penalty(
-                shifted_actor_logprobs,
-                shifted_ref_logprobs,
-                trainer_hparams=self.grpo_params,
-            )
-        else:
-            # KL penalty is not part of the reward
-            per_token_kl = None
+        def get_initial_value(
+            val: Union[float, torch.Tensor],
+        ) -> Union[float, torch.Tensor]:
+            if isinstance(val, torch.Tensor):
+                return torch.tensor(0.0, dtype=val.dtype, device=val.device)
+            return 0.0
 
-        # 1) Identify each unique group and get index mapping
-        unique_ids, group_idx = torch.unique(groups, return_inverse=True)
-        num_groups = unique_ids.size(0)
+        # Initialize running metrics if not already initialized
+        for key in step_metrics.keys():
+            if key in accumulated_metrics:
+                continue
+            log_keys_to_store_in_running_metrics = [
+                "_num_participating_tokens",
+            ]
+            accumulated_metrics[key] = get_initial_value(step_metrics[key])
+            if key in log_keys_to_store_in_running_metrics:
+                if key not in running_metrics:
+                    running_metrics[key] = get_initial_value(step_metrics[key])
 
-        # 2) Prepare accumulators on the same device
-        device = scores.device
-        sums = torch.zeros(num_groups, device=device, dtype=scores.dtype)
-        sum_of_squares = torch.zeros(num_groups, device=device, dtype=scores.dtype)
-        counts = torch.zeros(num_groups, device=device, dtype=scores.dtype)
+        num_tokens = step_metrics["_num_participating_tokens"].item()
 
-        # 3) Accumulate sums, sum_of_squares, counts in one pass
-        sums.index_add_(0, group_idx, scores)
-        sum_of_squares.index_add_(0, group_idx, scores**2)
-        counts.index_add_(0, group_idx, torch.ones_like(scores))
+        for key, value in step_metrics.items():
+            if value is None:
+                continue
+            if True:
+                weight = num_tokens
 
-        # 4) Compute mean & std
-        means = sums / counts.clamp_min(1e-7)
-        variances = sum_of_squares / counts.clamp_min(1e-7) - means**2
-        stds = variances.clamp_min(0).sqrt()
+            value = value * weight
+            accumulated_metrics[key] += value
 
-        if per_token_kl is not None:
-            per_token_kl = per_token_kl.detach()
+        # Update Running Metrics
+        running_metrics["_num_participating_tokens"] += num_tokens
 
-        return means, stds, unique_ids, per_token_kl
-
-    def _compute_advantages(
+    def _log_training_metrics(
         self,
-        rewards: torch.FloatTensor,
-        unique_ids: torch.LongTensor,
-        mean_rewards: torch.FloatTensor,
-        std_rewards: torch.FloatTensor,
-        per_token_kl: torch.FloatTensor,
-        groups: torch.LongTensor,  # (batch_size,1)
-        shifted_actor_log_probs: Optional[torch.FloatTensor] = None,
-        shifted_labels_mask: torch.LongTensor = None,
-        attention_mask: torch.LongTensor = None,
-    ) -> Tuple[torch.FloatTensor]:
-        """
-        Compute the advantages from the values and rewards.
-
-        Args:
-            mean_rewards (`torch.FloatTensor`): (log_probs)
-
-        Returns:
-            `torch.FloatTensor`: The advantages of the group, (`group`, `group_size`, `max_seq_len-1`)
-        """
-        group_advantages = torch.zeros_like(rewards)
-        for i, group in enumerate(groups):
-            group_advantages[i] = rewards[i] - mean_rewards[unique_ids == group] / (
-                std_rewards[unique_ids == group] + 1e-4
-            )
-
-        last_non_masked_indices = torch.cumsum(attention_mask, dim=1)[:, -1] - 1
-
-        last_non_masked_label_indices = (
-            last_non_masked_indices - 1
-        )  # contains the last indic for each row fow which
-        # we have to set the advantees to the group advante . i.e., for each row, assign its row advante from column 0 to the last index
-        advantages = torch.zeros_like(per_token_kl)
-        advantages[torch.arange(advantages.size(0)), last_non_masked_label_indices] += (
-            group_advantages
+        _globalstep_last_logged: int,
+        accumulated_metrics: Dict[str, Union[float, torch.Tensor]],
+        progress_bar: tqdm,
+    ):
+        # Wait for all processes to reach this point
+        logger.info(
+            f"\n\n{self.distributed_state.process_index} waiting to log training metrics"
         )
-        advantages -= per_token_kl
+        dist.barrier()
 
-        assert advantages.shape == shifted_actor_log_probs.shape
-        return advantages.detach()
+        logs: Dict[str, float] = {}
+
+        # Compute the log values over all processes
+        num_steps_since_last_log = (
+            self.state.global_step - _globalstep_last_logged
+        ) * self.gradient_accumulation_steps
+
+        if "_num_participating_tokens" in accumulated_metrics:
+            num_participating_tokens = accumulated_metrics["_num_participating_tokens"]
+            dist.all_reduce(num_participating_tokens, op=dist.ReduceOp.SUM)
+            num_participating_tokens = num_participating_tokens.item()
+        else:
+            num_participating_tokens = 1
+
+        for metric_name, metric_value in accumulated_metrics.items():
+            if metric_name.startswith("_"):
+                continue
+            if metric_value is None:
+                continue
+
+            is_weighed_by_num_actions = (
+                metric_name in self.log_keys_weighed_by_num_participating_tokens
+            )
+
+            if isinstance(metric_value, torch.Tensor):
+                metric_value = metric_value.to(self.policy.actor.device)
+                dist.all_reduce(metric_value, op=dist.ReduceOp.SUM)
+                metric_value = metric_value.item()
+                divisor = dist.get_world_size()
+            else:
+                assert not is_weighed_by_num_actions
+                divisor = 1
+
+            if is_weighed_by_num_actions:
+                metric_value /= num_participating_tokens
+            else:
+                metric_value /= divisor * num_steps_since_last_log
+
+            logs[metric_name] = round(metric_value, 8)
+
+        logs["actor/lr"] = self._get_learning_rate(self.policy.actor)
+        logs["epoch"] = round(self.state.epoch, 4)
+        logs["step"] = self.state.global_step
+        logs["actor/ds_step"] = self.policy.actor.global_steps
+
+        # First log the metrics on the progress bar
+        progress_bar.set_postfix(logs)
+
+        # Add "train/" prefix for clarity.
+        logs = {f"train/{k}": v for k, v in logs.items()}
+        logger.info(f"logs {logs}")
+
+        self._cloud_log({**logs, "train/global_step": self.state.global_step})
+
+        # Reset the accumulated metrics
+        for key in accumulated_metrics.keys():
+            accumulated_metrics[key] -= accumulated_metrics[key]
+
+    log_keys_to_store_in_running_metrics = [
+        "_num_participating_tokens",
+    ]
+
+    log_keys_weighed_by_num_participating_tokens = [
+        "advantages/mean",
+        "advantages/std",
+        "rewards/mean",
+        "returns",
+        "non_score_rewards",
+        "actor/loss",
+        "actor/logit_entropy",
+        "actor/approx_kl",
+        "actor/policy_kl",
+        "actor/clip_frac",
+        "ratio",
+        "critic/loss",
+        "critic/value",
+        "critic/mse",
+        "critic/clip_frac",
+    ]
