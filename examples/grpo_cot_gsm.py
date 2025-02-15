@@ -82,13 +82,13 @@ def grpo_gsm(cfg, local_rank=None):
     # --------- Inference (Chain-of-thought) Strategy --------- #
     max_seq_length = 2048
     num_episodes_per_iteration = 512
-    num_rollouts_per_sample = 8  # group size
+    num_rollouts_per_sample = 12  # group size
 
     # num groups
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
     )
-    target_batch_size = 16
+    target_batch_size = 64 
     num_iterations = 650
     sampling_temperature = 0.6
     num_epoch_per_iterations = 2
@@ -222,7 +222,7 @@ def grpo_gsm(cfg, local_rank=None):
     algorithm_kwargs = {
         "num_iterations": num_iterations,
         "verbose": 1,
-        "evaluation_freq": 10,
+        "evaluation_freq": 4,
         "checkpoint_freq": 10,
         "evaluator_cls": evaluator_cls,
         "evaluator_kwargs": evaluator_kwargs,

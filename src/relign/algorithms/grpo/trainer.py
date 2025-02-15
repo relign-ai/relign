@@ -112,6 +112,57 @@ class GRPOParams:
             self.whiten_advantages and self.grayen_advantages
         ), "Either whiten or grayen advantages, not both."
 
+class DeepSpeedRunningMoments:
+    def __init__(self, force_no_sync=False):
+        """
+        Calculates the running mean and standard deviation of a data stream. Reference:
+        https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L75
+        """
+        self.mean = 0
+        self.std = 1
+        self.var = 1
+        self.count = 1e-24
+        self.force_no_sync = force_no_sync
+
+        if self.force_no_sync:
+            from deepspeed import comm as dist
+
+            self.dist = dist
+        else:
+            self.dist = None
+
+        self.device = None
+
+    @torch.no_grad()
+    def update(self, xs: torch.Tensor) -> Tuple[float, float]:
+        """
+        Updates running moments from batch's moments computed across ranks
+        """
+        if not self.force_no_sync and self.dist.is_initialized():
+            raise NotImplementedError()
+        else:
+            xs_count = xs.numel()
+            xs_var, xs_mean = torch.var_mean(xs, unbiased=False)
+
+        xs_mean, xs_var = xs_mean.float(), xs_var.float()
+
+        delta = xs_mean - self.mean
+        tot_count = self.count + xs_count
+
+        new_sum = xs_var * xs_count
+        # correct old_sum deviation accounting for the new mean
+        old_sum = self.var * self.count + delta**2 * self.count * xs_count / tot_count
+        tot_sum = old_sum + new_sum
+
+        self.mean += delta * xs_count / tot_count
+        self.var = tot_sum / tot_count
+        self.std = (self.var * tot_count / (tot_count - 1)).float().sqrt()
+        self.count = tot_count
+
+        return (
+            xs_mean.item(),
+            (xs_var * xs_count / (xs_count - 1)).float().sqrt().item(),
+        )
 
 def get_model_hash(model):
     """Small helper function that returns the hash of a models weights"""
@@ -133,6 +184,7 @@ class GRPOTrainer(BaseTrainer):
         self._set_process_log_level(logger)
         self.latest_actor_weights_hash = None
         self.checkpoint_path_to_load = None
+        self.running_scores = DeepSpeedRunningMoments(force_no_sync=True)
 
     def step(self, episodes: EpisodeDataset) -> None:
         """
