@@ -192,8 +192,12 @@ class GRPOTrainer(BaseTrainer):
         Each updatestep can rum multiple epochs of optimization.
         """
 
+        ###########################
+        #  epiosde preprocessing  #
+        ###########################
         episodes = self._filter_episodes(episodes)
         episodes = self._rescale_and_clip_scores(episodes)
+        episodes = self._compute_group_based_advantages(episodes)
         episodes = self._hydrate_ref_log_probs(
             episodes, column_name=COLUMN_REF_SHIFTED_LOGPS
         )
@@ -494,10 +498,10 @@ class GRPOTrainer(BaseTrainer):
 
         # Gather shapes
         input_ids = inputs["input_ids"]  # (B, seq_len)
-        attention_mask = inputs["attention_mask"]
+        groups = inputs["group_ids"]  # shape (B,)
         labels = inputs["labels"]
+        attention_mask = inputs["attention_mask"]
         advantages = inputs["advantages"]  # shape (B,)
-        groups = inputs["group"]  # shape (B,)
         len_query_token_ids = inputs["len_query_token_ids"]  # shape (B,)
         len_response_token_ids = inputs["len_response_token_ids"]  # shape (B,)
 
@@ -576,6 +580,65 @@ class GRPOTrainer(BaseTrainer):
             metrics["kls"] = (kls * shifted_labels_mask).sum(dim=1).mean().detach()
 
         return metrics
+
+
+    def _compute_group_based_advantages(self, episodes: Dataset) -> Dataset:
+        """
+        Computes group-level mean and std of `scores` and attaches
+        normalized advantages to each entry in `episodes`.
+        We assume each row in `episodes` has a "group" and a "scores"
+        field.
+        """
+        import numpy as np
+        from collections import defaultdict
+
+        # --- Gather the group -> scores for each row ---
+        group2scores = defaultdict(list)
+        # Just to ensure the queries are identical within a group if you need that:
+        group2queries = defaultdict(list)
+
+        for i in range(len(episodes)):
+            row = episodes[i]
+            group_val = row["group"]
+            score_val = row["scores"]
+            group2scores[group_val].append(score_val)
+            group2queries[group_val].append(row["query_token_ids"])
+
+        # (Optional) Debug log
+        logger.info(f"Number of unique groups: {len(group2queries)}")
+        for group_val, q_list in group2queries.items():
+            logger.info(f"Group '{group_val}' has {len(q_list)} episodes.")
+            # If needed, check that all queries in the same group are identical
+            first_query = q_list[0]
+            for q_idx, q in enumerate(q_list[1:], start=1):
+                assert q == first_query, (
+                    f"Mismatch found in query_token_ids within group '{group_val}'. "
+                    f"Episode {q_idx} differs from the first episode."
+                )
+
+        # --- Compute mean/std for each group ---
+        group2meanstd = {}
+        for group_val, score_list in group2scores.items():
+            arr = np.array(score_list, dtype=np.float32)
+            mean = arr.mean()
+            std = arr.std()
+            group2meanstd[group_val] = (mean, std)
+
+        # --- Assign the normalized score as the "advantages" field for each entry ---
+        new_advantages = []
+        for i in range(len(episodes)):
+            row = episodes[i]
+            g = row["group"]
+            mean, std = group2meanstd[g]
+            if std < 1e-12:
+                adv = 0.0
+            else:
+                adv = (row["scores"] - mean) / float(std)
+            new_advantages.append(adv)
+
+        # Now we add "advantages" as a new column to the dataset
+        episodes = episodes.add_column("advantages", new_advantages)
+        return episodes
 
     def _update_metrics(
         self,
@@ -680,14 +743,12 @@ class GRPOTrainer(BaseTrainer):
 
         # Add "train/" prefix for clarity.
         logs = {f"train/{k}": v for k, v in logs.items()}
-        logger.info(f"logs {logs}")
 
         self._cloud_log({**logs, "train/global_step": self.state.global_step})
 
         # Reset the accumulated metrics
         for key in accumulated_metrics.keys():
             accumulated_metrics[key] -= accumulated_metrics[key]
-
     log_keys_to_store_in_running_metrics = [
         "_num_participating_tokens",
     ]

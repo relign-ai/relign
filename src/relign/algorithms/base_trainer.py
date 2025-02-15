@@ -351,7 +351,11 @@ class BaseTrainer(ABC):
             scores.append(e["scores"])
             response_lengths.append(len(e["response_token_ids"]))
             if "advantages" in e:
-                advantages += e["advantages"]
+                # Check if it's not a float before adding to the list
+                if isinstance(e["advantages"], float):
+                    pass
+                else:
+                    advantages += e["advantages"]
             if COLUMN_REF_SHIFTED_LOGPS in e:
                 ref_logprobs.append(compute_seq_logp(e, e[COLUMN_REF_SHIFTED_LOGPS]))
             if COLUMN_ACTOR_SHIFTED_LOGPS in e:
