@@ -177,6 +177,7 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
                 metrics.setdefault("is_unfinished_response", []).append(
                     is_unfinished_response
                 )
+                metrics.setdefault("answer_rewards", []).append()
 
                 # Generate an episode
                 episode = Episode(
@@ -232,8 +233,13 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
             )
 
         if "format_rewards" in metrics:
-            metrics["format_rewrrds"] = sum(metrics["format_rewrads"]) / len(
+            metrics["format_rewards"] = sum(metrics["format_rewrads"]) / len(
                 len(metrics["format_rewards"])
+            )
+
+        if "answer_rewards" in metrics:
+            metrics["answer_rewards"] = sum(metrics["answer_rewards"]) / len(
+                len(metrics["answer_rewards"])
             )
 
         if len(metrics) > 0:
@@ -245,13 +251,6 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
             logger.info(
                 f"Mean reward for all {len(episodes)} out episodes at iteration: {iteration} is {mean_reward}"
             )
-            # Log up to 15 random responses
-            # if all_collected_responses:
-            #     sample_size = min(15, len(all_collected_responses))
-            #     random_sample = random.sample(all_collected_responses, sample_size)
-            #     logger.info(f"Random {sample_size} responses from this iteration:")
-            #     for idx, resp in enumerate(random_sample, 1):
-            #         logger.info(f"{idx}. {resp}")
 
         return episodes
 
@@ -302,21 +301,21 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                 query_text = path["node_chain"][0]["text"]
                 full_text = path["node_chain"][-1]["full_text"]
                 response_text = full_text[len(query_text) :]
-               
-                ################################ 
+
+                ################################
                 #    Exctract reasoning steps  #
-                ################################ 
+                ################################
                 # try:
-                #     #TODO: fix this 
+                #     #TODO: fix this
                 #     reasoning_steps = self._extract_reasoning_steps(response_text)
                 #     metrics.setdefault("num_reasoning_steps", []).append(reasoning_steps)
                 # except Exception as e:
                 #     metrics.setdefault("parse_failed", []).append(True)
                 #     reasonong_steps = 0.0  # Default/fallback to avoid unbound variable
 
-                ################################ 
+                ################################
                 #      Get Format Rewards      #
-                ################################ 
+                ################################
                 try:
                     format_rewards = self._extract_format_rewards(response_text)
                     metrics.setdefault("format_rewards", []).append(format_rewards)
@@ -400,7 +399,7 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                 episode = Episode(**episode_kwargs)
 
                 episodes.append(episode)
-                all_rewards.append(float(reward) + float(format_rewards))
+                all_rewards.append(float(reward))
 
             if len(all_rewards) > 0:
                 once_hit = any([r == 1.0 for r in all_rewards])
@@ -463,8 +462,8 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
         return len(indices)
 
     def _extract_format_rewards(self, response_text: str) -> Tuple[int, List[int]]:
-        """ 
-        check whether the model adhered to the response format 
+        """
+        check whether the model adhered to the response format
         """
         format_rewards = self.task.get_format_rewards(response_text)
         return format_rewards

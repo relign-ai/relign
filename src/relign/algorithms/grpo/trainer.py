@@ -130,7 +130,7 @@ class GRPOTrainer(BaseTrainer):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.trainer_hparams = GRPOParams(**kwargs.get("grpo_params", {}))
-        # self._set_process_log_level(logger)
+        self._set_process_log_level(logger)
         self.latest_actor_weights_hash = None
         self.checkpoint_path_to_load = None
 
@@ -229,10 +229,6 @@ class GRPOTrainer(BaseTrainer):
         logger.info(f"total_num_optimization_steps: {self.total_num_training_steps}")
         logger.info(
             f"num_optimization_steps_in_iteration:{num_optimization_steps_in_iteration}"
-        )
-
-        actor_trainable_params = get_model_param_count(
-            self.policy.actor, trainable_only=True
         )
 
         running_metrics = {}
@@ -516,7 +512,6 @@ class GRPOTrainer(BaseTrainer):
             "advantages/mean": masked_mean(
                 per_token_advantages, shifted_labels_mask
             ).detach(),
-            "rewards/mean": masked_mean(rewards, shifted_labels_mask).detach(),
             "num_tokens": shifted_labels_mask.sum().detach(),
             "_num_participating_tokens": shifted_labels_mask.sum().detach(),
             **actor_metrics,
