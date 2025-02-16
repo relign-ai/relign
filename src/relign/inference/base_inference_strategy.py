@@ -1,9 +1,9 @@
 from pathlib import Path
 
 from datasets import Dataset
+from relign.common.registry import RegistrableBase
 
-
-class InferenceStrategy():
+class InferenceStrategy(RegistrableBase):
     def __init__(
         self, result_dir: Path, 
         cloud_logger=None, 

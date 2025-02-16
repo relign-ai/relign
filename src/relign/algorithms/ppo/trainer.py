@@ -131,7 +131,7 @@ class PPOHParams:
             self.whiten_advantages and self.grayen_advantages
         ), "Either whiten or grayen advantages, not both."
 
-@register('trainer', 'ppo')
+@BaseTrainer.register("PPO")
 class PPOTrainer(BaseTrainer):
     """
     PPO Trainer.

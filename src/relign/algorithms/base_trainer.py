@@ -15,6 +15,7 @@ import torch.nn.functional as F
 import numpy as np
 from accelerate import PartialState
 
+from relign.common.registry import RegistrableBase
 from relign.policies.base_policy import BasePolicy
 from relign.algorithms.ppo.data_collator import (
     COLUMN_REF_SHIFTED_LOGPS,
@@ -63,7 +64,7 @@ class BatchArgs:
     """
 
 
-class BaseTrainer(ABC):
+class BaseTrainer(ABC, RegistrableBase):
     def __init__(
         self,
         seed: int,

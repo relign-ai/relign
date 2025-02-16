@@ -48,8 +48,7 @@ def grpo_gsm(cfg, local_rank=None):
         answer_prefix=answer_prefix,
         load_dataset_dict=True,
         dataset_dict_path="data/gsm8k",
-        intermetdiate_step_tags=["<think>", "</think>"],
-        remove_calculator_expressions=True,
+        intermetdiate_step_tags=["<think>", "</think>"], remove_calculator_expressions=True,
         use_original_format=True,
     )
 

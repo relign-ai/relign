@@ -1,41 +1,57 @@
-from collections import defaultdict
-from typing import Any, Dict
+# myproject/registrable.py
+from typing import Type, Dict, TypeVar, List
 
-# A single global dictionary that maps:
-#   Category -> (Name -> Class)
-REGISTRIES: Dict[str, Dict[str, Any]] = defaultdict(dict)
+T = TypeVar("T", bound="RegistrableBase")
 
-def register(category: str, name: str):
+class RegistrableBase:
     """
-    A generic decorator for registering a class under a given category and name.
-
-    Usage Example:
-        @register("trainer", "ppo")
-        class PPOTrainer:
-            ...
-
-        @register("inference", "chain_of_thought")
-        class ChainOfThoughtInference:
-            ...
+    A lightweight base class offering a named registry for subclasses.
+    Inherit from this base, then decorate your subclasses with @register("name").
     """
-    def decorator(cls):
-        if name in REGISTRIES[category]:
+
+    _registry: Dict[str, Type["RegistrableBase"]] = {}
+
+    @classmethod
+    def register(cls, name: str):
+        """
+        Decorator to register a subclass under a given name.
+        
+        Usage:
+            @MyBaseClass.register("my_subclass")
+            class MySubclass(MyBaseClass):
+                ...
+
+        Raises:
+            ValueError if the name is already registered.
+        """
+        def decorator(subclass: Type[T]) -> Type[T]:
+            if name in cls._registry:
+                raise ValueError(
+                    f"Cannot register '{name}' under {cls.__name__}; "
+                    f"already used by {cls._registry[name].__name__}."
+                )
+            cls._registry[name] = subclass
+            return subclass
+        return decorator
+
+    @classmethod
+    def by_name(cls: Type[T], name: str) -> Type[T]:
+        """
+        Return the subclass associated with `name`.
+
+        Raises:
+            ValueError if no subclass is found under that name.
+        """
+        if name not in cls._registry:
             raise ValueError(
-                f"Duplicate registration: '{name}' already in category '{category}'."
+                f"No '{cls.__name__}' registered under the name: '{name}'. "
+                f"Available: {list(cls._registry.keys())}"
             )
-        REGISTRIES[category][name] = cls
-        return cls
-    return decorator
+        return cls._registry[name]
 
-
-def get_registered(category: str, name: str):
-    """
-    Retrieve the class from the registry by category and name.
-    """
-    cat_dict = REGISTRIES.get(category)
-    if not cat_dict:
-        raise KeyError(f"No category '{category}' found in registry.")
-    cls = cat_dict.get(name)
-    if not cls:
-        raise KeyError(f"No item '{name}' found in category '{category}'.")
-    return cls
+    @classmethod
+    def list_available(cls) -> List[str]:
+        """
+        List all registered names for this base class.
+        """
+        return list(cls._registry.keys())C
