@@ -20,9 +20,10 @@ from relign.utils.trainer import prepare_data_loader_for_training, masked_mean
 
 from relign.algorithms.grpo.data_collator import (
     GRPODataCollator,
-    # GroupedBatchSampler,
     COLUMN_REF_SHIFTED_LOGPS,
+    COLUMN_ACTOR_SHIFTED_LOGPS
 )
+
 
 from relign.utils.logging import get_logger
 
@@ -79,7 +80,7 @@ class GRPOParams:
     """
 
     adap_kl_ctrl: bool = True
-    init_kl_coef: Optional[float] = 0.2
+    init_kl_coef: Optional[float] = 0.4
     kl_penalty: Literal["kl", "abs", "mse", "full", "control_variate"] = "kl"
     kl_penalty_loss_type: Optional[Literal["kl", "abs", "mse", "control_variate"]] = (
         None
@@ -192,22 +193,20 @@ class GRPOTrainer(BaseTrainer):
         Each updatestep can rum multiple epochs of optimization.
         """
 
-        ###########################
-        #  epiosde preprocessing  #
-        ###########################
-        episodes = self._filter_episodes(episodes)
-        episodes = self._rescale_and_clip_scores(episodes)
-        episodes = self._compute_group_based_advantages(episodes)
-        episodes = self._hydrate_ref_log_probs(
-            episodes, column_name=COLUMN_REF_SHIFTED_LOGPS
-        )
-
         self.policy.init_actor_engine_if_needed(
             global_batch_size=self.global_batch_size,
             per_device_batch_size=self.per_device_batch_size,
             gradient_accumulation_steps=self.gradient_accumulation_steps,
             total_num_training_steps=self.total_num_training_steps,
         )
+
+        ###########################
+        #  epiosde preprocessing  #
+        ###########################
+        episodes = self._filter_episodes(episodes)
+        episodes = self._rescale_and_clip_scores(episodes)
+        episodes = self._compute_group_based_advantages(episodes)
+        episodes = self._hydrate_episodes(episodes)
 
         # Initilaize the hashes if they are none
         if self.latest_actor_weights_hash is None:
@@ -377,109 +376,7 @@ class GRPOTrainer(BaseTrainer):
         logger.info(f"Latest policy path: {current_policy_checkpoint_path}")
         # Point this to the actors hf_pretrained for the inference / evaluation class
         return current_policy_checkpoint_path / "hf_pretrained"
-
-    def _hydrate_ref_log_probs(
-        self, episodes: Dataset, column_name: str = COLUMN_REF_SHIFTED_LOGPS
-    ) -> Dataset:
-        logger.info("Computing refrence model logprobs")
-
-        with_ref_log_probs_path = (
-            self.project_root_dir
-            / "trainer"
-            / f"episodes__iter{self.state.iteration:04d}"
-            / "w_ref_logp"
-        )
-
-        self.policy.init_reference_engine_if_needed(
-            self.global_batch_size,
-            self.per_device_batch_size,
-            self.gradient_accumulation_steps,
-            self.total_num_training_steps,
-        )
-
-        ## update the episodes
-        data_loader = prepare_data_loader_for_inference(
-            episodes,
-            per_device_batch_size=self.per_device_batch_size,
-            data_loader_kwargs={
-                "collate_fn": GRPODataCollator(),
-                "num_workers": self.dataloader_num_workers,
-                "pin_memory": self.dataloader_pin_memory,
-            },
-        )
-
-        self.policy.reference.eval()  # put the referenc emodel in non-training mode
-        dist.barrier()
-
-        ref_log_probs_list = []
-        for inputs in tqdm(
-            data_loader,
-            desc="Computing reference log probs",
-            disable=not self._is_main_process(),
-        ):
-            with torch.no_grad():
-                # Asume every sequence is padded from the right
-                # noinspection DuplicatedCode
-                assert torch.all(inputs["attention_mask"][:, 0] == 1)
-                assert inputs["input_ids"].shape[0] == self.per_device_batch_size, (
-                    f"We expect on all processes to have the same batch size of "
-                    f"{self.per_device_batch_size}."
-                )
-
-                inputs = {
-                    k: v.to(self.policy.reference.device) for k, v in inputs.items()
-                }
-
-                # Compute the sequence lengths as we need to extract
-                # the log probs of the non-padded tokens
-                seq_lengths = inputs["attention_mask"].sum(dim=1).detach().clone()
-                seq_lengths = seq_lengths.unsqueeze(1)  # Shape: (batch_size, 1)
-
-                # Compute the log probabilities for each token
-                outputs = self.policy.forward_reference(
-                    input_ids=inputs["input_ids"],
-                    attention_mask=inputs["attention_mask"],
-                    labels=inputs["labels"],
-                    return_all_logp=True,
-                )
-
-                logps = outputs.all_logp.detach()
-                assert logps.shape[1] == inputs["input_ids"].shape[1] - 1
-
-                seq_lengths = seq_lengths.to(self.policy.reference.device)
-                seq_lengths = gather(seq_lengths).cpu()
-                logps = gather(
-                    pad_across_processes(logps, dim=1, pad_index=0.0, pad_first=False)
-                ).cpu()
-
-                assert (
-                    logps.shape[0]
-                    == inputs["input_ids"].shape[0] * dist.get_world_size()
-                )
-
-                # Convert 2d tensors to a list of lists
-                logps_seq_lengths = seq_lengths - 1
-                for i, seq_len in enumerate(logps_seq_lengths.squeeze().tolist()):
-                    assert seq_len <= logps.shape[1]
-                    ref_log_probs_list.append(logps[i, :seq_len].tolist())
-
-        ref_log_probs_list = ref_log_probs_list[
-            : len(episodes)
-        ]  # remove any extra log probs that were added due to global paddingS
-
-        with self.distributed_state.main_process_first():
-            episodes = episodes.add_column(name=column_name, column=ref_log_probs_list)
-        if self._is_main_process():
-            episodes.save_to_disk(str(with_ref_log_probs_path))
-        self.distributed_state.wait_for_everyone()
-
-        self.policy.destroy_reference_engine_if_not_cached()
-        del episodes
-        release_memory()
-
-        episodes = Dataset.load_from_disk(str(with_ref_log_probs_path))
-        return episodes
-
+    
     def _epoch_step(self, inputs: dict) -> dict:
         """
         One iteration step of your GRPO training.
@@ -548,6 +445,7 @@ class GRPOTrainer(BaseTrainer):
                 model_inputs=model_inputs,
                 shifted_labels_mask=shifted_labels_mask,
                 ref_logprobs=inputs[COLUMN_REF_SHIFTED_LOGPS],
+                old_logprobs=inputs[COLUMN_ACTOR_SHIFTED_LOGPS],
                 advantages=advantages,
                 trainer_hparams=self.trainer_hparams,
             )
@@ -580,7 +478,6 @@ class GRPOTrainer(BaseTrainer):
             metrics["kls"] = (kls * shifted_labels_mask).sum(dim=1).mean().detach()
 
         return metrics
-
 
     def _compute_group_based_advantages(self, episodes: Dataset) -> Dataset:
         """
@@ -749,6 +646,7 @@ class GRPOTrainer(BaseTrainer):
         # Reset the accumulated metrics
         for key in accumulated_metrics.keys():
             accumulated_metrics[key] -= accumulated_metrics[key]
+
     log_keys_to_store_in_running_metrics = [
         "_num_participating_tokens",
     ]
@@ -770,3 +668,216 @@ class GRPOTrainer(BaseTrainer):
         "critic/mse",
         "critic/clip_frac",
     ]
+
+    def _hydrate_episodes(self, episodes: Dataset) -> Dataset:
+        """
+        Takes the collated dataset and hydrates it with the
+        logprobs and values under the current policy parameters.
+        These will be the baseline logprobs and values i.e., pi_old(a|s)
+        """
+        with_actor_log_probs_path = (
+            self.project_root_dir
+            / "trainer"
+            / f"episodes__iter{self.state.iteration:04d}"
+            / "w_actor_log_probs"
+        )
+        episodes = self._hydrate_log_probs(episodes)
+
+        if self._is_main_process():
+            episodes.save_to_disk(str(with_actor_log_probs_path))
+        self.distributed_state.wait_for_everyone()
+
+        del episodes
+        release_memory()
+
+        episodes = Dataset.load_from_disk(str(with_actor_log_probs_path))
+
+        with_ref_log_probs_path = (
+            self.project_root_dir
+            / "trainer"
+            / f"episodes__iter{self.state.iteration:04d}"
+            / "w_ref_log_probs"
+        )
+
+        episodes = self._hydrate_ref_log_probs(episodes)
+        if self._is_main_process():
+            episodes.save_to_disk(str(with_ref_log_probs_path))
+        self.distributed_state.wait_for_everyone()
+
+        del episodes
+        release_memory()
+
+        episodes = Dataset.load_from_disk(str(with_ref_log_probs_path))
+        return episodes
+
+    def _hydrate_log_probs(
+        self, episodes: Dataset, column_name: str = COLUMN_ACTOR_SHIFTED_LOGPS
+    ) -> Dataset:
+        """
+        Compute logprobs under the current (actor) policy and add them to the dataset.
+        """
+        # Create a distributed data loader such that the order of
+        # episodes is preserved when batches are distributed across multiple processes.
+        data_loader = prepare_data_loader_for_inference(
+            episodes,
+            per_device_batch_size=self.per_device_batch_size,
+            data_loader_kwargs={
+                "collate_fn": GRPODataCollator(),
+                "num_workers": self.dataloader_num_workers,
+                "pin_memory": self.dataloader_pin_memory,
+            },
+        )
+
+        # Switch actor to eval mode before doing inference
+        self.policy.actor.eval()
+        dist.barrier()
+
+        list_of_log_probs = []
+        for inputs in tqdm(
+            data_loader, desc="Computing log probs", disable=not self._is_main_process()
+        ):
+            with torch.no_grad():
+                assert torch.all(
+                    inputs["attention_mask"][:, 0] == 1
+                ), "Expected first token to be unmasked (attention_mask=1)."
+                assert inputs["input_ids"].shape[0] == self.per_device_batch_size, (
+                    f"We expect on all processes to have the same batch size of "
+                    f"{self.per_device_batch_size}."
+                )
+
+                # Move inputs to the actor device
+                inputs = {k: v.to(self.policy.actor.device) for k, v in inputs.items()}
+
+                seq_lengths = inputs["attention_mask"].sum(dim=1).detach().clone()
+                seq_lengths = seq_lengths.unsqueeze(1)  # Shape: (batch_size,
+
+                # Forward pass on actor to get log probabilities for each token
+                outputs = self.policy.forward_actor(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    labels=inputs["labels"],
+                    return_all_logp=True,
+                    trainer_hparams=self.trainer_hparams,
+                )
+                logps = outputs.all_logp.detach()
+                assert logps.shape[1] == inputs["input_ids"].shape[1] - 1
+
+                # Check that seq_lengths is indeed on CUDA
+                seq_lengths = seq_lengths.to(self.policy.actor.device)
+                seq_lengths = gather(seq_lengths).cpu()
+                logps = pad_across_processes(
+                    logps, dim=1, pad_index=0.0, pad_first=False
+                )
+                logps = gather(logps).cpu()
+
+                assert (
+                    logps.shape[0]
+                    == inputs["input_ids"].shape[0] * dist.get_world_size()
+                )
+
+                # Convert 2D tensors to a list of lists
+                logps_seq_lengths = seq_lengths - 1
+                for i, seq_len in enumerate(logps_seq_lengths.squeeze().tolist()):
+                    assert (
+                        seq_len <= logps.shape[1]
+                    ), f"seq_len={seq_len} is out of bounds for logps dim={logps.shape[1]}"
+                    list_of_log_probs.append(logps[i, :seq_len].tolist())
+
+        # Remove any extra log probs that were added due to global padding
+        list_of_log_probs = list_of_log_probs[: len(episodes)]
+
+        # Safely add the new column only once on the main process
+        with self.distributed_state.main_process_first():
+            episodes = episodes.add_column(name=column_name, column=list_of_log_probs)
+
+        return episodes
+
+    def _hydrate_ref_log_probs(
+        self, episodes: Dataset, column_name: str = COLUMN_REF_SHIFTED_LOGPS
+    ) -> Dataset:
+        logger.info("Computing refrence model logprobs")
+
+        self.policy.init_reference_engine_if_needed(
+            self.global_batch_size,
+            self.per_device_batch_size,
+            self.gradient_accumulation_steps,
+            self.total_num_training_steps,
+        )
+
+        ## update the episodes
+        data_loader = prepare_data_loader_for_inference(
+            episodes,
+            per_device_batch_size=self.per_device_batch_size,
+            data_loader_kwargs={
+                "collate_fn": GRPODataCollator(),
+                "num_workers": self.dataloader_num_workers,
+                "pin_memory": self.dataloader_pin_memory,
+            },
+        )
+
+        self.policy.reference.eval()  # put the referenc emodel in non-training mode
+        dist.barrier()
+
+        ref_log_probs_list = []
+        for inputs in tqdm(
+            data_loader,
+            desc="Computing reference log probs",
+            disable=not self._is_main_process(),
+        ):
+            with torch.no_grad():
+                # Asume every sequence is padded from the right
+                # noinspection DuplicatedCode
+                assert torch.all(inputs["attention_mask"][:, 0] == 1)
+                assert inputs["input_ids"].shape[0] == self.per_device_batch_size, (
+                    f"We expect on all processes to have the same batch size of "
+                    f"{self.per_device_batch_size}."
+                )
+
+                inputs = {
+                    k: v.to(self.policy.reference.device) for k, v in inputs.items()
+                }
+
+                # Compute the sequence lengths as we need to extract
+                # the log probs of the non-padded tokens
+                seq_lengths = inputs["attention_mask"].sum(dim=1).detach().clone()
+                seq_lengths = seq_lengths.unsqueeze(1)  # Shape: (batch_size, 1)
+
+                # Compute the log probabilities for each token
+                outputs = self.policy.forward_reference(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    labels=inputs["labels"],
+                    return_all_logp=True,
+                )
+
+                logps = outputs.all_logp.detach()
+                assert logps.shape[1] == inputs["input_ids"].shape[1] - 1
+
+                seq_lengths = seq_lengths.to(self.policy.reference.device)
+                seq_lengths = gather(seq_lengths).cpu()
+                logps = gather(
+                    pad_across_processes(logps, dim=1, pad_index=0.0, pad_first=False)
+                ).cpu()
+
+                assert (
+                    logps.shape[0]
+                    == inputs["input_ids"].shape[0] * dist.get_world_size()
+                )
+
+                # Convert 2d tensors to a list of lists
+                logps_seq_lengths = seq_lengths - 1
+                for i, seq_len in enumerate(logps_seq_lengths.squeeze().tolist()):
+                    assert seq_len <= logps.shape[1]
+                    ref_log_probs_list.append(logps[i, :seq_len].tolist())
+
+        ref_log_probs_list = ref_log_probs_list[
+            : len(episodes)
+        ]  # remove any extra log probs that were added due to global paddingS
+
+        with self.distributed_state.main_process_first():
+            episodes = episodes.add_column(name=column_name, column=ref_log_probs_list)
+
+        self.policy.destroy_reference_engine_if_not_cached()
+        release_memory()
+
+        return episodes

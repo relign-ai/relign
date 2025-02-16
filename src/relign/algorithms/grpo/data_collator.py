@@ -39,6 +39,7 @@ class GRPODataCollator:
             and instances[0]["process_rewards"] is not None
         )
         has_ref_shifted_logps = COLUMN_REF_SHIFTED_LOGPS in instances[0]
+        has_actor_logps = COLUMN_ACTOR_SHIFTED_LOGPS in instances[0]
         # We now rely on `_compute_group_based_advantages` for advantage calculation:
         has_advantages = ("advantages" in instances[0]) and (instances[0]["advantages"] is not None)
 
@@ -59,6 +60,8 @@ class GRPODataCollator:
             batch["process_rewards"] = []
         if has_ref_shifted_logps:
             batch[COLUMN_REF_SHIFTED_LOGPS] = []
+        if has_actor_logps:
+            batch[COLUMN_ACTOR_SHIFTED_LOGPS] = []
 
         pad_token_id = 0
         pad_label = -100
@@ -119,7 +122,17 @@ class GRPODataCollator:
                     len(query_ids),
                     len(response_ids),
                 )
+                assert len(shifted_ref_logps) == (max_seq_length - 1)
                 batch[COLUMN_REF_SHIFTED_LOGPS].append(shifted_ref_logps)
+
+            if has_actor_logps:
+                shifted_actor_logps = prepare_shifted_logps(
+                    instance[COLUMN_ACTOR_SHIFTED_LOGPS],
+                    len(query_ids),
+                    len(response_ids),
+                )
+                assert len(shifted_actor_logps) == (max_seq_length - 1)
+                batch[COLUMN_ACTOR_SHIFTED_LOGPS].append(shifted_actor_logps)
 
         # If we still want numeric group indices, we can just batch them as before:
         if has_group:
