@@ -85,8 +85,8 @@ class Evaluator:
 
     def evaluate(
         self,
-        global_step: int,
         iteration: int,
+        global_step: int,
         latest_policy_path: Optional[Path] = None,
     ):
         """

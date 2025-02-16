@@ -114,6 +114,13 @@ class BaseRunner(ABC):
         """
         # Run the learn method of the algorithm
         self.algorithm.learn()
+    
+    def test(self):
+        """
+        Run the algorithm in test mode
+        """
+        # Run the test method of the algorithm
+        self.algorithm.test()
 
     def _create_cloud_logger(self):
         try:

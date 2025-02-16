@@ -50,6 +50,7 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
         episode_generator_kwargs: Dict[str, Any],
         algorithm_kwargs: Dict[str, Any],
         cloud_logger=None,
+        mode: str ="train",
     ):
         super().__init__(
             experiment_name=experiment_name,
@@ -69,6 +70,7 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
         self._init_distributed_setup()
         self.exp_root = self._init_experiment_dir()  # Corrected method name
         self.log_dir = self._init_log_dir()
+        self.mode = mode
 
         if self.distributed_state.is_main_process:
             cloud_logger = self._create_cloud_logger()
@@ -83,8 +85,10 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
         if self.distributed_state.use_distributed:
             self.distributed_state.wait_for_everyone()
 
-        self._init_policy()
-        self._init_trainer()
+        if self.mode == "train":
+            self._init_policy()
+            self._init_trainer()
+
         self._init_episode_generator()
         self._init_algorithm()
 
@@ -135,17 +139,28 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
         )
 
     def _init_algorithm(self):
-        self.algorithm: A = self.algorithm_cls(
-            seed=self.seed,
-            project_root_dir=self.exp_root,
-            distributed_state=self.distributed_state,
-            policy=self.policy,
-            trainer=self.trainer,
-            episode_generator=self.episode_generator,
-            cloud_logger=self._cloud_log,
-            cloud_updater=self._cloud_update,
-            **self.algorithm_kwargs,
-        )
+        if self.mode == "train":
+            self.algorithm: A = self.algorithm_cls(
+                seed=self.seed,
+                project_root_dir=self.exp_root,
+                distributed_state=self.distributed_state,
+                policy=self.policy,
+                trainer=self.trainer,
+                episode_generator=self.episode_generator,
+                cloud_logger=self._cloud_log,
+                cloud_updater=self._cloud_update,
+                **self.algorithm_kwargs,
+            )
+        else: 
+            self.algorithm: A = self.algorithm_cls(
+                seed=self.seed,
+                project_root_dir=self.exp_root,
+                distributed_state=self.distributed_state,
+                episode_generator=self.episode_generator,
+                cloud_logger=self._cloud_log,
+                cloud_updater=self._cloud_update,
+                **self.algorithm_kwargs,
+            )
 
     def _cloud_log(self, *args, **kwargs):
         if self.distributed_state.is_main_process and self.cloud_logger is not None:
