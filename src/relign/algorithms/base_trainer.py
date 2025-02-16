@@ -279,43 +279,39 @@ class BaseTrainer(ABC):
         )
 
     def _rescale_and_clip_scores(self, episodes: Dataset) -> Dataset:
-        bias_correction = None
-        scale_factor = None
-        if self.trainer_hparams.use_score_scaling:
-            assert "scores" in episodes.column_names, "Scores should be provided."
-            scores = torch.tensor(episodes["scores"], dtype=torch.float32)
-            scores_mean, scores_std = self.running_scores.update(scores)
-            scale_factor = scores_std + torch.finfo(scores.dtype).eps
-            if self.trainer_hparams.use_score_norm:  # todo: weird name, right?
-                bias_correction = -scores_mean
-
-        clip = self.trainer_hparams.score_clip
+        """
+        Simplify to just min-max scale the 'scores' column to [0,1].
+        """
+        if "scores" not in episodes.column_names:
+            return episodes  # no-op if column doesn't exist
+        
+        # Extract all scores
+        scores = np.array(episodes["scores"], dtype=np.float32)
+        score_min, score_max = scores.min(), scores.max()
+        if score_min == score_max:
+            # All scores are the same, so set them all to 0 (or 1, your choice)
+            logger.warning(
+                "All scores are identical; min-max scaling will produce 0.0 for all."
+            )
+            return episodes.map(
+                lambda x: {"scores": 0.0},
+                num_proc=self.distributed_state.num_processes,
+                desc="Rescaling (degenerate case: identical scores)",
+            )
 
         def transform_reward(example: Dict[str, Any]) -> Dict[str, Any]:
             score = example["scores"]
-            if bias_correction is not None:
-                score = score + bias_correction
-            if scale_factor is not None:
-                score = score / scale_factor
+            scaled_score = (score - score_min) / (score_max - score_min)
+            # Ensure final range is strictly within [0,1]
+            scaled_score = max(0.0, min(1.0, scaled_score))
+            return {"scores": float(scaled_score)}
 
-            if clip is not None:
-                score = torch.clip(torch.tensor(score).float(), -clip, clip)
-
-            return {
-                "scores": (
-                    score.item() if isinstance(score, torch.Tensor) else float(score)
-                )
-            }
-
-        if "scores" in episodes.column_names and any(
-            val is not None for val in [bias_correction, scale_factor, clip]
-        ):
-            episodes = episodes.map(
-                transform_reward,
-                num_proc=self.distributed_state.num_processes,
-                desc="Rescaling and clipping scores (if needed)",
-            )
-
+        # Apply the transform
+        episodes = episodes.map(
+            transform_reward,
+            num_proc=self.distributed_state.num_processes,
+            desc="Min-max scaling 'scores' to [0,1]",
+        )
         return episodes
 
     def _log_episodes_metrics(self, episodes: Dataset) -> Optional[float]:
@@ -388,6 +384,10 @@ class BaseTrainer(ABC):
                 critic_values += values_without_query
 
         scores = np.array(scores)
+
+        logger.info(f"************ SCORES *********************")
+        logger.info(f"logged scores {scores}")
+
         response_lengths = np.array(response_lengths)
 
         actor_logprobs = np.array(actor_logprobs)
