@@ -20,9 +20,10 @@ from relign.utils.trainer import prepare_data_loader_for_training, masked_mean
 
 from relign.algorithms.grpo.data_collator import (
     GRPODataCollator,
-    # GroupedBatchSampler,
     COLUMN_REF_SHIFTED_LOGPS,
+    COLUMN_ACTOR_SHIFTED_LOGPS
 )
+
 
 from relign.utils.logging import get_logger
 
@@ -79,7 +80,7 @@ class GRPOParams:
     """
 
     adap_kl_ctrl: bool = True
-    init_kl_coef: Optional[float] = 0.2
+    init_kl_coef: Optional[float] = 0.4
     kl_penalty: Literal["kl", "abs", "mse", "full", "control_variate"] = "kl"
     kl_penalty_loss_type: Optional[Literal["kl", "abs", "mse", "control_variate"]] = (
         None
@@ -112,6 +113,57 @@ class GRPOParams:
             self.whiten_advantages and self.grayen_advantages
         ), "Either whiten or grayen advantages, not both."
 
+class DeepSpeedRunningMoments:
+    def __init__(self, force_no_sync=False):
+        """
+        Calculates the running mean and standard deviation of a data stream. Reference:
+        https://github.com/OpenLMLab/MOSS-RLHF/blob/40b91eb2f2b71b16919addede0341d2bef70825d/utils.py#L75
+        """
+        self.mean = 0
+        self.std = 1
+        self.var = 1
+        self.count = 1e-24
+        self.force_no_sync = force_no_sync
+
+        if self.force_no_sync:
+            from deepspeed import comm as dist
+
+            self.dist = dist
+        else:
+            self.dist = None
+
+        self.device = None
+
+    @torch.no_grad()
+    def update(self, xs: torch.Tensor) -> Tuple[float, float]:
+        """
+        Updates running moments from batch's moments computed across ranks
+        """
+        if not self.force_no_sync and self.dist.is_initialized():
+            raise NotImplementedError()
+        else:
+            xs_count = xs.numel()
+            xs_var, xs_mean = torch.var_mean(xs, unbiased=False)
+
+        xs_mean, xs_var = xs_mean.float(), xs_var.float()
+
+        delta = xs_mean - self.mean
+        tot_count = self.count + xs_count
+
+        new_sum = xs_var * xs_count
+        # correct old_sum deviation accounting for the new mean
+        old_sum = self.var * self.count + delta**2 * self.count * xs_count / tot_count
+        tot_sum = old_sum + new_sum
+
+        self.mean += delta * xs_count / tot_count
+        self.var = tot_sum / tot_count
+        self.std = (self.var * tot_count / (tot_count - 1)).float().sqrt()
+        self.count = tot_count
+
+        return (
+            xs_mean.item(),
+            (xs_var * xs_count / (xs_count - 1)).float().sqrt().item(),
+        )
 
 def get_model_hash(model):
     """Small helper function that returns the hash of a models weights"""
@@ -133,6 +185,7 @@ class GRPOTrainer(BaseTrainer):
         self._set_process_log_level(logger)
         self.latest_actor_weights_hash = None
         self.checkpoint_path_to_load = None
+        self.running_scores = DeepSpeedRunningMoments(force_no_sync=True)
 
     def step(self, episodes: EpisodeDataset) -> None:
         """
@@ -140,18 +193,20 @@ class GRPOTrainer(BaseTrainer):
         Each updatestep can rum multiple epochs of optimization.
         """
 
-        episodes = self._filter_episodes(episodes)
-        episodes = self._rescale_and_clip_scores(episodes)
-        episodes = self._hydrate_ref_log_probs(
-            episodes, column_name=COLUMN_REF_SHIFTED_LOGPS
-        )
-
         self.policy.init_actor_engine_if_needed(
             global_batch_size=self.global_batch_size,
             per_device_batch_size=self.per_device_batch_size,
             gradient_accumulation_steps=self.gradient_accumulation_steps,
             total_num_training_steps=self.total_num_training_steps,
         )
+
+        ###########################
+        #  epiosde preprocessing  #
+        ###########################
+        episodes = self._filter_episodes(episodes)
+        episodes = self._rescale_and_clip_scores(episodes)
+        episodes = self._compute_group_based_advantages(episodes)
+        episodes = self._hydrate_episodes(episodes)
 
         # Initilaize the hashes if they are none
         if self.latest_actor_weights_hash is None:
@@ -321,109 +376,7 @@ class GRPOTrainer(BaseTrainer):
         logger.info(f"Latest policy path: {current_policy_checkpoint_path}")
         # Point this to the actors hf_pretrained for the inference / evaluation class
         return current_policy_checkpoint_path / "hf_pretrained"
-
-    def _hydrate_ref_log_probs(
-        self, episodes: Dataset, column_name: str = COLUMN_REF_SHIFTED_LOGPS
-    ) -> Dataset:
-        logger.info("Computing refrence model logprobs")
-
-        with_ref_log_probs_path = (
-            self.project_root_dir
-            / "trainer"
-            / f"episodes__iter{self.state.iteration:04d}"
-            / "w_ref_logp"
-        )
-
-        self.policy.init_reference_engine_if_needed(
-            self.global_batch_size,
-            self.per_device_batch_size,
-            self.gradient_accumulation_steps,
-            self.total_num_training_steps,
-        )
-
-        ## update the episodes
-        data_loader = prepare_data_loader_for_inference(
-            episodes,
-            per_device_batch_size=self.per_device_batch_size,
-            data_loader_kwargs={
-                "collate_fn": GRPODataCollator(),
-                "num_workers": self.dataloader_num_workers,
-                "pin_memory": self.dataloader_pin_memory,
-            },
-        )
-
-        self.policy.reference.eval()  # put the referenc emodel in non-training mode
-        dist.barrier()
-
-        ref_log_probs_list = []
-        for inputs in tqdm(
-            data_loader,
-            desc="Computing reference log probs",
-            disable=not self._is_main_process(),
-        ):
-            with torch.no_grad():
-                # Asume every sequence is padded from the right
-                # noinspection DuplicatedCode
-                assert torch.all(inputs["attention_mask"][:, 0] == 1)
-                assert inputs["input_ids"].shape[0] == self.per_device_batch_size, (
-                    f"We expect on all processes to have the same batch size of "
-                    f"{self.per_device_batch_size}."
-                )
-
-                inputs = {
-                    k: v.to(self.policy.reference.device) for k, v in inputs.items()
-                }
-
-                # Compute the sequence lengths as we need to extract
-                # the log probs of the non-padded tokens
-                seq_lengths = inputs["attention_mask"].sum(dim=1).detach().clone()
-                seq_lengths = seq_lengths.unsqueeze(1)  # Shape: (batch_size, 1)
-
-                # Compute the log probabilities for each token
-                outputs = self.policy.forward_reference(
-                    input_ids=inputs["input_ids"],
-                    attention_mask=inputs["attention_mask"],
-                    labels=inputs["labels"],
-                    return_all_logp=True,
-                )
-
-                logps = outputs.all_logp.detach()
-                assert logps.shape[1] == inputs["input_ids"].shape[1] - 1
-
-                seq_lengths = seq_lengths.to(self.policy.reference.device)
-                seq_lengths = gather(seq_lengths).cpu()
-                logps = gather(
-                    pad_across_processes(logps, dim=1, pad_index=0.0, pad_first=False)
-                ).cpu()
-
-                assert (
-                    logps.shape[0]
-                    == inputs["input_ids"].shape[0] * dist.get_world_size()
-                )
-
-                # Convert 2d tensors to a list of lists
-                logps_seq_lengths = seq_lengths - 1
-                for i, seq_len in enumerate(logps_seq_lengths.squeeze().tolist()):
-                    assert seq_len <= logps.shape[1]
-                    ref_log_probs_list.append(logps[i, :seq_len].tolist())
-
-        ref_log_probs_list = ref_log_probs_list[
-            : len(episodes)
-        ]  # remove any extra log probs that were added due to global paddingS
-
-        with self.distributed_state.main_process_first():
-            episodes = episodes.add_column(name=column_name, column=ref_log_probs_list)
-        if self._is_main_process():
-            episodes.save_to_disk(str(with_ref_log_probs_path))
-        self.distributed_state.wait_for_everyone()
-
-        self.policy.destroy_reference_engine_if_not_cached()
-        del episodes
-        release_memory()
-
-        episodes = Dataset.load_from_disk(str(with_ref_log_probs_path))
-        return episodes
-
+    
     def _epoch_step(self, inputs: dict) -> dict:
         """
         One iteration step of your GRPO training.
@@ -442,10 +395,10 @@ class GRPOTrainer(BaseTrainer):
 
         # Gather shapes
         input_ids = inputs["input_ids"]  # (B, seq_len)
-        attention_mask = inputs["attention_mask"]
+        groups = inputs["group_ids"]  # shape (B,)
         labels = inputs["labels"]
+        attention_mask = inputs["attention_mask"]
         advantages = inputs["advantages"]  # shape (B,)
-        groups = inputs["group"]  # shape (B,)
         len_query_token_ids = inputs["len_query_token_ids"]  # shape (B,)
         len_response_token_ids = inputs["len_response_token_ids"]  # shape (B,)
 
@@ -492,6 +445,7 @@ class GRPOTrainer(BaseTrainer):
                 model_inputs=model_inputs,
                 shifted_labels_mask=shifted_labels_mask,
                 ref_logprobs=inputs[COLUMN_REF_SHIFTED_LOGPS],
+                old_logprobs=inputs[COLUMN_ACTOR_SHIFTED_LOGPS],
                 advantages=advantages,
                 trainer_hparams=self.trainer_hparams,
             )
@@ -524,6 +478,64 @@ class GRPOTrainer(BaseTrainer):
             metrics["kls"] = (kls * shifted_labels_mask).sum(dim=1).mean().detach()
 
         return metrics
+
+    def _compute_group_based_advantages(self, episodes: Dataset) -> Dataset:
+        """
+        Computes group-level mean and std of `scores` and attaches
+        normalized advantages to each entry in `episodes`.
+        We assume each row in `episodes` has a "group" and a "scores"
+        field.
+        """
+        import numpy as np
+        from collections import defaultdict
+
+        # --- Gather the group -> scores for each row ---
+        group2scores = defaultdict(list)
+        # Just to ensure the queries are identical within a group if you need that:
+        group2queries = defaultdict(list)
+
+        for i in range(len(episodes)):
+            row = episodes[i]
+            group_val = row["group"]
+            score_val = row["scores"]
+            group2scores[group_val].append(score_val)
+            group2queries[group_val].append(row["query_token_ids"])
+
+        # (Optional) Debug log
+        logger.info(f"Number of unique groups: {len(group2queries)}")
+        for group_val, q_list in group2queries.items():
+            logger.info(f"Group '{group_val}' has {len(q_list)} episodes.")
+            # If needed, check that all queries in the same group are identical
+            first_query = q_list[0]
+            for q_idx, q in enumerate(q_list[1:], start=1):
+                assert q == first_query, (
+                    f"Mismatch found in query_token_ids within group '{group_val}'. "
+                    f"Episode {q_idx} differs from the first episode."
+                )
+
+        # --- Compute mean/std for each group ---
+        group2meanstd = {}
+        for group_val, score_list in group2scores.items():
+            arr = np.array(score_list, dtype=np.float32)
+            mean = arr.mean()
+            std = arr.std()
+            group2meanstd[group_val] = (mean, std)
+
+        # --- Assign the normalized score as the "advantages" field for each entry ---
+        new_advantages = []
+        for i in range(len(episodes)):
+            row = episodes[i]
+            g = row["group"]
+            mean, std = group2meanstd[g]
+            if std < 1e-12:
+                adv = 0.0
+            else:
+                adv = (row["scores"] - mean) / float(std)
+            new_advantages.append(adv)
+
+        # Now we add "advantages" as a new column to the dataset
+        episodes = episodes.add_column("advantages", new_advantages)
+        return episodes
 
     def _update_metrics(
         self,
@@ -628,7 +640,6 @@ class GRPOTrainer(BaseTrainer):
 
         # Add "train/" prefix for clarity.
         logs = {f"train/{k}": v for k, v in logs.items()}
-        logger.info(f"logs {logs}")
 
         self._cloud_log({**logs, "train/global_step": self.state.global_step})
 
@@ -657,3 +668,216 @@ class GRPOTrainer(BaseTrainer):
         "critic/mse",
         "critic/clip_frac",
     ]
+
+    def _hydrate_episodes(self, episodes: Dataset) -> Dataset:
+        """
+        Takes the collated dataset and hydrates it with the
+        logprobs and values under the current policy parameters.
+        These will be the baseline logprobs and values i.e., pi_old(a|s)
+        """
+        with_actor_log_probs_path = (
+            self.project_root_dir
+            / "trainer"
+            / f"episodes__iter{self.state.iteration:04d}"
+            / "w_actor_log_probs"
+        )
+        episodes = self._hydrate_log_probs(episodes)
+
+        if self._is_main_process():
+            episodes.save_to_disk(str(with_actor_log_probs_path))
+        self.distributed_state.wait_for_everyone()
+
+        del episodes
+        release_memory()
+
+        episodes = Dataset.load_from_disk(str(with_actor_log_probs_path))
+
+        with_ref_log_probs_path = (
+            self.project_root_dir
+            / "trainer"
+            / f"episodes__iter{self.state.iteration:04d}"
+            / "w_ref_log_probs"
+        )
+
+        episodes = self._hydrate_ref_log_probs(episodes)
+        if self._is_main_process():
+            episodes.save_to_disk(str(with_ref_log_probs_path))
+        self.distributed_state.wait_for_everyone()
+
+        del episodes
+        release_memory()
+
+        episodes = Dataset.load_from_disk(str(with_ref_log_probs_path))
+        return episodes
+
+    def _hydrate_log_probs(
+        self, episodes: Dataset, column_name: str = COLUMN_ACTOR_SHIFTED_LOGPS
+    ) -> Dataset:
+        """
+        Compute logprobs under the current (actor) policy and add them to the dataset.
+        """
+        # Create a distributed data loader such that the order of
+        # episodes is preserved when batches are distributed across multiple processes.
+        data_loader = prepare_data_loader_for_inference(
+            episodes,
+            per_device_batch_size=self.per_device_batch_size,
+            data_loader_kwargs={
+                "collate_fn": GRPODataCollator(),
+                "num_workers": self.dataloader_num_workers,
+                "pin_memory": self.dataloader_pin_memory,
+            },
+        )
+
+        # Switch actor to eval mode before doing inference
+        self.policy.actor.eval()
+        dist.barrier()
+
+        list_of_log_probs = []
+        for inputs in tqdm(
+            data_loader, desc="Computing log probs", disable=not self._is_main_process()
+        ):
+            with torch.no_grad():
+                assert torch.all(
+                    inputs["attention_mask"][:, 0] == 1
+                ), "Expected first token to be unmasked (attention_mask=1)."
+                assert inputs["input_ids"].shape[0] == self.per_device_batch_size, (
+                    f"We expect on all processes to have the same batch size of "
+                    f"{self.per_device_batch_size}."
+                )
+
+                # Move inputs to the actor device
+                inputs = {k: v.to(self.policy.actor.device) for k, v in inputs.items()}
+
+                seq_lengths = inputs["attention_mask"].sum(dim=1).detach().clone()
+                seq_lengths = seq_lengths.unsqueeze(1)  # Shape: (batch_size,
+
+                # Forward pass on actor to get log probabilities for each token
+                outputs = self.policy.forward_actor(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    labels=inputs["labels"],
+                    return_all_logp=True,
+                    trainer_hparams=self.trainer_hparams,
+                )
+                logps = outputs.all_logp.detach()
+                assert logps.shape[1] == inputs["input_ids"].shape[1] - 1
+
+                # Check that seq_lengths is indeed on CUDA
+                seq_lengths = seq_lengths.to(self.policy.actor.device)
+                seq_lengths = gather(seq_lengths).cpu()
+                logps = pad_across_processes(
+                    logps, dim=1, pad_index=0.0, pad_first=False
+                )
+                logps = gather(logps).cpu()
+
+                assert (
+                    logps.shape[0]
+                    == inputs["input_ids"].shape[0] * dist.get_world_size()
+                )
+
+                # Convert 2D tensors to a list of lists
+                logps_seq_lengths = seq_lengths - 1
+                for i, seq_len in enumerate(logps_seq_lengths.squeeze().tolist()):
+                    assert (
+                        seq_len <= logps.shape[1]
+                    ), f"seq_len={seq_len} is out of bounds for logps dim={logps.shape[1]}"
+                    list_of_log_probs.append(logps[i, :seq_len].tolist())
+
+        # Remove any extra log probs that were added due to global padding
+        list_of_log_probs = list_of_log_probs[: len(episodes)]
+
+        # Safely add the new column only once on the main process
+        with self.distributed_state.main_process_first():
+            episodes = episodes.add_column(name=column_name, column=list_of_log_probs)
+
+        return episodes
+
+    def _hydrate_ref_log_probs(
+        self, episodes: Dataset, column_name: str = COLUMN_REF_SHIFTED_LOGPS
+    ) -> Dataset:
+        logger.info("Computing refrence model logprobs")
+
+        self.policy.init_reference_engine_if_needed(
+            self.global_batch_size,
+            self.per_device_batch_size,
+            self.gradient_accumulation_steps,
+            self.total_num_training_steps,
+        )
+
+        ## update the episodes
+        data_loader = prepare_data_loader_for_inference(
+            episodes,
+            per_device_batch_size=self.per_device_batch_size,
+            data_loader_kwargs={
+                "collate_fn": GRPODataCollator(),
+                "num_workers": self.dataloader_num_workers,
+                "pin_memory": self.dataloader_pin_memory,
+            },
+        )
+
+        self.policy.reference.eval()  # put the referenc emodel in non-training mode
+        dist.barrier()
+
+        ref_log_probs_list = []
+        for inputs in tqdm(
+            data_loader,
+            desc="Computing reference log probs",
+            disable=not self._is_main_process(),
+        ):
+            with torch.no_grad():
+                # Asume every sequence is padded from the right
+                # noinspection DuplicatedCode
+                assert torch.all(inputs["attention_mask"][:, 0] == 1)
+                assert inputs["input_ids"].shape[0] == self.per_device_batch_size, (
+                    f"We expect on all processes to have the same batch size of "
+                    f"{self.per_device_batch_size}."
+                )
+
+                inputs = {
+                    k: v.to(self.policy.reference.device) for k, v in inputs.items()
+                }
+
+                # Compute the sequence lengths as we need to extract
+                # the log probs of the non-padded tokens
+                seq_lengths = inputs["attention_mask"].sum(dim=1).detach().clone()
+                seq_lengths = seq_lengths.unsqueeze(1)  # Shape: (batch_size, 1)
+
+                # Compute the log probabilities for each token
+                outputs = self.policy.forward_reference(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    labels=inputs["labels"],
+                    return_all_logp=True,
+                )
+
+                logps = outputs.all_logp.detach()
+                assert logps.shape[1] == inputs["input_ids"].shape[1] - 1
+
+                seq_lengths = seq_lengths.to(self.policy.reference.device)
+                seq_lengths = gather(seq_lengths).cpu()
+                logps = gather(
+                    pad_across_processes(logps, dim=1, pad_index=0.0, pad_first=False)
+                ).cpu()
+
+                assert (
+                    logps.shape[0]
+                    == inputs["input_ids"].shape[0] * dist.get_world_size()
+                )
+
+                # Convert 2d tensors to a list of lists
+                logps_seq_lengths = seq_lengths - 1
+                for i, seq_len in enumerate(logps_seq_lengths.squeeze().tolist()):
+                    assert seq_len <= logps.shape[1]
+                    ref_log_probs_list.append(logps[i, :seq_len].tolist())
+
+        ref_log_probs_list = ref_log_probs_list[
+            : len(episodes)
+        ]  # remove any extra log probs that were added due to global paddingS
+
+        with self.distributed_state.main_process_first():
+            episodes = episodes.add_column(name=column_name, column=ref_log_probs_list)
+
+        self.policy.destroy_reference_engine_if_not_cached()
+        release_memory()
+
+        return episodes

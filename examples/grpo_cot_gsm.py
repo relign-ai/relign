@@ -80,21 +80,21 @@ def grpo_gsm(cfg, local_rank=None):
     )
 
     # --------- Inference (Chain-of-thought) Strategy --------- #
-    max_seq_length = 2048
-    num_episodes_per_iteration = 512
-    num_rollouts_per_sample = 8  # group size
+    max_seq_length = 2048 
+    num_episodes_per_iteration = 512 
+    num_rollouts_per_sample = 16 # group size
 
     # num groups
     num_dataset_samples_per_iteration = (
         num_episodes_per_iteration / num_rollouts_per_sample
     )
-    target_batch_size = 16
+    target_batch_size = 64 
     num_iterations = 650
-    sampling_temperature = 0.6
+    sampling_temperature = 0.9
     num_epoch_per_iterations = 2
     gradient_accumulation_steps = 1
-    max_concurrent_programs = 256
-    max_concurrent_generations = 128
+    max_concurrent_programs = 512 
+    max_concurrent_generations = 256 
     guidance_llm_cls = OpenAIVLLM
     guidance_llm_kwargs = {
         "api_key": "EMPTY",
@@ -106,7 +106,7 @@ def grpo_gsm(cfg, local_rank=None):
     # ---------- Node Expansion ---------- #
     answer_extractor = IdentityAnswerExtractor(node_key_name="text")
     program = """{{prefix}}{{gen "chain_of_thought" temperature={temperature} top_p={top_p} max_tokens={max_tokens} save_stop_text="stop_text" stop={stop} n={num_samples}}}"""
-    branch_factors = [{"depth": 0, "branch_factor": 2}]
+    branch_factors = [{"depth": 0, "branch_factor": num_rollouts_per_sample}]
     node_expander = EfficientIIDExpander(
         branch_factor_strategy=ListBranchFactor(branch_factors=branch_factors),
         program=program,
@@ -222,7 +222,7 @@ def grpo_gsm(cfg, local_rank=None):
     algorithm_kwargs = {
         "num_iterations": num_iterations,
         "verbose": 1,
-        "evaluation_freq": 10,
+        "evaluation_freq": 4,
         "checkpoint_freq": 10,
         "evaluator_cls": evaluator_cls,
         "evaluator_kwargs": evaluator_kwargs,

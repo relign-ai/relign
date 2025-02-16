@@ -17,6 +17,7 @@ from relign.tasks import Task, GSM8K
 from relign.tasks.math import MATH
 from relign.tokenization import Tokenizer
 from relign.utils.logging import get_logger
+import hashlib
 
 logger = get_logger(__name__)
 
@@ -282,36 +283,45 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
         )
         self.reward_entire_span = reward_entire_span  # Wether we want to reward the entire span between reasoning tokens
 
+    @staticmethod
+    def _compute_group_id(instance_idx: int, instance_data: str = "") -> str:
+        """
+        Create a shortened hash for uniqueness across possible distributed devices.
+
+        :param instance_idx: The index of the instance in the dataset iteration.
+        :param instance_data: Any extra string data from the instance to help ensure uniqueness.
+        :return: A short string hash ID.
+        """
+        unique_str = f"{instance_idx}_{instance_data}"
+        return hashlib.md5(unique_str.encode("utf-8")).hexdigest()[:8]
+
     def _generate_episodes(
         self, inference_results: Dataset, iteration: int
     ) -> List[Union[Dict[str, Any], Episode]]:
         episodes = []
         metrics = {}
+
         for i, instance in enumerate(inference_results):
             tree = json.loads(instance["_treetune__reasoning_tree"])
             paths = self.extract_paths_from_tree(tree)
 
+            # Generate a unique group ID for this entire instance
+            # Optionally, incorporate extra fields from `instance`
+            # e.g. instance["id"] or any field that helps uniqueness
+
+            query = instance['query']
+            group_id = self._compute_group_id(i, query)
+
             all_rewards = []
             all_responses = []
+
             for path in paths:
                 # noinspection DuplicatedCode
                 assert len(path["node_chain"]) == 2, "Does not support multi-hop paths."
-
                 finish_reason = path["node_chain"][-1]["finish_reason"]
                 query_text = path["node_chain"][0]["text"]
                 full_text = path["node_chain"][-1]["full_text"]
                 response_text = full_text[len(query_text) :]
-
-                ################################
-                #    Exctract reasoning steps  #
-                ################################
-                # try:
-                #     #TODO: fix this
-                #     reasoning_steps = self._extract_reasoning_steps(response_text)
-                #     metrics.setdefault("num_reasoning_steps", []).append(reasoning_steps)
-                # except Exception as e:
-                #     metrics.setdefault("parse_failed", []).append(True)
-                #     reasonong_steps = 0.0  # Default/fallback to avoid unbound variable
 
                 ################################
                 #      Get Format Rewards      #
@@ -377,7 +387,7 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                     "query_token_ids": query_token_ids,
                     "response_token_ids": response_token_ids,
                     "scores": float(reward) + float(format_rewards),
-                    "group": int(i),
+                    "group": group_id,
                 }
 
                 ############################################
@@ -400,6 +410,9 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
 
                 episodes.append(episode)
                 all_rewards.append(float(reward))
+
+            # Accumulate all the textual responses from this inference result
+            # all_collected_responses.extend(all_responses)
 
             if len(all_rewards) > 0:
                 once_hit = any([r == 1.0 for r in all_rewards])
@@ -441,32 +454,35 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
                 metrics["trajectory_bleu"]
             )
 
+        if "format_rewards" in metrics:
+            metrics["format_rewards"] = sum(metrics["format_rewards"]) / len(
+                metrics["format_rewards"]
+            )
+
+        if "answer_rewards" in metrics:
+            metrics["answer_rewards"] = sum(metrics["answer_rewards"]) / len(
+                len(metrics["answer_rewards"])
+            )
+
         if len(metrics) > 0:
             logs = {f"episodes_metric/{k}": v for k, v in metrics.items()}
             if self.cloud_log is not None:
                 self.cloud_log({**logs, "train/global_iteration": iteration})
 
+        if episodes:
+            mean_reward = np.mean([episode.scores for episode in episodes])
+            logger.info(
+                f"Mean reward for all {len(episodes)} out episodes at iteration: {iteration} is {mean_reward}"
+            )
+
         return episodes
 
-    def _extract_reasoning_steps(self, response_text: str) -> Tuple[int, List[int]]:
+    def _extract_format_rewards(self, response_text: str) -> float:
         """
-        Computes the number of reasoning steps in the response text, along
-        with the character of the indices of the FINAL token of each reasoning step
-        <think>.... </think> will give the index of the last character of the </think>
+        Some demonstration method that returns a format reward. In reality,
+        you'd implement your logic to check the model response's format.
         """
-        try:
-            indices = self.task.split_solution_into_intermediate_steps(response_text)
-        except Exception as e:
-            logger.info(f"Error! in split solution into intermediates {e}")
-        logger.info(f"found indices = {indices}")
-        return len(indices)
-
-    def _extract_format_rewards(self, response_text: str) -> Tuple[int, List[int]]:
-        """
-        check whether the model adhered to the response format
-        """
-        format_rewards = self.task.get_format_rewards(response_text)
-        return format_rewards
+        return self.task.get_format_rewards(response_text)
 
     def _compute_process_reward_tokens(
         self,

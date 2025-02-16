@@ -16,145 +16,34 @@ COLUMN_VALUES = "critic_values"
 
 logger = get_logger(__name__)
 
-# class GroupedBatchSampler(Sampler):
-#     """
-#     A sampler that groups samples by a specified 'group' column and returns
-#     items from one or more groups in each iteration (step).
-
-#     Args:
-#         dataset (Dataset or HF Dataset): Your dataset object
-#         group_column (str): The name of the column that indicates the group
-#         shuffle_groups (bool): Whether to shuffle the order of groups
-#         groups_per_step (int): How many groups to sample in one iteration. Defaults to 1.
-#     """
-
-#     def __init__(
-#         self,
-#         dataset,
-#         group_column: str,
-#         shuffle_groups: bool = True,
-#         groups_per_step: int = 1,
-#     ):
-#         super().__init__(data_source=dataset)
-#         self.dataset = dataset
-#         self.group_column = group_column
-#         self.shuffle_groups = shuffle_groups
-#         self.groups_per_step = groups_per_step
-
-#         # Build a mapping: group -> list of indices
-#         self.group2indices = defaultdict(list)
-#         for idx in range(len(dataset)):
-#             group_key = dataset[idx][group_column]
-#             self.group2indices[group_key].append(idx)
-
-#         # Flatten out just the group keys
-#         self.all_groups = list(self.group2indices.keys())
-
-#     def __iter__(self):
-#         """
-#         Yields indices of one or more groups per iteration, as a single batch.
-#         """
-#         # Potentially shuffle the list of group keys
-#         if self.shuffle_groups:
-#             random.shuffle(self.all_groups)
-
-#         # Collect groups_per_step groups into one batch
-#         for i in range(0, len(self.all_groups), self.groups_per_step):
-#             combined_indices = []
-#             group_slice = self.all_groups[i : i + self.groups_per_step]
-
-#             # Collect all sample indices from these groups
-#             for group in group_slice:
-#                 combined_indices.extend(self.group2indices[group])
-
-#             # Yield them as one batch
-#             yield combined_indices
-
-#     def __len__(self):
-#         """
-#         The number of batches is the ceiling of (total groups / groups_per_step).
-#         """
-#         return math.ceil(len(self.all_groups) / self.groups_per_step)
 
 class GRPODataCollator:
     """
     Collates the given data instances into a batch.
-    If the instances include both a group and a scores field,
-    group-level normalization is applied to the scores — the normalized
-    score is then attached as the "advantages" for that instance.
     
-    Note: The original "advantages" field (which was expected to be a token-level array)
-    is replaced by a single normalized, per-instance score.
+    NOTE: We no longer compute group-based means/stdev here. 
+    Instead, advantages (if needed) are precomputed & stored in each entry.
     """
 
     def __call__(self, instances: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        # 1. Identify the longest sequence length in the batch.
+        # Identify the longest sequence length in the batch.
         max_seq_length = max(
             len(instance["query_token_ids"]) + len(instance["response_token_ids"])
             for instance in instances
         )
 
-        # 2. Determine which optional fields are present.
+        # Check which optional fields are present
         has_group = "group" in instances[0] and instances[0]["group"] is not None
-        has_scores = "scores" in instances[0] and instances[0]["scores"] is not None
         has_process_rewards = (
             "process_rewards" in instances[0]
             and instances[0]["process_rewards"] is not None
         )
         has_ref_shifted_logps = COLUMN_REF_SHIFTED_LOGPS in instances[0]
+        has_actor_logps = COLUMN_ACTOR_SHIFTED_LOGPS in instances[0]
+        # We now rely on `_compute_group_based_advantages` for advantage calculation:
+        has_advantages = ("advantages" in instances[0]) and (instances[0]["advantages"] is not None)
 
-        # 3. Compute normalized (group-based) advantages if possible.
-        # We always compute normalized advantage if both group and scores exist,
-        # and then use it in the batch under the "advantages" key.
-        if has_group and has_scores:
-            group2scores = defaultdict(list)
-            # Gather raw scores by group.
-            for inst in instances:
-                group_val = inst["group"]
-                score_val = inst["scores"]
-                group2scores[group_val].append(score_val)
-
-            # Compute the mean and std for each group.
-            group2meanstd = {}
-            for group_val, score_list in group2scores.items():
-                arr = np.array(score_list, dtype=np.float32)
-                mean = arr.mean()
-                std = arr.std()
-                group2meanstd[group_val] = (mean, std)
-
-            # Assign the normalized score as the "advantages" field for each instance.
-            for inst in instances:
-                g = inst["group"]
-                mean, std = group2meanstd[g]
-                inst["advantages"] = 0.0 if std < 1e-12 else (inst["scores"] - mean) / std
-
-            # We now always want to include advantages as computed above.
-            has_advantages = True
-        else:
-            # Otherwise, fallback on any preexisting "advantages" field.
-            has_advantages = "advantages" in instances[0] and instances[0]["advantages"] is not None
-
-        def prepare_shifted_logps(shifted_logps_with_query, query_len, response_len):
-            expected_len = query_len + response_len - 1
-            assert len(shifted_logps_with_query) == expected_len, (
-                "We assume the ref. log probs are provided for the entire sequence "
-                f"(query + response) but got {len(shifted_logps_with_query)} instead of {expected_len}"
-            )
-
-            shifted_logps_without_query = shifted_logps_with_query[query_len - 1 :]
-            assert len(shifted_logps_without_query) == response_len
-
-            n_pads_at_end = (max_seq_length - 1) - len(shifted_logps_with_query)
-            shifted_logs = (
-                [pad_logp] * (query_len - 1)
-                + shifted_logps_without_query
-                + [pad_logp] * n_pads_at_end
-            )
-            return shifted_logs
-
-        pad_logp = -float(1e9)  # A placeholder for padded log probabilities
-
-        # 4. Initialize our batch dictionary.
+        # We'll collate into these lists:
         batch = {
             "input_ids": [],
             "labels": [],
@@ -166,25 +55,42 @@ class GRPODataCollator:
         if has_group:
             batch["group"] = []
         if has_advantages:
-            batch["advantages"] = []  # Now holds the normalized score per instance.
+            batch["advantages"] = []
         if has_process_rewards:
             batch["process_rewards"] = []
-        if has_scores:
-            batch["scores"] = []
         if has_ref_shifted_logps:
             batch[COLUMN_REF_SHIFTED_LOGPS] = []
+        if has_actor_logps:
+            batch[COLUMN_ACTOR_SHIFTED_LOGPS] = []
 
-        # 5. Padding/label specifics.
-        pad_token_id = 0  # We'll mask it out later.
-        pad_label = -100  # Default ignore index in Hugging Face training setups.
+        pad_token_id = 0
+        pad_label = -100
+        pad_logp = -float(1e9)
 
-        # 6. Build out each field in the batch.
+        def prepare_shifted_logps(shifted_logps_with_query, query_len, response_len):
+            expected_len = query_len + response_len - 1
+            assert len(shifted_logps_with_query) == expected_len, (
+                "We assume the ref. log probs are provided for the entire sequence "
+                f"(query + response) but got {len(shifted_logps_with_query)} instead of {expected_len}"
+            )
+            # remove the query portion except the last token
+            shifted_logps_without_query = shifted_logps_with_query[query_len - 1 :]
+            assert len(shifted_logps_without_query) == response_len
+            n_pads_at_end = (max_seq_length - 1) - len(shifted_logps_with_query)
+            # Fill in alignment
+            shifted_logs = (
+                [pad_logp] * (query_len - 1)
+                + shifted_logps_without_query
+                + [pad_logp] * n_pads_at_end
+            )
+            return shifted_logs
+
+        # Build each field in the batch
         for instance in instances:
-            query_token_ids = instance["query_token_ids"]
-            response_token_ids = instance["response_token_ids"]
+            query_ids = instance["query_token_ids"]
+            response_ids = instance["response_token_ids"]
 
-            # Construct input_ids and attention_mask.
-            input_ids = query_token_ids + response_token_ids
+            input_ids = query_ids + response_ids
             attention_mask = [1] * len(input_ids)
             num_pad_at_end = max_seq_length - len(input_ids)
 
@@ -192,43 +98,71 @@ class GRPODataCollator:
             attention_mask += [0] * num_pad_at_end
 
             labels = (
-                [pad_label] * len(query_token_ids)
-                + response_token_ids
+                [pad_label] * len(query_ids)
+                + response_ids
                 + [pad_label] * num_pad_at_end
             )
 
             batch["input_ids"].append(input_ids)
             batch["attention_mask"].append(attention_mask)
             batch["labels"].append(labels)
-            batch["len_query_token_ids"].append(len(query_token_ids))
-            batch["len_response_token_ids"].append(len(response_token_ids))
+            batch["len_query_token_ids"].append(len(query_ids))
+            batch["len_response_token_ids"].append(len(response_ids))
             batch["max_seq_length"].append(max_seq_length)
 
-            # Group.
             if has_group:
                 batch["group"].append(instance["group"])
-
-            # Use the newly computed (normalized) advantage as a scalar.
             if has_advantages:
                 batch["advantages"].append(instance["advantages"])
-
-            # Process rewards.
             if has_process_rewards:
                 batch["process_rewards"].append(instance["process_rewards"])
-
-            # Original scores.
-            if has_scores:
-                batch["scores"].append(instance["scores"])
-
             if has_ref_shifted_logps:
                 shifted_ref_logps = prepare_shifted_logps(
                     instance[COLUMN_REF_SHIFTED_LOGPS],
-                    len(query_token_ids),
-                    len(response_token_ids),
+                    len(query_ids),
+                    len(response_ids),
                 )
                 assert len(shifted_ref_logps) == (max_seq_length - 1)
                 batch[COLUMN_REF_SHIFTED_LOGPS].append(shifted_ref_logps)
 
-        # 7. Convert the lists to tensors.
-        batch = {k: torch.tensor(v) for k, v in batch.items()}
+            if has_actor_logps:
+                shifted_actor_logps = prepare_shifted_logps(
+                    instance[COLUMN_ACTOR_SHIFTED_LOGPS],
+                    len(query_ids),
+                    len(response_ids),
+                )
+                assert len(shifted_actor_logps) == (max_seq_length - 1)
+                batch[COLUMN_ACTOR_SHIFTED_LOGPS].append(shifted_actor_logps)
+
+        # If we still want numeric group indices, we can just batch them as before:
+        if has_group:
+            group_strs = batch["group"]  # list of string hashes
+            unique_groups = sorted(list(set(group_strs)))
+            group2id = {g: i for i, g in enumerate(unique_groups)}
+            group_ids = [group2id[g] for g in group_strs]
+            batch["group_ids"] = group_ids
+            del batch["group"]
+
+        # Convert numeric fields to tensors
+        for key, value in list(batch.items()):
+            if (
+                isinstance(value, list)
+                and len(value) > 0
+                and isinstance(value[0], (int, float))
+            ):
+                # If any float => float tensor, else int
+                has_float = any(isinstance(v, float) for v in value)
+                dtype = torch.float if has_float else torch.long
+                # group_ids -> long
+                if key.endswith("_ids"):
+                    dtype = torch.long
+                batch[key] = torch.tensor(value, dtype=dtype)
+            elif (
+                isinstance(value, list)
+                and len(value) > 0
+                and isinstance(value[0], list)
+            ):
+                # Nested lists => token style => long
+                batch[key] = torch.tensor(value, dtype=torch.long)
+
         return batch

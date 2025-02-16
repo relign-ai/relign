@@ -358,6 +358,7 @@ class ActorPolicy(DeepSpeedPolicy):
         model_inputs: dict,
         shifted_labels_mask: torch.Tensor,
         ref_logprobs: torch.Tensor,
+        old_logprobs: torch.Tensor,
         advantages: torch.Tensor,
         trainer_hparams: dict,
         # optionally old_logprobs if needed for PPO, etc.
@@ -381,6 +382,27 @@ class ActorPolicy(DeepSpeedPolicy):
             actor_outputs.all_logp
         )  # shape (B, seq_len, vocab_size)
 
+
+        ########################
+        #   Compute the ratio  #
+        ########################
+        log_ratio = (shifted_actor_logprobs- old_logprobs) * shifted_labels_mask
+        ratio = torch.exp(log_ratio)
+
+        ###################################
+        # Compute the per token advantage #
+        ###################################
+        # shifted actor log probs is of size 16 * 1184 while advantages is of size 16.
+        # we want to do each row, ie..e, sample, times its advantage however, we get an error
+        per_token_advantages_1 = ratio * advantages.unsqueeze(1)
+
+        per_token_advantages_2 = torch.clamp(
+            ratio, 1.0 - trainer_hparams.cliprange, 1.0 + trainer_hparams.cliprange
+        ) * advantages.unsqueeze(1)
+
+        per_token_advantages = torch.min(per_token_advantages_1, per_token_advantages_2)
+
+
         #########################
         # compute KL divergence #
         #########################
@@ -389,26 +411,6 @@ class ActorPolicy(DeepSpeedPolicy):
             - (ref_logprobs - shifted_actor_logprobs)
             - 1
         )
-
-        ###################################
-        # Compute the per token advantage #
-        ###################################
-        # shifted actor log probs is of size 16 * 1184 while advantages is of size 16.
-        # we want to do each row, ie..e, sample, times its advantage however, we get an error
-        per_token_advantages = torch.exp(
-            shifted_actor_logprobs - shifted_actor_logprobs.detach()
-        ) * advantages.unsqueeze(1)
-
-        # noramlize the advantages to zero mean 1 var
-        if trainer_hparams.whiten_advantages:
-            pass
-            # per_token_advantages = masked_whiten(
-            #     per_token_advantages,
-            #     shifted_labels_mask,
-            #     distributed=True,
-            #     unbiased_variance=True,
-            # )
-            # logger.info(f"Per token advantage: {per_token_advantage}")
 
         ###################################
         #         Compute the loss        #
