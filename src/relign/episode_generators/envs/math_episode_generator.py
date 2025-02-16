@@ -300,8 +300,6 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
     ) -> List[Union[Dict[str, Any], Episode]]:
         episodes = []
         metrics = {}
-        logger.info(f" *************** NUM instances *********************")
-        logger.info(f"num instances = {len (inference_results)}")
 
         for i, instance in enumerate(inference_results):
             tree = json.loads(instance["_treetune__reasoning_tree"])
@@ -312,9 +310,7 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
             # e.g. instance["id"] or any field that helps uniqueness
 
             query = instance['query']
-            logger.info(f" query = {query}")
             group_id = self._compute_group_id(i, query)
-            logger.info(f"instance ggroup id : {group_id}")
 
             all_rewards = []
             all_responses = []
@@ -322,7 +318,6 @@ class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
             for path in paths:
                 # noinspection DuplicatedCode
                 assert len(path["node_chain"]) == 2, "Does not support multi-hop paths."
-
                 finish_reason = path["node_chain"][-1]["finish_reason"]
                 query_text = path["node_chain"][0]["text"]
                 full_text = path["node_chain"][-1]["full_text"]

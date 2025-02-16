@@ -81,7 +81,7 @@ def grpo_gsm(cfg, local_rank=None):
 
     # --------- Inference (Chain-of-thought) Strategy --------- #
     max_seq_length = 2048 
-    num_episodes_per_iteration = 1024 
+    num_episodes_per_iteration = 4096 
     num_rollouts_per_sample = 16 # group size
 
     # num groups
@@ -90,7 +90,7 @@ def grpo_gsm(cfg, local_rank=None):
     )
     target_batch_size = 64 
     num_iterations = 650
-    sampling_temperature = 0.8
+    sampling_temperature = 0.9
     num_epoch_per_iterations = 2
     gradient_accumulation_steps = 1
     max_concurrent_programs = 512 
