@@ -158,13 +158,18 @@ class TrainLoop:
             #################
             #   Checkpoint  #
             #################
-            # logger.info(
-            #     f"Rank {self.distributed_state.process_index} done with evaluation."
-            # )
-            # # Checkpointing (e.g. saving tokenizer) -- only on main process.
-            # logger.info(
-            #     f"Rank {self.distributed_state.process_index} about to checkpoint."
-            # )
+            logger.info(
+                f"Rank {self.distributed_state.process_index} done with evaluation."
+            )
+            # For now we checkpint after each evaluation
+            if iteration % self.evaluation_freq ==  0: 
+                self._checkpoint(iteration)
+
+            self.distributed_state.wait_for_everyone()
+            dist.barrier()
+            logger.info(
+                f"Rank {self.distributed_state.process_index} about to checkpoint."
+            )
 
             ##################
             #  HouseCleaning #
@@ -242,11 +247,13 @@ class TrainLoop:
         )
 
     def _checkpoint(self, iteration: int):
-        logger.info("Checkpointing models...")
-        self.trainer.policy.checkpoint(
-            self.project_root_dir / "policy" / "checkpoint" / f"policy_{iteration}.pt"
+        logger.info("Checkpointing model")
+        checkpoint_name = self.trainer.policy.get_checkpoint_format()
+        checkpoint_dir = self.project_root_dir / "policy" / "eval_model_checkpoints"
+        checkpoint_path = Path(checkpoint_dir / checkpoint_name)
+        self.trainer.policy.checkpoint_latest_policy_path(
+            checkpoint_path
         )
-        # TODO: checkpoint other parts of the train state here
 
     def _clean_episodes(self) -> None:
         if self.distributed_state.is_main_process:

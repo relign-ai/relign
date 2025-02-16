@@ -222,8 +222,8 @@ def grpo_gsm(cfg, local_rank=None):
     algorithm_kwargs = {
         "num_iterations": num_iterations,
         "verbose": 1,
-        "evaluation_freq": 4,
-        "checkpoint_freq": 10,
+        "evaluation_freq": 1,
+        "checkpoint_freq": 1,
         "evaluator_cls": evaluator_cls,
         "evaluator_kwargs": evaluator_kwargs,
     }
