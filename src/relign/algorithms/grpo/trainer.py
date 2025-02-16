@@ -80,7 +80,7 @@ class GRPOParams:
     """
 
     adap_kl_ctrl: bool = True
-    init_kl_coef: Optional[float] = 0.4
+    init_kl_coef: Optional[float] = 0.2
     kl_penalty: Literal["kl", "abs", "mse", "full", "control_variate"] = "kl"
     kl_penalty_loss_type: Optional[Literal["kl", "abs", "mse", "control_variate"]] = (
         None

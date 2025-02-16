@@ -425,14 +425,25 @@ class ActorPolicy(DeepSpeedPolicy):
         logger.info(f"\n\n *************** Loss ********************")
         logger.info(f"Loss: {pg_loss}\n\n")
 
+        # Ratio check
+        is_skipped = False
+        avg_ratio = masked_mean(ratio, shifted_labels_mask)
+        if avg_ratio.item() > trainer_hparams.ratio_threshold:
+            logger.warning(
+                f"High ratio detected: {avg_ratio.item():.2f}. Skipping this batch."
+            )
+            pg_loss = pg_loss * 0.0
+            is_skipped = True
+
         # Return
         actor_metrics = {
             "actor_loss": pg_loss.detach().cpu().item(),
+            "actor/ratio": avg_ratio.detach(),
             "kl": (kl * shifted_labels_mask).sum().detach().cpu().item(),
         }
 
         approx_ref_kl = masked_mean(kl, shifted_labels_mask).detach().cpu().item()
-        return pg_loss, False, actor_metrics, approx_ref_kl, per_token_advantages
+        return pg_loss, is_skipped, actor_metrics, approx_ref_kl, per_token_advantages
 
     def destroy_actor_engine_if_not_cached(self) -> None:
         """
