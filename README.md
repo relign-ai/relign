@@ -16,7 +16,7 @@
   </a>
 </p>
 
-relign is a fully open-sourced RL library tailored specifically for the research and development of reasoning engines. It currently supports state-of-the-art reinforcement learning algorithms like **PPO** (and soon **GRPO**!), alongside useful abstractions for Chain of Thought (CoT) and MCTS inference strategies. All these can be evaluated on popular reasoning benchmarks. 
+relign is a fully open-sourced RL library tailored specifically for the research and development of reasoning engines. It currently supports state-of-the-art reinforcement learning algorithms like **PPO** and **GRPO**, alongside useful abstractions for Chain of Thought (CoT) and MCTS inference strategies. All these can be evaluated on popular reasoning benchmarks.
 
 > **Note:** relign is alpha software—it may be buggy.
 
@@ -27,6 +27,7 @@ relign is a fully open-sourced RL library tailored specifically for the research
 - [Example](#example)
 - [Bounties](#bounties)
 - [What's Next](#whats-next)
+- [Training Runs](#training-runs)
 - [Contributing (Ranked by Urgency)](#contributing-ranked-by-urgency)
 - [Acknowledgements](#acknowledgements)
 
@@ -67,11 +68,11 @@ If you have a custom DeepSpeed config file (e.g., ds_config.json), you can also 
 
 ## Bounties
 
-Not just the models will be rewarded for their work, but more importently, our contributers. Implement bounties and we will send you relign
+Not just the models will be rewarded for their work, but more importantly, our contributors. Implement bounties and we will send you relign
 
 | Description                                                                                                   | Reward in RELIGN  |
 |---------------------------------------------------------------------------------------------------------------|-------------------|
-| Bounty 1. GRPO: implement DeepSeek's GRPO in RELIGN and train it with standard CoT inference on gsm8k math    | 250k |
+| ✅ Completed: GRPO – Implement DeepSeek's GRPO in RELIGN and train it with standard CoT inference on gsm8k math   | 250k |
 
 ### Submit My Own Bounty
 If you'd like to propose a new challenge or feature and set your own reward, go to: 
@@ -81,7 +82,7 @@ Bounty Instructions (common GitHub approach):
 1. Fork the repository.  
 2. Make your changes in a new branch.  
 3. Submit a Pull Request referencing the bounty issue.  
-4.  We will review your PR and, if merged, send the funds to your wallet.
+4. We will review your PR and, if merged, send the funds to your wallet.
 
 ---
 
@@ -95,13 +96,17 @@ Bounty Instructions (common GitHub approach):
 - **Training run Tooling**  
   Evaluations, Checkpointing, Metric monitoring (wandb/tensorflow), and Reasoning trace analysis are not yet supported but will be supported soon!
 
-- **New Algorithms (e.g., GRPO)**  
-  [Deepseek-r1](https://github.com/deepseek-ai/DeepSeek-R1) introduced a new RL algorithm, GRPO, which will soon be available in RELIGN (we plan to evaluate it as well).
+- **New Algorithms**  
+  **GRPO**, introduced by Deepseek-r1, is now available in RELIGN. We plan to continue evaluating and refining its integration.
 
 - **More Memory-Efficient Algorithm Runners**  
-  Some runs require a lot of VRAM. We aim to setup smaller  
-  scale experiments such that developers can run and train 
-  models on single-gpu machines
+  Some runs require a lot of VRAM. We aim to set up smaller scale experiments such that developers can run and train models on single-GPU machines.
+
+---
+
+## Training Runs
+
+We benchmarked **GRPO**. You can view the detailed training report [here](https://wandb.ai/darrynbiervliet/relign-02/reports/Model-realignment-with-GRPO--VmlldzoxMTM5OTYxOA?accessToken=cvgxqwdrxvfyd041j92snl69qi7di49zs26ir72g208dwmps4xdjmmuzrazbyxq6).
 
 ---
 
@@ -120,7 +125,6 @@ Bounty Instructions (common GitHub approach):
      - Trading  
      - General/Scientific Q&A  
 
-
 ---
 
 ## Acknowledgements
@@ -130,6 +134,6 @@ RELIGN builds upon and is inspired by the following works:
 - [**Guidance**](https://github.com/guidance-ai/guidance)
 - [**DeepSeek-Math**](https://github.com/deepseek-ai/DeepSeek-Math)
 - **Framework structure inspired by [Stable Baselines 3]**
-- **Special acknowledgement to [VinePPO](https://arxiv.org/abs/2410.01679)** for the MCTS + CoT approach and Deepspeed policy abstractions.
+- **Special acknowledgement to [VinePPO](https://arxiv.org/abs/2410.01679)** for the MCTS + CoT approach and DeepSpeed policy abstractions.
 
 > Thank you to all contributors for your open-source efforts!

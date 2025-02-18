@@ -67,28 +67,35 @@ class GSM8K(Task):
     def get_format_rewards(self, solution: str) -> int:
         """
         Check for proper tag-based formatting and return 1 if the format criteria are met, else 0.
+        A "well-formatted" answer must:
+          1) Contain exactly 1 opening <think> and 1 closing </think>.
+          2) The closing </think> must come *after* the opening <think>.
+          3) After the </think> (plus optional whitespace/newlines), the first non-whitespace
+             characters must be the answer prefix (e.g. "#### ").
         """
         if self.intermediate_step_tags is not None and self.match_single_think_tag:
             import re
-            # Build a pattern to find all think blocks.
-            pattern_think = rf"{re.escape(self.intermediate_step_tags[0])}.*?{re.escape(self.intermediate_step_tags[1])}"
-            think_matches = re.findall(pattern_think, solution, flags=re.DOTALL)
 
-            # Do not reward if there are zero or more than one <think> blocks.
-            if len(think_matches) != 1:
+            open_tag = self.intermediate_step_tags[0]
+            close_tag = self.intermediate_step_tags[1]
+
+            # 1) Ensure exactly one <think> and one </think>.
+            if solution.count(open_tag) != 1 or solution.count(close_tag) != 1:
                 return 0
 
-            # Check the text following the closing think tag:
-            end_tag = self.intermediate_step_tags[1]
-            end_idx = solution.rfind(end_tag)
-            suffix = solution[end_idx + len(end_tag):]
+            # 2) Ensure the single </think> comes *after* the single <think>.
+            open_idx = solution.index(open_tag)
+            close_idx = solution.index(close_tag)
+            if close_idx < open_idx:
+                return 0
 
-            # We require that after the closing tag there's only whitespace (including newlines)
-            # until the answer prefix. If not, we don't reward.
+            # 3) Check that the content after </think> has only optional whitespace/newlines
+            #    before the expected answer prefix (e.g. #### ).
+            suffix = solution[close_idx + len(close_tag) :]
             if not re.match(r'^[\s]*#### ', suffix.lstrip()):
                 return 0
 
-            # If the criteria are met, return a single reward.
+            # If the criteria are met, return the reward.
             return 1
 
         return 0

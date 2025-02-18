@@ -3,7 +3,7 @@ from textwrap import dedent
 import argparse
 from omegaconf import OmegaConf
 
-from relign.tasks import GSM8K
+from relign import GSM8K
 from relign.policies.actor_critic_policy import ActorCriticPolicy
 from relign.algorithms.train_loop import TrainLoop
 from relign.algorithms.ppo.trainer import PPOTrainer

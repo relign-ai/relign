@@ -38,10 +38,26 @@ class TestMathGroupedEpisodeGenerator:
             ## 12.0""",  # gets a reward of 0. \n## is not \####
 
             """
-            <think> we think a little bit </think> some random text
-            #### 20
-            """, # gets a reward of zero due  to some text outisde think tags thaat is not the answer
+             <think> First, we calculate how much the first kilometer will cost. 
+                That means we multiply the amount pledged for the first kilometer by 1, which gives us $10 * 1 = $10.
+                Then, for the second kilometer we multiply the amount pledged by 2, which gives us $10 * 2 = $20.
+                For the third kilometer we multiply the amount pledged by 2 once more, which gives us $10 * 2 * 2 = $40.
+                For the fourth kilometer we multiply the amount pledged by 2 three times, which gives us $10 * 2 * 2 * 2 = $80.
+                And for the fifth kilometer we multiply the amount pledged by 2 five times, which gives us $10 * 2 * 2 * 2 * 2 = $160.
+                In total, Suzanne's parents pledged $10 + $20 + $40 + $80 + $160 = $310 for the 5 kilometers she ran.
+                <think> </think>
+                </think>
+                </think>
+                </think>
+                </think>
+                </think>
+                </think>
+                </think>
+
+            #### 310
+            """, # gets a rewrad of 0.  
         ]
+        
         collected_indices = []
         for example_solution in example_solutions:
             indices = gsm8k.get_format_rewards(example_solution)
