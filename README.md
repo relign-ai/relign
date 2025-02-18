@@ -112,12 +112,6 @@ We benchmarked **GRPO**. You can view the detailed training report [here](https:
 
 ## Contributing (Ranked by Urgency)
 
-1. **Bug Fixes**  
-   - Poor memory scheduling (vLLM server shutdowns when switching between episode generation and policy training)
-
-2. **Refactors**  
-   - Some files exceed 1000 lines, especially in episode generation and inference strategies. Any obvious and simple refactors are always welcome.
-
 3. **Episode Generators / Tasks**  
    - We would encourage everyone to add new (novel) tasks and environments to the library on which we can test post-training methods. Some inspiration below: 
      - Coding  
