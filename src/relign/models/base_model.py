@@ -1,5 +1,7 @@
 import torch
-from typing import Optional, Dict, Any
+import torch.nn as nn
+import numpy as np
+from typing import Optional, Any, Union
 from pathlib import Path
 from transformers import PreTrainedModel, AutoModel, AutoModelForCausalLM, AutoConfig, AutoTokenizer, PreTrainedTokenizerFast 
 from relign.common.types import JsonDict
@@ -29,6 +31,35 @@ if is_flash_attention_available():
             config.save_pretrained(output_dir)
 
             torch.save(hf_state_dict, output_dir / "pytorch_model.bin")
+
+DROPOUT_CONFIG_KEYS = [
+    "dropout",
+    "attention_dropout",
+    "classifier_dropout",
+    "hidden_dropout",
+    "activation_dropout",
+    "resid_pdrop",
+    "embd_pdrop",
+    "attn_pdrop",
+]
+
+def configure_dropout(hf_model_name: str, dropout_value: float):
+    """
+    Adjusts dropout settings in the model configuration based on specified keys.
+
+    Args:
+        hf_model_name (str): Name of the model in the Hugging Face hub.
+        dropout_value (float): Value to set the dropout to.
+
+    Returns:
+        dict:  keyword arguments with dropout values set to 0.0 for specified config keys.
+    """
+    kwargs = {}
+    model_config = AutoConfig.from_pretrained(hf_model_name)
+    for key in DROPOUT_CONFIG_KEYS:
+        if hasattr(model_config, key):
+            kwargs[key] = dropout_value
+    return kwargs
 
 
 class PreTrainedModelForCasualLM(PreTrainedModel):
@@ -66,11 +97,15 @@ class PreTrainedModelForCasualLM(PreTrainedModel):
             "torch_dtype": pretrained_args.pop("torch_dtype", torch.bfloat16),
             "trust_remote_code": True,
         }
-        # if disable_dropout:
-        #     dropout_config = configure_dropout(hf_model_name, 0.0)
-        #     if is_main_process:
-        #         logger.info(f"Disabling dropout for keys: {dropout_config.keys()}")
-        #     kwargs.update(dropout_config)
+
+        #######################################################
+        # disable dropout allows for better training stability
+        #######################################################
+        if disable_dropout:
+            dropout_config = configure_dropout(hf_model_name, 0.0)
+            if is_main_process:
+                logger.info(f"Disabling dropout for keys: {dropout_config.keys()}")
+            kwargs.update(dropout_config)
 
         if device is not None:
             kwargs["device_map"] = device
@@ -85,8 +120,6 @@ class PreTrainedModelForCasualLM(PreTrainedModel):
             **pretrained_args,
             **kwargs,
         )
-        if disable_dropout and is_main_process:
-            logger.info(f"Model config after disabling dropout: {model.config}")
         assert (
             lora_config is None or freeze_config is None
         ), "Only one of lora_config and freeze_config can be specified"
@@ -158,3 +191,85 @@ class DIPreTrainedTokenizer:
 
 
 
+class PreTrainedModelForValueNetwork(nn.Module):
+    def __init__(
+        self,
+        pretrained_backbone_model: PreTrainedModel,
+        value_head_dropout: Optional[float] = None,
+    ):
+        super().__init__()
+        self.pretrained_model = pretrained_backbone_model
+        self.config = self.pretrained_model.config
+
+        hidden_size = self.pretrained_model.config.hidden_size
+        self.value_head = nn.Linear(hidden_size, 1, bias=True)
+        self.dropout = (
+            nn.Dropout(value_head_dropout)
+            if value_head_dropout is not None
+            else nn.Identity()
+        )
+
+        self._init_value_head()
+
+    def _init_value_head(self):
+        hidden_size = self.pretrained_model.config.hidden_size
+        nn.init.normal_(self.value_head.weight, std=1 / np.sqrt(hidden_size + 1))
+        nn.init.constant_(self.value_head.bias, val=0.0)
+
+    @classmethod
+    def from_di(
+        cls,
+        pretrained_backbone_model: Any ,
+        value_head_dropout: Optional[float] = None,
+    ) -> nn.Module:
+        return cls(pretrained_backbone_model, value_head_dropout=value_head_dropout)
+
+    @property
+    def device(self):
+        return self.pretrained_model.device
+
+    def gradient_checkpointing_enable(self):
+        self.pretrained_model.gradient_checkpointing_enable()
+
+    def forward(self, *args, **kwargs):
+        """
+        Forward pass of the model.
+        Arg:
+            *args: Variable length input arguments passed to the model.
+            **kwargs: Variable length keyword arguments passed to the model.
+        Returns:
+            value: The value of the input sequence. Shape: (batch_size, sequence_length)
+        """
+        kwargs["output_hidden_states"] = True
+
+        base_model_output = self.pretrained_model(*args, **kwargs)
+
+        last_hidden_state = base_model_output.hidden_states[-1]
+
+        output = self.dropout(last_hidden_state)
+
+        # For now force upcast in fp32 if needed. Let's keep the
+        # output in fp32 for numerical stability.
+        if output.dtype != self.value_head.weight.dtype:
+            output = output.to(self.value_head.weight.dtype)
+
+        value = self.value_head(output)
+        value = value.squeeze(-1)
+
+        return value
+
+    def save_pretrained(
+        self,
+        checkpoint_path: Union[str, Path],
+        safe_serialization: Optional[bool] = None,
+    ):
+        checkpoint_path = Path(checkpoint_path)
+
+        if not checkpoint_path.exists():
+            checkpoint_path.mkdir(parents=True)
+        else:
+            logger.warning(
+                f"Checkpoint path {checkpoint_path} already exists and will be overwritten."
+            )
+
+        torch.save(self.state_dict(), checkpoint_path / "pytorch_model.bin")

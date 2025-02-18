@@ -1,32 +1,75 @@
+import math
+import logging
 from abc import abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
-from typing import Dict, Optional, Literal, Callable, Union
+from typing import Dict, Optional, Literal, Callable, Union, Any, List
 
-from accelerate import Accelerator
-from accelerate.utils import GradientAccumulationPlugin
 import numpy as np
 import torch
 import torch.nn.functional as F
 from transformers import PreTrainedModel
 from transformers.integrations import HfTrainerDeepSpeedConfig
 from deepspeed import DeepSpeedEngine
+from deepspeed import comm as dist
 
 from relign.policies.base_policy import DeepSpeedPolicy
 from relign.policies.base_policy import ActorForwardOutput
-from relign.utils.trainer import masked_mean, monitor_tensor_anomalies
+from relign.utils.trainer import masked_mean, monitor_tensor_anomalies, masked_whiten
 from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
+def print_deepspeed_config(ds_config: dict) -> None:
+    """
+    Utility function to print the DeepSpeed configuration in a readable format.
+
+    This function prints the entire DeepSpeed config as a formatted JSON string,
+    and, if present, separately prints the zero optimization-related settings
+    so that you can verify that the desired values (e.g. stage 2) are set.
+
+    :param ds_config: DeepSpeed configuration dictionary.
+    """
+    import json
+
+    print("===== DeepSpeed Config =====")
+    print(json.dumps(ds_config, indent=2))
+
+    # Check for the new style zero config (sometimes under 'zero_optimization' or "zero_2")
+    if "zero_optimization" in ds_config:
+        print("\n== 'zero_optimization' Settings ==")
+        print(json.dumps(ds_config["zero_optimization"], indent=2))
+    elif "zero_2" in ds_config:
+        print("\n== 'zero_2' Settings ==")
+        print(json.dumps(ds_config["zero_2"], indent=2))
+
+    # Also print any legacy DS zero keys that might affect behavior.
+    legacy_keys = [
+        "zero_enabled",
+        "zero_force_ds_cpu_optimizer",
+        "zero_optimization_stage",
+    ]
+    legacy_info = {k: ds_config[k] for k in legacy_keys if k in ds_config}
+    if legacy_info:
+        print("\n== Legacy Zero Settings ==")
+        print(json.dumps(legacy_info, indent=2))
+
+
 class ActorPolicy(DeepSpeedPolicy):
     def __init__(
-        self, actor_model_fn, actor_config, enable_reference: bool = True, **kwargs
+        self,
+        actor_model_fn,
+        reference_model_fn,
+        actor_config,
+        enable_reference: bool = True,
+        **kwargs,
     ):
         super().__init__(**kwargs)
+        self._set_process_log_level(logger)
         self.actor_model_fn = actor_model_fn
+        self.reference_model_fn = reference_model_fn
         self.actor_config = actor_config
         self.enable_reference = enable_reference
         self.reference = None
@@ -39,7 +82,6 @@ class ActorPolicy(DeepSpeedPolicy):
         if hasattr(self, "_actor_engine"):
             return self._actor_engine
 
-        logger.info("Creating the actor deepspeed engine...")
         actor_model: PreTrainedModel = actor_model_fn()
 
         if self.gradient_checkpointing:
@@ -59,8 +101,13 @@ class ActorPolicy(DeepSpeedPolicy):
 
         # Create the LR scheduler if DS config has a scheduler
         has_deepspeed_scheduler = ds_config.get_value("scheduler", None) is not None
-        warmup_steps = self.warmup_steps
+        warmup_steps = (
+            self.warmup_steps
+            if self.warmup_steps
+            else self.get_warmup_steps(num_training_steps=self.total_num_training_steps)
+        )
         if has_deepspeed_scheduler:
+            logger.info("\n\n*********** Pathing  actor DS config ************")
             lr_scheduler = None
             self._patch_ds_config_for_lr_scheduler(
                 ds_config,
@@ -69,7 +116,7 @@ class ActorPolicy(DeepSpeedPolicy):
                 learning_rate=self.learning_rate,
             )
         elif self.lr_scheduler_type is not None:
-            logger.info("Using non-DeepSpeed LR scheduler.")
+            logger.info("\n\n*********** create  actor non ds scheduler ************")
             lr_scheduler = self.create_lr_scheduler(
                 optimizer,
                 name=self.lr_scheduler_type,
@@ -77,19 +124,14 @@ class ActorPolicy(DeepSpeedPolicy):
                 num_training_steps=self.total_num_training_steps,
             )
         else:
-            lr_scheduler = None
+            raise ("OOPS, you better give a scheduler")
 
         self._patch_ds_config_for_optimizer(ds_config)
         self._patch_ds_config_for_batch_size(ds_config, self.global_batch_size)
         self._patch_ds_config_for_dtype(ds_config)
         self._patch_ds_config_for_bucket_size(ds_config, actor_model.config)
-        import json
 
-        logger.info(
-            "DS config after batch patching:\n%s",
-            json.dumps(ds_config.config, indent=2),
-        )
-
+        print_deepspeed_config(ds_config.config)
         engine = self._init_deepspeed_engine_for_training(
             actor_model,
             deepspeed_config=ds_config.config,
@@ -116,12 +158,15 @@ class ActorPolicy(DeepSpeedPolicy):
         Ensures self.actor (and self._actor_engine) is initialized if not already.
         If 'force_reload' is True, or if no engine is cached, re-initialize.
         """
-        logger.info("Initializing actor DeepSpeed engine...")
+
         # Set these from the trainer to the policy before engine start
         self.global_batch_size = global_batch_size
         self.per_device_batch_size = per_device_batch_size
         self.gradient_accumulation_steps = gradient_accumulation_steps
         self.total_num_training_steps = total_num_training_steps
+        logger.info("\n\n**************** Initilizing the actor ******************")
+        logger.info(f"global_batch_size = {global_batch_size}")
+        logger.info(f"total num training steps = {total_num_training_steps}")
 
         # Decide whether to skip if we already have a cached engine
         if (
@@ -135,7 +180,6 @@ class ActorPolicy(DeepSpeedPolicy):
         if actor_model_fn is not None:
             self.actor_model_fn = actor_model_fn
 
-        logger.info("Initializing actor DeepSpeed engine...")
         self._init_actor_model(
             actor_model_fn=self.actor_model_fn, only_return_unwrapped_model=False
         )
@@ -152,6 +196,7 @@ class ActorPolicy(DeepSpeedPolicy):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         labels: torch.Tensor,
+        trainer_hparams: Dict,
         return_mean_entropy: bool = False,
         return_logits: bool = True,
         return_sequence_logp: bool = False,
@@ -174,7 +219,8 @@ class ActorPolicy(DeepSpeedPolicy):
         )
 
         logits = outputs.logits.float()
-        logits /= self.temperature
+        logits /= trainer_hparams.temperature
+
         # Shift so that tokens < n predict n
         # noinspection DuplicatedCode
         shift_logits = logits[..., :-1, :].contiguous()
@@ -215,6 +261,7 @@ class ActorPolicy(DeepSpeedPolicy):
         old_logprobs: torch.FloatTensor,
         ref_logprobs: Optional[torch.FloatTensor],
         advantages: torch.FloatTensor,
+        trainer_hparams: Dict[str, Any],  # TODO : change this to the right type
     ):
         """
         The PPO-style actor loss.
@@ -231,7 +278,9 @@ class ActorPolicy(DeepSpeedPolicy):
             return_all_logp=True,
             return_logits=False,
             return_sequence_logp=False,
+            trainer_hparams=trainer_hparams,
         )
+
         logprobs = outputs.all_logp  # shape: (batch_size, seq_len-1)
         assert logprobs.shape == old_logprobs.shape
         assert action_mask.shape == logprobs.shape
@@ -244,40 +293,44 @@ class ActorPolicy(DeepSpeedPolicy):
         pg_losses1_anomalies = monitor_tensor_anomalies(
             pg_losses1.detach(), action_mask
         )
-        clip_range = 0.4
+
         pg_losses2 = -advantages * torch.clamp(
-            ratio, 1.0 - clip_range, 1.0 + clip_range
+            ratio, 1.0 - trainer_hparams.cliprange, 1.0 + trainer_hparams.cliprange
         )
         pg_losses = torch.max(pg_losses1, pg_losses2)
         pg_loss = masked_mean(pg_losses, action_mask)
 
-        # Possibly apply a KL penalty if self.ppo_hparams.kl_penalty_loss_type is not None
-        ref_kl_loss = None
-        ref_kl = None
-        kl_penalty_loss_type = "forward_kl"
-        kl_penalty_loss_clip_max = 10
-        kl_penalty_loss_clip_min = 0
-        kl_clt = 0.05
-        if kl_penalty_loss_type is not None:
+        # Here we want the control variate kl penalty loss type
+        kl_clt = 0.0001
+        logger.info(
+            f"\n\n********************************  pg loss ***************************"
+        )
+        logger.info(f"pg_loss: {pg_loss}")
+
+        if trainer_hparams.kl_penalty_loss_type is not None:
             # _compute_kl_penalty is below
             ref_kl_tensor = self._compute_kl_penalty(
-                logprobs, ref_logprobs, estimation_type=kl_penalty_loss_type
+                logprobs,
+                ref_logprobs,
+                estimation_type=trainer_hparams.kl_penalty_loss_type,
             )
             # clamp for numerical stability
             ref_kl_tensor = torch.clamp(
                 ref_kl_tensor * action_mask,
-                min=kl_penalty_loss_clip_min,
-                max=kl_penalty_loss_clip_max,
+                min=trainer_hparams.kl_penalty_loss_clip_min,
+                max=trainer_hparams.kl_penalty_loss_clip_max,
             )
             ref_kl_loss = kl_clt * ref_kl_tensor.sum(dim=1).mean()
             pg_loss = pg_loss + ref_kl_loss
             ref_kl = ref_kl_tensor.detach()
+        else:
+            ref_kl = None
+            ref_kl_loss = None
 
         # Ratio check
         is_skipped = False
         avg_ratio = masked_mean(ratio, action_mask)
-        ratio_threshold = 1.5
-        if avg_ratio.item() > ratio_threshold:
+        if avg_ratio.item() > trainer_hparams.ratio_threshold:
             logger.warning(
                 f"High ratio detected: {avg_ratio.item():.2f}. Skipping this batch."
             )
@@ -299,6 +352,98 @@ class ActorPolicy(DeepSpeedPolicy):
             metrics[f"actor/pg_losses1_anomalies__{i}"] = v
 
         return pg_loss, is_skipped, metrics, ref_kl
+
+    def actor_loss_grpo(
+        self,
+        model_inputs: dict,
+        shifted_labels_mask: torch.Tensor,
+        ref_logprobs: torch.Tensor,
+        old_logprobs: torch.Tensor,
+        advantages: torch.Tensor,
+        trainer_hparams: dict,
+        # optionally old_logprobs if needed for PPO, etc.
+    ):
+        """
+        Re-run forward pass with gradients for your actor network, compute
+        the RL objective (policy gradient + KL).
+        """
+
+        # 1) Forward pass on the actor model WITH grad
+        actor_outputs = self.forward_actor(
+            input_ids=model_inputs["input_ids"],
+            attention_mask=model_inputs["attention_mask"],
+            labels=model_inputs["labels"],
+            return_all_logp=True,
+            return_logits=False,
+            return_sequence_logp=False,
+            trainer_hparams=trainer_hparams,
+        )
+        shifted_actor_logprobs = (
+            actor_outputs.all_logp
+        )  # shape (B, seq_len, vocab_size)
+
+
+        ########################
+        #   Compute the ratio  #
+        ########################
+        log_ratio = (shifted_actor_logprobs- old_logprobs) * shifted_labels_mask
+        ratio = torch.exp(log_ratio)
+
+        ###################################
+        # Compute the per token advantage #
+        ###################################
+        # shifted actor log probs is of size 16 * 1184 while advantages is of size 16.
+        # we want to do each row, ie..e, sample, times its advantage however, we get an error
+        per_token_advantages_1 = ratio * advantages.unsqueeze(1)
+
+        per_token_advantages_2 = torch.clamp(
+            ratio, 1.0 - trainer_hparams.cliprange, 1.0 + trainer_hparams.cliprange
+        ) * advantages.unsqueeze(1)
+
+        per_token_advantages = torch.min(per_token_advantages_1, per_token_advantages_2)
+
+
+        #########################
+        # compute KL divergence #
+        #########################
+        kl = (
+            torch.exp(ref_logprobs - shifted_actor_logprobs)
+            - (ref_logprobs - shifted_actor_logprobs)
+            - 1
+        )
+
+        ###################################
+        #         Compute the loss        #
+        ###################################
+        per_token_loss = -(per_token_advantages - trainer_hparams.init_kl_coef * kl)
+        per_token_loss = per_token_loss * shifted_labels_mask  # zero out masked tokens
+
+        # Then average for final scalar
+        # tokens_per_sample = shifted_labels_mask.sum(dim=1)
+        pg_loss = masked_mean(per_token_loss, shifted_labels_mask)
+
+        logger.info(f"\n\n *************** Loss ********************")
+        logger.info(f"Loss: {pg_loss}\n\n")
+
+        # Ratio check
+        is_skipped = False
+        avg_ratio = masked_mean(ratio, shifted_labels_mask)
+        if avg_ratio.item() > trainer_hparams.ratio_threshold:
+            logger.warning(
+                f"High ratio detected: {avg_ratio.item():.2f}. Skipping this batch."
+            )
+            pg_loss = pg_loss * 0.0
+            is_skipped = True
+
+        # Return
+        actor_metrics = {
+            "actor_loss": pg_loss.detach().cpu().item(),
+            "actor/ratio": avg_ratio.detach(),
+            "kl": (kl * shifted_labels_mask).sum().detach().cpu().item(),
+        }
+
+        approx_ref_kl = masked_mean(kl, shifted_labels_mask).detach().cpu().item()
+        return pg_loss, is_skipped, actor_metrics, approx_ref_kl, per_token_advantages
 
     def destroy_actor_engine_if_not_cached(self) -> None:
         """
@@ -326,56 +471,25 @@ class ActorPolicy(DeepSpeedPolicy):
             if hasattr(self, "_actor_engine"):
                 self._actor_engine = None
 
-    def cache_initial_actor_state(self) -> None:
-        """
-        Cache a snapshot of the actor model's state dict.
-        This snapshot should be called once (after the actor engine is initialized
-        but before training begins) to ensure that the reference model is built
-        from a fixed checkpoint.
-        """
-        if hasattr(self, "actor") and self.actor is not None:
-            if isinstance(self.actor, DeepSpeedEngine):
-                self.actor_snapshot_state_dict = self.actor.module.state_dict()
-            else:
-                self.actor_snapshot_state_dict = self.actor.state_dict()
-            logger.info("Cached initial actor state for reference model.")
-        else:
-            logger.warning("Actor engine not initialized; cannot cache initial state.")
-
     def _init_reference_model(
         self,
+        reference_model_fn: Callable[[], PreTrainedModel],
+        only_return_unwrapped_model: bool = False,
     ) -> Union[DeepSpeedEngine, PreTrainedModel]:
-        """
-        Initializes a duplicate/frozen reference DeepSpeed engine.
-        Instead of using the current state of the actor engine (which might have
-        been updated during training), we load a cached snapshot of the actor model.
-        """
-        if self.reference is not None:
-            return self.reference
+        if hasattr(self, "_reference_engine"):
+            return self._reference_engine
 
         logger.info("Creating the reference deepspeed engine...")
+        ref_model: PreTrainedModel = reference_model_fn()
 
-        # Create a fresh model using the same callable.
-        ref_model: PreTrainedModel = self.actor_model_fn()
+        if self.gradient_checkpointing:
+            ref_model.gradient_checkpointing_enable()
 
-        # Load the cached actor snapshot, if available, to freeze the initial state.
-        if (
-            hasattr(self, "actor_snapshot_state_dict")
-            and self.actor_snapshot_state_dict is not None
-        ):
-            ref_model.load_state_dict(self.actor_snapshot_state_dict)
-        elif hasattr(self, "actor") and self.actor is not None:
-            if isinstance(self.actor, DeepSpeedEngine):
-                ref_model.load_state_dict(self.actor.module.state_dict())
-            else:
-                ref_model.load_state_dict(self.actor.state_dict())
-
-        # Freeze the model.
         ref_model.eval()
         for param in ref_model.parameters():
-            param.requires_grad = False
+            param.required_grad = False
 
-        # Build the DeepSpeed engine for the reference model (no optimizer or scheduler needed)
+        # use the same settints as the actor for now
         ds_config = HfTrainerDeepSpeedConfig(self.actor_config)
         self._patch_ds_config_for_batch_size(ds_config, self.global_batch_size)
         self._patch_ds_config_for_dtype(ds_config)
@@ -384,19 +498,24 @@ class ActorPolicy(DeepSpeedPolicy):
         import copy
 
         ref_config = copy.deepcopy(ds_config)
+
+        # remove the optimizer and zero optimization
+        # from the critic model
         if "optimizer" in ref_config.config:
             del ref_config.config["optimizer"]
+        if "zero_optimization" in ref_config.config:
+            del ref_config.config["zero_optimization"]
 
         engine = self._init_deepspeed_engine_for_inference(
             ref_model,
             deepspeed_config=ref_config.config,
         )
 
+        engine.eval()
         if self.cache_ds_engines:
             self._reference_engine = engine
 
         self.reference = engine
-        return engine
 
     def init_reference_engine_if_needed(
         self,
@@ -418,7 +537,8 @@ class ActorPolicy(DeepSpeedPolicy):
             return
         if (not force_reload) and (self.reference is not None):
             return
-        self._init_reference_model()
+
+        self._init_reference_model(reference_model_fn=self.reference_model_fn)
         logger.info("Reference engine init done.")
 
     def forward_reference(
@@ -508,26 +628,114 @@ class ActorPolicy(DeepSpeedPolicy):
             if hasattr(self, "_reference_engine"):
                 self._reference_engine = None
 
+    def destroy_ds_engines(self) -> None:
+        """
+        Destroys all cached engines.
+        """
+        self.destroy_actor_engine_if_not_cached()
+        self.destroy_reference_engine_if_not_cached()
+
     def _compute_kl_penalty(
         self,
-        logprobs: torch.FloatTensor,
-        ref_logprobs: torch.FloatTensor,
-        estimation_type: str = "forward_kl",
-    ):
+        logprob: Union[torch.FloatTensor, np.ndarray],
+        ref_logprob: Union[torch.FloatTensor, np.ndarray],
+        estimation_type: Optional[str] = None,
+    ) -> Union[torch.FloatTensor, np.ndarray]:
         """
-        Basic example: forward_kl = (logprobs - ref_logprobs).
-        You might have a more sophisticated approach in your PPOTrainer.
-        """
-        if ref_logprobs is None:
-            return torch.zeros_like(logprobs)
+        Compute the per-token KL penalty between the log probabilities of the actor and the reference model.
 
-        kl = logprobs - ref_logprobs
-        # If you want reverse_kl or symmetric_kl, do so here
-        if estimation_type == "forward_kl":
-            # forward_kl = log p/q = log p - log q
-            pass  # already computed
-        # elif estimation_type == ...
-        return kl
+        Args:
+            logprob (`Union[torch.FloatTensor, np.ndarray]`):
+                Log probabilities of the actor, shape (`batch_size`, T)
+            ref_logprob (`Union[torch.FloatTensor, np.ndarray]`):
+                Log probabilities of the reference model, shape (`batch_size`, T)
+
+        Returns:
+            `Union[torch.FloatTensor, np.ndarray]`: KL penalty, shape (`batch_size`, `T`)
+        """
+
+        if estimation_type is None:
+            estimation_type = self.trainer_hparams.kl_penalty
+
+        if estimation_type == "kl":
+            return logprob - ref_logprob
+
+        if estimation_type == "abs":
+            return (logprob - ref_logprob).abs()
+
+        if estimation_type == "mse":
+            return 0.5 * (logprob - ref_logprob).square()
+
+        if estimation_type == "control_variate":
+            # Compute the per-token approximate KL penalty between the log probabilities of the actor
+            # and the reference model as suggested by Schulman in http://joschu.net/blog/kl-approx.html
+            #
+            # D_KL [π_θ || π_ref] =
+            #    π_ref(y_t | x, y_<t) / π_θ(y_t | x, y_<t) - log(π_ref(y_t | x, y_<t) / π_θ(y_t | x, y_<t)) - 1
+            #
+
+            log_ratio = ref_logprob - logprob
+            if isinstance(log_ratio, torch.Tensor):
+                kl = torch.exp(log_ratio) - log_ratio - 1
+            elif isinstance(log_ratio, np.ndarray):
+                kl = np.exp(log_ratio) - log_ratio - 1
+            else:
+                raise ValueError("Unsupported type for log_ratio.")
+            return kl
+
+        if estimation_type == "seq_control_variate":
+            log_ratio = ref_logprob - logprob
+            if isinstance(log_ratio, torch.Tensor):
+                prob_ratio = torch.exp(log_ratio.sum(dim=-1, keepdim=True))
+                kl = prob_ratio - log_ratio - 1
+            elif isinstance(log_ratio, np.ndarray):
+                prob_ratio = np.exp(log_ratio.sum(axis=-1, keepdims=True))
+                kl = prob_ratio - log_ratio - 1
+            else:
+                raise ValueError("Unsupported type for log_ratio.")
+            return kl
+
+    def _load_checkpoint_to_ds_engines(
+        self,
+        checkpoint_path: Path,
+    ) -> None:
+        metrics = {}
+        if self.actor is not None:
+            self.actor.load_checkpoint(str(checkpoint_path / "actor"))
+        if len(metrics) > 0:
+            self._cloud_log({**metrics, "train/global_step": self.state.global_step})
+
+    def load_latest_policy_path(self, checkpoint_path: Optional[Path] = None) -> None:
+        """loads both actor and critic from "policy/cache" folder"""
+        self._load_checkpoint_to_ds_engines(checkpoint_path)
+
+    def _save_hf_pretrained(self, engine: DeepSpeedEngine, path: Path) -> None:
+        """Saves a huggingface model that can be used for inference"""
+        if self._is_main_process():
+            # Only save on the main process
+            assert engine.zero_optimization_stage() < 3
+            logger.info(f"Saving HF pretrained weights to {path}")
+            unwrapped_model = engine.module
+            unwrapped_model.save_pretrained(path, safe_serialization=False)
+        dist.barrier()
+
+    def save_checkpoint(self, checkpoint_path: Path) -> None:
+        """
+        saves both a hugginface model of the actor + critic and a
+        deepspeed checkpoint which contains all the optimizer states
+        saves the actor in `checkpoint_path/actor` and the critic in `checkpoint_path/critic`
+        """
+        if self._is_main_process():
+            if checkpoint_path.exists():
+                logger.warning(
+                    f"Checkpoint path {checkpoint_path} already exists. Overwriting."
+                )
+                shutil.rmtree(checkpoint_path)
+            checkpoint_path.mkdir(parents=True, exist_ok=True)
+
+        if self.actor is not None:
+            self._save_hf_pretrained(self.actor, checkpoint_path / "hf_pretrained")
+            self.actor.save_checkpoint(str(checkpoint_path / "actor"))
 
     def get_last_checkpoint(self, return_resumable_only: bool = False):
         checkpoints = list(self.checkpoints_dir.iterdir())
@@ -554,50 +762,88 @@ class ActorPolicy(DeepSpeedPolicy):
         grad_acc_kwargs = {"num_steps": self.args.gradient_accumulation_steps}
         # grad_acc_kwargs["sync_with_dataloader"] = False
 
-    # def _create_accelerator_and_postprocess(self):
-    #     grad_acc_kwargs = {"num_steps": self.args.gradient_accumulation_steps}
-    #     # grad_acc_kwargs["sync_with_dataloader"] = False
-    #     gradient_accumulation_plugin = GradientAccumulationPlugin(**grad_acc_kwargs)
+    def get_warmup_steps(self, num_training_steps: int):
+        """
+        Get number of steps used for a linear warmup.
+        """
+        warmup_steps = (
+            self.warmup_steps
+            if self.warmup_steps > 0
+            else math.ceil(num_training_steps * self.warmup_ratio)
+        )
+        return warmup_steps
 
-    #     # Create accelerator object
-    #     self.accelerator = Accelerator(
-    #         dispatch_batches=False,
-    #         deepspeed_plugin=self.deepspeed_plugin,
-    #         gradient_accumulation_plugin=gradient_accumulation_plugin,
-    #     )
+    def save_latest_policy_path(self, checkpoint_path: Path) -> Path:
+        """
+        Saves both the actor and critic engines and returns the path of the actor for inference.
 
-    #     # Deepspeed and Accelerate flags covering both trainer args and accelerate launcher
-    #     self.is_deepspeed_enabled = (
-    #         getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
-    #     )
+        The caller can specify an arbitrary checkpoint path (for example:
+        Path("/some/storage/path/policy/TIMESTAMP") ).
+        We will append '/actor/hf_pretrained' and '/critic/hf_pretrained'
+        accordingly here.
+        """
+        # Path to store the HF version of the actor
+        actor_hf_pretrained_path = checkpoint_path / "actor" / "hf_pretrained"
+        # Path to store the HF version of the critic
+        # Save the HF-pretrained actor weights
+        dist.barrier()
+        self._save_hf_pretrained(
+            self.actor,
+            actor_hf_pretrained_path,
+        )
+        # TODO: technically one could move this one down
+        self.actor.save_checkpoint(str(checkpoint_path / "actor"))
+        dist.barrier()
 
-    #     if self.is_deepspeed_enabled:
-    #         from deepspeed.utils import logger as ds_logger
-    #         import logging
+    def get_checkpoint_format(self) -> str:
+        return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
 
-    #         ds_logger.setLevel(logging.DEBUG)
+    def clean_old_temp_checkpoints(
+        self, checkpoint_dir: Path, exclude: Optional[List[Path]] = None
+    ) -> None:
+        if exclude is None:
+            exclude = []
 
-    #         if getattr(self.args, "hf_deepspeed_config", None) is None:
-    #             from transformers.deepspeed import HfTrainerDeepSpeedConfig
+        if self._is_main_process():
+            for checkpoint in checkpoint_dir.iterdir():
+                if (
+                    checkpoint.is_dir()
+                    and checkpoint.name.startswith("ckpt--")
+                    and checkpoint not in exclude
+                ):
+                    logger.info(f"Removing old temp checkpoint {checkpoint}")
+                    shutil.rmtree(checkpoint)
 
-    #             ds_plugin = self.accelerator.state.deepspeed_plugin
+    def _logprobs_from_logits(self, logits, labels):
+        """
+        Gathers the log probability for each 'labels' token from 'logits'.
+        """
+        # logits: (B, seq_len, vocab_size)
+        # labels: (B, seq_len)
+        log_probs = F.log_softmax(logits, dim=-1)
+        # gather log probs at each label
+        token_logprob = torch.gather(
+            log_probs, dim=2, index=labels.unsqueeze(-1)
+        ).squeeze(-1)
+        return token_logprob
 
-    #             ds_plugin.hf_ds_config = HfTrainerDeepSpeedConfig(
-    #                 ds_plugin.hf_ds_config.config
-    #             )
-    #             ds_plugin.deepspeed_config = ds_plugin.hf_ds_config.config
-    #             ds_plugin.hf_ds_config.trainer_config_process(self.args)
+    def checkpoint_latest_policy_path(self, checkpoint_path: Path) -> Path:
+        """
+        Saves both the actor and critic engines and returns the path of the actor for inference.
 
-    #     if (
-    #         self.args.gradient_checkpointing
-    #         and not self.is_flash_attention_model
-    #         and not self.is_deepspeed_enabled
-    #     ):
-    #         from accelerate import DistributedDataParallelKwargs
+        The caller can specify an arbitrary checkpoint path (for example:
+        Path("/some/storage/path/policy/TIMESTAMP") ).
+        We will append '/actor/hf_pretrained' and '/critic/hf_pretrained'
+        accordingly here.
+        """
+        if self._is_main_process():
+            if checkpoint_path.exists():
+                logger.warning(f"checkpoin tpath {checkpoint_path} exists. overwriting")
+                shutil.rmtree(checkpoint_path)
+            checkpoint_path.mkdir(parents=True, exist_ok=True)
 
-    #         self.accelerator.ddp_handler = DistributedDataParallelKwargs(
-    #             find_unused_parameters=False
-    #         )
-
-    #     # Add state to accelerator for checkpointing
-    #     self.accelerator.register_for_checkpointing(self.state)
+        # save the trainer state here potentially
+        if self.actor is not None:
+            logger.info(f"Saving actor engine to {checkpoint_path / 'hf_pretrained'}")
+            self._save_hf_pretrained(self.actor, checkpoint_path / "hf_pretrained")
+            self.actor.save_checkpoint(str(checkpoint_path / "actor"))

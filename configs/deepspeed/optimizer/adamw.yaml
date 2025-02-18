@@ -2,7 +2,7 @@
 
 type: AdamW
 params:
-  lr: ${lr}
-  betas: ${betas}
-  eps: ${eps}
-  weight_decay: ${weight_decay}
+  lr: "auto" 
+  betas: "auto"
+  eps: "auto" 
+  weight_decay: "auto"

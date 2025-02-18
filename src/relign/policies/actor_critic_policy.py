@@ -65,6 +65,7 @@ class ActorCriticPolicy(ActorPolicy):
         if hasattr(self, "_critic_engine"):
             return self._critic_engine
 
+
         logger.info("Creating the critic deepspeed engine...")
         critic_model: PreTrainedModel = critic_model_fn()
 
@@ -79,9 +80,8 @@ class ActorCriticPolicy(ActorPolicy):
             critic_model.to(self.distributed_state.device)
             return critic_model
 
-        if self.gradient_checkpointing:
-            critic_model.gradient_checkpointing_enable()
-
+        # Here we  pass hte deepspeec citic config definded in the yamls
+        # tio the Hftrainerrdeepspeec config object
         ds_config = HfTrainerDeepSpeedConfig(self.critic_config)
 
         # Create the optimizer if DS config has an optimizer section
@@ -96,8 +96,11 @@ class ActorCriticPolicy(ActorPolicy):
 
         # Create the LR scheduler if DS config has a scheduler
         has_deepspeed_scheduler = ds_config.get_value("scheduler", None) is not None
-        warmup_steps = self.warmup_steps
+        logger.info("********** CRITIC HAS DEEPSPEED ENGINE ************")
+
+        warmup_steps = self.warmup_steps if self.warmup_steps else self.get_warmup_steps(num_training_steps=self.total_num_training_steps)
         if has_deepspeed_scheduler:
+            logger.info(f"has deepspeed scheduler")
             lr_scheduler = None
             self._patch_ds_config_for_lr_scheduler(
                 ds_config,
@@ -115,19 +118,13 @@ class ActorCriticPolicy(ActorPolicy):
                 num_training_steps=self.total_num_training_steps,
             )
         else:
+            logger.info(f"No scheduler found")
             lr_scheduler = None
 
         self._patch_ds_config_for_optimizer(ds_config)
         self._patch_ds_config_for_batch_size(ds_config, self.global_batch_size)
         self._patch_ds_config_for_dtype(ds_config)
         self._patch_ds_config_for_bucket_size(ds_config, critic_model.config)
-
-        import json
-
-        logger.info(
-            "DS config after batch patching:\n%s",
-            json.dumps(ds_config.config, indent=2),
-        )
 
         engine = self._init_deepspeed_engine_for_training(
             critic_model,
@@ -197,6 +194,8 @@ class ActorCriticPolicy(ActorPolicy):
         # Switch to RL terminology
         action_mask = shifted_labels_mask
 
+        if "labels" in model_inputs:
+            del model_inputs["labels"]
         # You can't pass "labels" to the critic, or you can remove them from model_inputs:
         new_inputs = {k: v for k, v in model_inputs.items() if k not in ["labels"]}
 
@@ -215,9 +214,11 @@ class ActorCriticPolicy(ActorPolicy):
         )
 
         vf_losses1 = (valid_values - returns) ** 2
-        vf_losses1_anomalies = monitor_tensor_anomalies(
-            vf_losses1.detach(), action_mask
-        )
+        with torch.no_grad():
+            vf_losses1_anomalies = monitor_tensor_anomalies(
+                vf_losses1.detach(), action_mask
+            )
+
         vf_losses2 = (values_clipped - returns) ** 2
         vf_losses = torch.max(vf_losses1, vf_losses2)
         vf_loss = 0.5 * masked_mean(vf_losses, action_mask)
@@ -249,11 +250,15 @@ class ActorCriticPolicy(ActorPolicy):
         Ensures self.critic (and self._critic_engine) is initialized if not already.
         If 'force_reload' is True, or if no engine is cached, re-initialize.
         """
-        logger.info("Initializing critic DeepSpeed engine...")
-        self.global_batch_isze = global_batch_size
+        self.global_batch_size = global_batch_size
         self.per_device_batch_size = per_device_batch_size
         self.gradient_accumulation_steps = gradient_accumulation_steps
         self.total_num_training_steps = total_num_training_steps
+
+        logger.info("\n\n**************** Initilizing the critic ******************")
+        logger.info(f"global_batch_size = {self.global_batch_size}")
+        logger.info(f"total num training steps = {self.total_num_training_steps}")
+
         # Decide whether to skip if we already have a cached engine
         if (
             (not force_reload)
@@ -317,11 +322,9 @@ class ActorCriticPolicy(ActorPolicy):
         if len(metrics) > 0:
             self._cloud_log({**metrics, "train/global_step": self.state.global_step})
 
-    def load_latest_policy_path(self, project_root_dir: Optional[Path] = None) -> None:
+    def load_latest_policy_path(self, checkpoint_path_to_load: Optional[Path] = None) -> None:
         """loads both actor and critic from "policy/cache" folder"""
-        if not project_root_dir:
-            project_root_dir = self.project_root_dir
-        self._load_checkpoint_to_ds_engines(project_root_dir / "policy" / "cache")
+        self._load_checkpoint_to_ds_engines(checkpoint_path_to_load)
 
     def load_checkpoint(self, checkpoint: Union[Checkpoint, Path]) -> None:
         super().load_checkpoint(checkpoint)
@@ -341,31 +344,10 @@ class ActorCriticPolicy(ActorPolicy):
             unwrapped_model.save_pretrained(path, safe_serialization=False)
         dist.barrier()
 
-    def save_checkpoint(self, checkpoint_path: Path) -> None:
-        """
-        saves both a hugginface model of the actor + critic and a
-        deepspeed checkpoint which contains all the optimizer states
-        saves the actor in `checkpoint_path/actor` and the critic in `checkpoint_path/critic`
-        """
-        if self._is_main_process():
-            if checkpoint_path.exists():
-                logger.warning(
-                    f"Checkpoint path {checkpoint_path} already exists. Overwriting."
-                )
-                shutil.rmtree(checkpoint_path)
-            checkpoint_path.mkdir(parents=True, exist_ok=True)
-
-        if self.actor is not None:
-            self._save_hf_pretrained(self.actor, checkpoint_path / "hf_pretrained")
-            self.actor.save_checkpoint(str(checkpoint_path / "actor"))
-
-        if self.critic is not None:
-            self._save_hf_pretrained(
-                self.critic, checkpoint_path / "critic" / "hf_pretrained"
-            )
-            self.critic.save_checkpoint(str(checkpoint_path / "critic"))
-
-    def save_latest_policy_path(self, checkpoint_path: Path) -> Path:
+    def checkpoint_latest_policy_path(
+        self, 
+        checkpoint_path: Path
+    ) -> Path:
         """
         Saves both the actor and critic engines and returns the path of the actor for inference.
 
@@ -374,46 +356,22 @@ class ActorCriticPolicy(ActorPolicy):
         We will append '/actor/hf_pretrained' and '/critic/hf_pretrained'
         accordingly here.
         """
-
-        # Path to store the HF version of the actor
-        actor_hf_pretrained_path = checkpoint_path / "actor" / "hf_pretrained"
-        # Path to store the HF version of the critic
-        critic_hf_pretrained_path = checkpoint_path / "critic" / "hf_pretrained"
-
-        # Save the HF-pretrained actor weights
-        dist.barrier()
-        self._save_hf_pretrained(
-            self.actor,
-            actor_hf_pretrained_path,
-        )
-        # TODO: technically one could move this one down
-        self.actor.save_checkpoint(str(checkpoint_path / "actor"))
-        dist.barrier()
-
-        # If the DeepSpeed engines are not cached, we also save the critic HF weights,
-        # as well as engine checkpoints for both the actor and critic.
-        if not self.cache_ds_engines:
-            self._save_hf_pretrained(
-                self.critic,
-                critic_hf_pretrained_path,
-            )
-            # Actually save the full engine state for both
-            self.critic.save_checkpoint(str(checkpoint_path / "critic"))
-            # Return the path of the (actor) HF pretrained directory for inference
-
-    def get_checkpoint_format(self) -> str:
-        return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
-
-    def _clean_old_temp_checkpoints(
-        self, checkpoint_dir, exclude: Optional[List[Path]] = None
-    ) -> None:
-        if exclude is None:
-            exclude = []
-
         if self._is_main_process():
-            for checkpoint in checkpoint_dir.iterdir():
-                if checkpoint.is_dir():
-                    logger.info(f"Removing old temp checkpoint {checkpoint}")
-                    shutil.rmtree(checkpoint)
+            if checkpoint_path.exists():
+                logger.warning(
+                    f"checkpoin tpath {checkpoint_path} exists. overwriting"
+                )
+                shutil.rmtree(checkpoint_path)
+            checkpoint_path.mkdir(parents=True, exist_ok=True)
 
-        dist.barrier()
+        # save the trainer state here potentially 
+        if self.actor is not None:
+            logger.info(f"Saving actor engine to {checkpoint_path / 'hf_pretrained'}")
+            self._save_hf_pretrained(self.actor, checkpoint_path /"hf_pretrained")
+            self.actor.save_checkpoint(str(checkpoint_path / "actor"))
+        if self.critic is not None:
+            logger.info(f"Saving critic engine to {checkpoint_path / 'crritic'/ 'hf_pretrained'}")
+            self._save_hf_pretrained(self.critic, checkpoint_path / "critic"/ "hf_pretrained")
+            self.critic.save_checkpoint(str(checkpoint_path / "critic"))
+
+

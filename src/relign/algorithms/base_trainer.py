@@ -1,12 +1,12 @@
+import logging
 import json
-import os
-import shutil
 from typing import Dict, Any, Union, Optional, List
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from accelerate import Accelerator, PartialState
 from accelerate.utils import GradientAccumulationPlugin
+from deepspeed import DeepSpeedEngine
 
 
 from datasets import Dataset
@@ -76,8 +76,7 @@ class BaseTrainer(ABC):
         num_epochs_per_iteration: int = 8,
         num_iterations: int = 1,
         num_episodes_per_iteration: int = 1,
-        gamma: int = 1,
-        lam=0.95,
+        max_seq_length: int = None,
         logging_steps: int = 1,
         per_device_batch_size: Optional[int] = None,
         target_batch_size: Optional[int] = None,
@@ -117,11 +116,9 @@ class BaseTrainer(ABC):
         self.num_iterations = num_iterations
         self.target_batch_size = target_batch_size
         self.num_episodes_per_iteration = num_episodes_per_iteration
+        self.max_seq_length = max_seq_length
 
         self._compute_batch_size_and_steps()
-
-        self.gamma = gamma
-        self.lam = lam
         self.logging_steps = logging_steps
         self._cloud_log = cloud_log
         # self._create_accelerator_and_postprocess()
@@ -214,6 +211,18 @@ class BaseTrainer(ABC):
         raise NotImplementedError
 
     def _compute_batch_size_and_steps(self):
+        # Log all values that will be used in the computation
+        logger.info(f"Starting batch size and step computation with values:")
+        logger.info(f"  target_batch_size: {self.target_batch_size}")
+        logger.info(f"  per_device_batch_size (initial): {self.per_device_batch_size}")
+        logger.info(
+            f"  gradient_accumulation_steps (initial): {self.gradient_accumulation_steps}"
+        )
+        logger.info(f"  num_processes: {self.distributed_state.num_processes}")
+        logger.info(f"  num_iterations: {self.num_iterations}")
+        logger.info(f"  num_epochs_per_iteration: {self.num_epochs_per_iteration}")
+        logger.info(f"  num_episodes_per_iteration: {self.num_episodes_per_iteration}")
+
         if self.target_batch_size is not None:
             if (
                 self.per_device_batch_size is None
@@ -256,9 +265,12 @@ class BaseTrainer(ABC):
             * self.num_episodes_per_iteration
             // self.global_batch_size
         )
-        logger.info(f"Per device batch size: {self.per_device_batch_size}")
-        logger.info(f"Gradient accumulation steps: {self.gradient_accumulation_steps}")
-        logger.info(f"Num of total processes: {self.distributed_state.num_processes}")
+
+        # Finally, log the resulting computations
+        logger.info(f"Per device batch size (computed): {self.per_device_batch_size}")
+        logger.info(
+            f"Gradient accumulation steps (computed): {self.gradient_accumulation_steps}"
+        )
         logger.info(
             f"Global batch size (w. parallel, distributed & accumulation): {self.global_batch_size}"
         )
@@ -267,43 +279,39 @@ class BaseTrainer(ABC):
         )
 
     def _rescale_and_clip_scores(self, episodes: Dataset) -> Dataset:
-        bias_correction = None
-        scale_factor = None
-        if self.trainer_hparams.use_score_scaling:
-            assert "scores" in episodes.column_names, "Scores should be provided."
-            scores = torch.tensor(episodes["scores"], dtype=torch.float32)
-            scores_mean, scores_std = self.running_scores.update(scores)
-            scale_factor = scores_std + torch.finfo(scores.dtype).eps
-            if self.trainer_hparams.use_score_norm:  # todo: weird name, right?
-                bias_correction = -scores_mean
-
-        clip = self.trainer_hparams.score_clip
+        """
+        Simplify to just min-max scale the 'scores' column to [0,1].
+        """
+        if "scores" not in episodes.column_names:
+            return episodes  # no-op if column doesn't exist
+        
+        # Extract all scores
+        scores = np.array(episodes["scores"], dtype=np.float32)
+        score_min, score_max = scores.min(), scores.max()
+        if score_min == score_max:
+            # All scores are the same, so set them all to 0 (or 1, your choice)
+            logger.warning(
+                "All scores are identical; min-max scaling will produce 0.0 for all."
+            )
+            return episodes.map(
+                lambda x: {"scores": 0.0},
+                num_proc=self.distributed_state.num_processes,
+                desc="Rescaling (degenerate case: identical scores)",
+            )
 
         def transform_reward(example: Dict[str, Any]) -> Dict[str, Any]:
             score = example["scores"]
-            if bias_correction is not None:
-                score = score + bias_correction
-            if scale_factor is not None:
-                score = score / scale_factor
+            scaled_score = (score - score_min) / (score_max - score_min)
+            # Ensure final range is strictly within [0,1]
+            scaled_score = max(0.0, min(1.0, scaled_score))
+            return {"scores": float(scaled_score)}
 
-            if clip is not None:
-                score = torch.clip(torch.tensor(score).float(), -clip, clip)
-
-            return {
-                "scores": (
-                    score.item() if isinstance(score, torch.Tensor) else float(score)
-                )
-            }
-
-        if "scores" in episodes.column_names and any(
-            val is not None for val in [bias_correction, scale_factor, clip]
-        ):
-            episodes = episodes.map(
-                transform_reward,
-                num_proc=self.distributed_state.num_processes,
-                desc="Rescaling and clipping scores (if needed)",
-            )
-
+        # Apply the transform
+        episodes = episodes.map(
+            transform_reward,
+            num_proc=self.distributed_state.num_processes,
+            desc="Min-max scaling 'scores' to [0,1]",
+        )
         return episodes
 
     def _log_episodes_metrics(self, episodes: Dataset) -> Optional[float]:
@@ -339,7 +347,11 @@ class BaseTrainer(ABC):
             scores.append(e["scores"])
             response_lengths.append(len(e["response_token_ids"]))
             if "advantages" in e:
-                advantages += e["advantages"]
+                # Check if it's not a float before adding to the list
+                if isinstance(e["advantages"], float):
+                    pass
+                else:
+                    advantages += e["advantages"]
             if COLUMN_REF_SHIFTED_LOGPS in e:
                 ref_logprobs.append(compute_seq_logp(e, e[COLUMN_REF_SHIFTED_LOGPS]))
             if COLUMN_ACTOR_SHIFTED_LOGPS in e:
@@ -372,7 +384,12 @@ class BaseTrainer(ABC):
                 critic_values += values_without_query
 
         scores = np.array(scores)
+
+        logger.info(f"************ SCORES *********************")
+        logger.info(f"logged scores {scores}")
+
         response_lengths = np.array(response_lengths)
+
         actor_logprobs = np.array(actor_logprobs)
         metrics = {
             "scores/mean": np.mean(scores),
@@ -381,12 +398,14 @@ class BaseTrainer(ABC):
             "response_lengths/mean": np.mean(response_lengths),
             "response_lengths/std": np.std(response_lengths),
             "response_lengths/dist": response_lengths,
-            "actor_logprobs/sum": np.mean(actor_logprobs),
-            "actor_logprobs/normalized_by_response_len": np.mean(
-                actor_logprobs / response_lengths
-            ),
             "actor_logprobs/dist": actor_logprobs,
         }
+
+        if len(actor_logprobs) > 0:
+            metrics["actor_logprobs/mean"] = np.mean(actor_logprobs)
+            metrics["actor_logprobs/normalized_by_response_len"] = np.mean(
+                actor_logprobs / response_lengths
+            )
 
         if len(kls) > 0:
             kls = np.array(kls)
@@ -436,3 +455,62 @@ class BaseTrainer(ABC):
         )
 
         return kls
+
+    def _get_learning_rate(self, engine: DeepSpeedEngine):
+        # with deepspeed's fp16 and dynamic loss scale enabled the optimizer/scheduler steps may
+        # not run for the first few dozen steps while loss scale is too large, and thus during
+        # that time `get_last_lr` will fail if called during that warm up stage, so work around it:
+        try:
+            return engine.get_lr()[0]
+        except AssertionError as e:
+            if "need to call step" in str(e):
+                logger.warning(
+                    "tried to get lr value before scheduler/optimizer started stepping, returning lr=0"
+                )
+                last_lr = 0
+            else:
+                raise
+
+        return last_lr
+
+    def _filter_episodes(self, episodes_dataset: Dataset) -> Dataset:
+        """
+        Filter out episodes that are too long.
+        """
+        if self.max_seq_length is not None:
+            max_seq_len = self.max_seq_length
+            orig_len = len(episodes_dataset)
+
+            def filter_fn(example):
+                return (
+                    len(example["query_token_ids"]) + len(example["response_token_ids"])
+                    <= max_seq_len
+                )
+
+            with self.distributed_state.main_process_first():
+                episodes_dataset = episodes_dataset.filter(filter_fn, desc="Filtering")
+
+            logger.error(
+                f"Filtered out {orig_len - len(episodes_dataset)} episodes "
+                f"that are too long. Remaining: {len(episodes_dataset)}"
+            )
+        return episodes_dataset
+
+    def _set_process_log_level(self, logger_obj: logging.Logger):
+        if not self.distributed_state.is_local_main_process:
+            logger_obj.setLevel(logging.WARNING)
+
+    def _get_automatic_checkpoint_name(self) -> str:
+        checkpoint_format = self.get_checkpoint_format()
+        checkpoint_name = checkpoint_format.format(
+            iteration=str(self.state.iteration).zfill(4),
+            epoch=f"{self.state.epoch:.2f}",
+            global_step=str(self.state.global_step).zfill(4),
+        )
+        return checkpoint_name
+
+    def get_checkpoint_format(self) -> str:
+        return "ckpt--iter_{iteration}--epoch_{epoch}--step_{global_step}"
+
+    def set_cloud_logger(self, cloud_log):
+        self.cloud_log = cloud_log

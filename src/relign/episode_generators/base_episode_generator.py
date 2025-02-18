@@ -221,7 +221,6 @@ class BaseEpisodeGenerator:
 
             if advantages is not None:
                 # Log aligned advantages with response tokens
-                logger.info("Advantages:")
                 for i, (adv, tok) in enumerate(zip(advantages, response_tokens)):
                     logger.info(f"{str(i).zfill(4)}: {tok:<20} -> {adv}")
 

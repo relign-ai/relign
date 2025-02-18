@@ -1,12 +1,12 @@
 # configs/config.yaml
 defaults:
   - _self_
-  - deepspeed/zero_0
+  - deepspeed/zero_2
 
-lr: 'auto' 
-betas: 'auto' 
-eps: 'auto' 
-weight_decay: 'auto' 
+# lr: 'auto' 
+# betas: 'auto' 
+# eps: 'auto' 
+# weight_decay: 'auto' 
 
 
 gradient_accumulation_steps: 'auto' 

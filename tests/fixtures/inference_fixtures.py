@@ -66,20 +66,27 @@ def cot_inference_strategy(
 ):
     """
     A fixture for chain-of-thought inference strategy (if needed).
-    """
-    guidance_llm = math_mock_with_think_tags
 
-    return COTInferenceStrategy(
-        guidance_llm=guidance_llm,
-        node_expander=efficient_iid_node_expander,
-        answer_extractor=identity_answer_extractor,
-        question_template=math_question_template,
-        question_field="query",
-        samples=4,  # Number of thought chains we rollout from a single node
-        max_depth=2,
-        result_dir=Path(experiment_dir) / "chain_of_thoughts",
-        max_concurrent_generations=1,
-        max_concurrent_programs=1,
+    Now returns the COTInferenceStrategy class and a dict of its kwargs
+    rather than an instantiated object.
+    """
+    guidance_llm_cls, guidance_llm_kwargs = math_mock_with_think_tags
+
+    return (
+        COTInferenceStrategy,  # Return the class itself
+        {
+            "guidance_llm_cls": guidance_llm_cls,
+            "guidance_llm_kwargs": guidance_llm_kwargs,
+            "node_expander": efficient_iid_node_expander,
+            "answer_extractor": identity_answer_extractor,
+            "question_template": math_question_template,
+            "question_field": "query",
+            "samples": 4,  # Number of thought chains we rollout from a single node
+            "max_depth": 2,
+            "result_dir": Path(experiment_dir) / "chain_of_thoughts",
+            "max_concurrent_generations": 1,
+            "max_concurrent_programs": 1,
+        },
     )
 
 
