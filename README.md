@@ -1,6 +1,6 @@
 <!-- Center the banner at the top -->
 <p align="center">
-  <img src="assets/benchmarks_18_2_2025.jpgeg" alt="RELIGN Banner" />
+  <img src="assets/benchmarks_18_2_2025.jpeg" alt="RELIGN Banner" />
 </p>
 
 <!-- Center the Discord (server invite), Twitter badges, and Hugging Face link -->
