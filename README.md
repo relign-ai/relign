@@ -1,6 +1,6 @@
 <!-- Center the banner at the top -->
 <p align="center">
-  <img src="assets/banner.jpg" alt="RELIGN Banner" />
+  <img src="assets/benchmarks_18_2_2025.jpeg" alt="RELIGN Banner" />
 </p>
 
 <!-- Center the Discord (server invite), Twitter badges, and Hugging Face link -->
@@ -68,7 +68,7 @@ If you have a custom DeepSpeed config file (e.g., ds_config.json), you can also 
 
 ## Bounties
 
-Not just the models will be rewarded for their work, but more importantly, our contributors. Implement bounties and we will send you relign
+Not just the models will be rewarded for their work, but more importently, our contributors. Implement bounties and we will send you relign
 
 | Description                                                                                                   | Reward in RELIGN  |
 |---------------------------------------------------------------------------------------------------------------|-------------------|
