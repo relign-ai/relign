@@ -1,6 +1,6 @@
 <!-- Center the banner at the top -->
 <p align="center">
-  <img src="assets/banner.jpg" alt="RELIGN Banner" />
+  <img src="assets/benchmarks_18_2_2025.jpgeg" alt="RELIGN Banner" />
 </p>
 
 <!-- Center the Discord (server invite), Twitter badges, and Hugging Face link -->
@@ -67,11 +67,13 @@ If you have a custom DeepSpeed config file (e.g., ds_config.json), you can also 
 
 ## Bounties
 
-Not just the models will be rewarded for their work, but more importently, our contributers. Implement bounties and we will send you relign
+Not just the models will be rewarded for their work, but more importently, our contributors. Implement bounties and we will send you relign
 
-| Description                                                                                                   | Reward in RELIGN  |
-|---------------------------------------------------------------------------------------------------------------|-------------------|
-| Bounty 1. GRPO: implement DeepSeek's GRPO in RELIGN and train it with standard CoT inference on gsm8k math    | 250k |
+| Description                                                                                                   | Reward in RELIGN |
+|---------------------------------------------------------------------------------------------------------------|------------------|
+| ~~Bounty 1. GRPO: implement DeepSeek's GRPO in RELIGN and train it with standard CoT inference on gsm8k math~~ | 250k             |
+| Bounty 2. Medical Reasoning: Create a complex medical reasoning task specification + verifier based on HuatuoGPT-o1. | 250k             |
+| Bounty 3. Multi-step Learning: Implement a multi step learning inference strategy.                             | 250k             |
 
 ### Submit My Own Bounty
 If you'd like to propose a new challenge or feature and set your own reward, go to: 
