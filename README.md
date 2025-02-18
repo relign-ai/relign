@@ -1,6 +1,6 @@
 <!-- Center the banner at the top -->
 <p align="center">
-  <img src="assets/benchmarks_18_2_2025.jpeg" alt="RELIGN Banner" />
+  <img src="assets/banner.jpg" alt="RELIGN Banner" />
 </p>
 
 <!-- Center the Discord (server invite), Twitter badges, and Hugging Face link -->
@@ -68,11 +68,13 @@ If you have a custom DeepSpeed config file (e.g., ds_config.json), you can also 
 
 ## Bounties
 
-Not just the models will be rewarded for their work, but more importently, our contributors. Implement bounties and we will send you relign
+Not just the models will be rewarded for their work, but more importantly, our contributors. Implement bounties and we will send you relign
 
-| Description                                                                                                   | Reward in RELIGN  |
-|---------------------------------------------------------------------------------------------------------------|-------------------|
-| ✅ Completed: GRPO – Implement DeepSeek's GRPO in RELIGN and train it with standard CoT inference on gsm8k math   | 250k |
+| Description                                                                                                                         | Reward in RELIGN  |
+|-------------------------------------------------------------------------------------------------------------------------------------|-------------------|
+| ✅ Completed: GRPO – Implement DeepSeek's GRPO in RELIGN and train it with standard CoT inference on gsm8k math                     | 250k              |
+| Create a complex medical reasoning task specification + verifier based on HuatuoGPT-o1                                             | 250k              |
+| Implement a multi-step learning inference strategy                                                                                 | 250k              |
 
 ### Submit My Own Bounty
 If you'd like to propose a new challenge or feature and set your own reward, go to: 
@@ -90,27 +92,18 @@ Bounty Instructions (common GitHub approach):
 - **Docs Page & Project Layout**  
   Comprehensive documentation about the features and classes.
 
-- **Unit Tests**  
-  A codebase without tests is hard to maintain and improve.
-
-- **Training run Tooling**  
-  Evaluations, Checkpointing, Metric monitoring (wandb/tensorflow), and Reasoning trace analysis are not yet supported but will be supported soon!
-
-- **New Algorithms**  
-  **GRPO**, introduced by Deepseek-r1, is now available in RELIGN. We plan to continue evaluating and refining its integration.
-
 - **More Memory-Efficient Algorithm Runners**  
   Some runs require a lot of VRAM. We aim to set up smaller scale experiments such that developers can run and train models on single-GPU machines.
-
 ---
 
 ## Training Runs
 
-We benchmarked **GRPO**. You can view the detailed training report [here](https://wandb.ai/darrynbiervliet/relign-02/reports/Model-realignment-with-GRPO--VmlldzoxMTM5OTYxOA?accessToken=cvgxqwdrxvfyd041j92snl69qi7di49zs26ir72g208dwmps4xdjmmuzrazbyxq6).
+We recently benchmarked **GRPO** in RELIGN. You can view the detailed training report [here](https://wandb.ai/darrynbiervliet/relign-02/reports/Model-realignment-with-GRPO--VmlldzoxMTM5OTYxOA?accessToken=cvgxqwdrxvfyd041j92snl69qi7di49zs26ir72g208dwmps4xdjmmuzrazbyxq6).
 
 ---
 
 ## Contributing (Ranked by Urgency)
+
 
 3. **Episode Generators / Tasks**  
    - We would encourage everyone to add new (novel) tasks and environments to the library on which we can test post-training methods. Some inspiration below: 
