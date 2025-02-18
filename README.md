@@ -104,7 +104,6 @@ We recently benchmarked **GRPO** in RELIGN. You can view the detailed training r
 
 ## Contributing (Ranked by Urgency)
 
-
 3. **Episode Generators / Tasks**  
    - We would encourage everyone to add new (novel) tasks and environments to the library on which we can test post-training methods. Some inspiration below: 
      - Coding  
