@@ -192,7 +192,6 @@ class GSM8K(Task):
             == ground_truth.strip().lower()
         )
 
-    # noinspection DuplicatedCode
     def evaluate_predictions(
         self,
         *,

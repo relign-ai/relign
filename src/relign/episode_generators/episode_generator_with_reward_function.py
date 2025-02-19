@@ -65,6 +65,8 @@ class EpisodeGeneratorWithRewardFunction(OnPolicyEpisodeGenerator, TreeEpisodeUt
                 full_text = path["node_chain"][-1]["full_text"]
                 response_text = full_text[len(query_text) :]
 
+
+                # TODO: Use the rewrad function? move this to the task? 
                 reward, is_unfinished_response = self.reward_function(
                     query_text, response_text, instance
                 )
