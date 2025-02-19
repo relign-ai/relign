@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 
-from relign.inference.cot_inference_strategy import COTInferenceStrategy
+from relign.inference.cot import COTInferenceStrategy
 from relign.inference.tree_inference.expansion import EfficientIIDExpander
 from relign.inference.tree_inference.answer_extraction import IdentityAnswerExtractor
 from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor

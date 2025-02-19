@@ -8,7 +8,7 @@ from relign.policies.actor_critic_policy import ActorCriticPolicy
 from relign.policies.base_critic import PretrainedModelValueHead
 from relign.algorithms.ppo.trainer import PPOTrainer
 from relign.episode_generators.base_episode_generator import DebugEpisodeGenerator
-from relign.runners.distributed_runner import DistributedRunner
+from relign.runners.distributed import DistributedRunner
 
 #TODO: refractor this test to use conftest fixtures
 def test_drunner_ppo_policy(cfg, local_rank: int =-1):

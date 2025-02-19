@@ -21,7 +21,7 @@ from relign.episode_generators.path_filters import PathFilter, SuccessfulPathFil
 from relign.episode_generators.path_post_processors import PathPostProcessor
 from relign.inference import InferenceStrategy
 from relign.tasks import Task
-from relign.tokenization import Tokenizer
+from relign.models.tokenization import Tokenizer
 
 logger = logging.get_logger(__name__)
 

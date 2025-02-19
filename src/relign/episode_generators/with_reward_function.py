@@ -3,17 +3,18 @@ from typing import List, Union, Dict, Any, Tuple, Optional
 
 from datasets import Dataset
 
+from relign.common.registry import RegistrableBase
 from relign.episode_generators.base_episode_generator import Episode
-from relign.episode_generators.on_policy_episode_generator import (
+from relign.episode_generators.on_policy import (
     OnPolicyEpisodeGenerator
 )
-from relign.episode_generators.tree_episode_generator import TreeEpisodeUtils
+from relign.episode_generators.tree import TreeEpisodeUtils
 
 from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-class RewardFunction():
+class RewardFunction(RegistrableBase):
     def get_unfinished_response_penalty(self) -> float:
         raise NotImplementedError
 

@@ -22,8 +22,8 @@ from transformers import (
 )
 
 from relign.episode_generators.base_episode_generator import Episode
-from relign.episode_generators.on_policy_episode_generator import OnPolicyEpisodeGenerator
-from relign.episode_generators.tree_episode_generator import TreeEpisodeUtils
+from relign.episode_generators.on_policy import OnPolicyEpisodeGenerator
+from relign.episode_generators.tree import TreeEpisodeUtils
 from relign.tokenization import Tokenizer
 from relign.utils.logging import get_logger 
 

@@ -1,7 +1,7 @@
 import re
 from typing import List, Tuple, Dict
 
-from treetune.tasks.math_extract_steps import md5_hash
+from relign.tasks.math.extract_steps import md5_hash
 
 MAX_PART_LENGTH = 100
 PLACEHOLDER_LENGTH = 60

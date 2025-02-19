@@ -1,26 +1,25 @@
 import json
 import uuid
-import random  # ← We add this import to sample random responses
 from typing import Any, Dict, List, Union, Optional, Tuple
 
 import evaluate
 import numpy as np
-import torch
 from datasets import Dataset
 
-from relign.episode_generators.base_episode_generator import Episode
-from relign.episode_generators.episode_generator_with_reward_function import (
+from relign.episode_generators.base_episode_generator import Episode, BaseEpisodeGenerator
+from relign.episode_generators.with_reward_function import (
     EpisodeGeneratorWithRewardFunction,
     RewardFunction,
 )
 from relign.tasks import Task, GSM8K
-from relign.tasks.math import MATH
-from relign.tokenization import Tokenizer
+from relign.tasks import MATH
+from relign.models.tokenization import Tokenizer
 from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
+RewardFunction.register("math_reward_function")
 class MATHRewardFunction(RewardFunction):
     def __init__(
         self,
@@ -69,7 +68,9 @@ class MATHRewardFunction(RewardFunction):
         return pred_answer is None
 
 
+@BaseEpisodeGenerator.register("math_episode_generator")
 class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
+    """ Episode Generator for math tasks"""
     def __init__(
         self,
         reasoning_step_delimiter: Optional[str] = None,
@@ -268,7 +269,7 @@ class MathEpisodeGenerator(EpisodeGeneratorWithRewardFunction):
         bleu = bleu_full_stats["bleu"]
         return bleu
 
-
+@BaseEpisodeGenerator.register("math_episode_generator_grouped_rewards")
 class MathEpisodeGeneratorGroupedRewards(MathEpisodeGenerator):
     def __init__(
         self,

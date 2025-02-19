@@ -11,7 +11,7 @@ from wandb.sdk.wandb_run import Run
 from relign.common.types import JsonDict
 
 # from relign.common.py_utils import need_to_minimize_stored_files
-from relign.inference.base_inference_strategy import InferenceStrategy
+from relign.inference.base_inference import InferenceStrategy
 from relign.tasks.base_task import Task
 
 from relign.utils.logging import get_logger

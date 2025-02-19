@@ -11,7 +11,7 @@ from accelerate import PartialState
 from accelerate.utils import release_memory
 from deepspeed import comm as dist
 
-from relign.inference.base_inference_strategy import InferenceStrategy
+from relign.inference.base_inference import InferenceStrategy
 from relign.tasks import Task
 from relign.eval.analyzer import Analyzer
 from relign.common.vllm_server import VLLMServer

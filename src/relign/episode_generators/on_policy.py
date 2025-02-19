@@ -20,7 +20,7 @@ from relign.episode_generators.base_episode_generator import (
     BaseEpisodeGenerator,
     Episode,
 )
-from relign.inference.base_inference_strategy import InferenceStrategy
+from relign.inference.base_inference import InferenceStrategy
 from relign.tasks.base_task import Task
 
 from relign.utils.logging import get_logger

@@ -9,7 +9,7 @@ from sympy import simplify, N
 from sympy.parsing.latex import parse_latex
 from sympy.parsing.sympy_parser import parse_expr
 
-from relign.tasks.math_grader import (
+from relign.tasks.math.grader import (
     _sympy_parse,
     should_allow_eval,
     _parse_latex,

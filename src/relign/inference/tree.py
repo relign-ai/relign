@@ -8,7 +8,7 @@ import relign.guidance as guidance
 
 from relign.guidance.llms import OpenAI
 from relign.utils import guidance as gu
-from relign.inference.base_inference_strategy import InferenceStrategy
+from relign.inference.base_inference import InferenceStrategy
 from relign.inference.tree_inference import Node
 from relign.inference.tree_inference.answer_extraction import AnswerExtractor
 from relign.inference.tree_inference.expansion import NodeExpander

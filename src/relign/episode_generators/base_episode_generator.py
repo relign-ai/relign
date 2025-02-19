@@ -10,6 +10,7 @@ from datasets import Dataset
 import wandb
 
 from relign.common.dataset import EpisodeDataset
+from relign.common.registry import RegistrableBase
 from relign.utils import logging
 from relign.models.tokenization.base_tokenizer import Tokenizer
 
@@ -21,7 +22,7 @@ Episodes can be either generated via the policy interacting with some environmen
 
 
 @dataclass
-class Episode:
+class Episode(RegistrableBase):
     """
     A single episode.
     """
