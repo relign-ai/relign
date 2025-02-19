@@ -12,7 +12,7 @@ from relign.inference.base_inference_strategy import InferenceStrategy
 from relign.inference.tree_inference import Node
 from relign.inference.tree_inference.answer_extraction import AnswerExtractor
 from relign.inference.tree_inference.expansion import NodeExpander
-from relign.tokenization.base_tokenizer import Tokenizer
+from relign.models.tokenization.base_tokenizer import Tokenizer
 
 
 TREE_COLNAME = "_treetune__reasoning_tree"

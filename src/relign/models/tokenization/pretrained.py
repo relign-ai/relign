@@ -3,7 +3,7 @@ from typing import Optional
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 from relign.common.types import JsonDict
-from relign.tokenization.base_tokenizer import Tokenizer
+from relign.models.tokenization.base_tokenizer import Tokenizer
 
 
 class DIPreTrainedTokenizer(Tokenizer):

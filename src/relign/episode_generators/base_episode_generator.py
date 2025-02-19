@@ -11,7 +11,7 @@ import wandb
 
 from relign.common.dataset import EpisodeDataset
 from relign.utils import logging
-from relign.tokenization.base_tokenizer import Tokenizer
+from relign.models.tokenization.base_tokenizer import Tokenizer
 
 logger = logging.get_logger(__name__)
 
