@@ -20,9 +20,17 @@ class Runtime:
         pass the appropirate kwargs form the jsonnet to the right class  instances/
         objets
         """
+
+         
+        pass
+
+    def run(self):
+        """ 
+        Runs the app   
+        """
         pass
 
     def teardown(self):
-        """ Tears down the classe"""
+        """ Tears down the class"""
         pass
 
