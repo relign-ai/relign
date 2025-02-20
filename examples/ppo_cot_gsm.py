@@ -120,8 +120,8 @@ def ppo_gsm(cfg, local_rank: int = -1):
     # ---------- Node Expanders---------- #
     answer_extractor = IdentityAnswerExtractor(node_key_name="text")
     program = """{{prefix}}{{gen "chain_of_thought" temperature={temperature} top_p={top_p} max_tokens={max_tokens} save_stop_text="stop_text" stop={stop} n={num_samples}}}"""
-
     branch_factors = [{"depth": 0, "branch_factor": 2}]
+
     node_expander = EfficientIIDExpander(
         branch_factor_strategy=ListBranchFactor(branch_factors=branch_factors),
         program=program,

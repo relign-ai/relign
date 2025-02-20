@@ -9,7 +9,6 @@ dependencies = [
     "tqdm",
     "numpy",
     "openai",
-    "matplotlib",
     "pygtrie",
     "pytest",
     "transformers",
@@ -27,6 +26,7 @@ dependencies = [
     "evaluate",
     "base58",
     "pylatexenc",
+    "typer", 
 ]
 
 

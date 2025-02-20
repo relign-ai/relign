@@ -4,6 +4,7 @@ from typing import Type, Dict, Any, Optional
 from abc import ABC, abstractmethod
 from pathlib import Path  # Corrected import
 
+from relign.common.registry import RegistrableBase
 from relign.algorithms.train_loop import TrainLoop
 from relign.policies.base_policy import BasePolicy
 from relign.episode_generators.base_episode_generator import BaseEpisodeGenerator
@@ -14,7 +15,7 @@ from relign.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-class BaseRunner(ABC):
+class BaseRunner(ABC, RegistrableBase):
     def __init__(
         self,
         experiment_name: str,

@@ -14,7 +14,7 @@ from deepspeed import comm as dist
 
 from relign.common.dataset import EpisodeDataset
 from relign.utils.logging import get_logger
-from relign.policies.base_policy import CriticForwardOutput
+from relign.policies.base_policy import CriticForwardOutput, BasePolicy
 from relign.policies.base_actor import ActorPolicy
 from relign.policies.base_critic import PretrainedModelValueHead
 from relign.utils.trainer import masked_mean, monitor_tensor_anomalies
@@ -31,7 +31,7 @@ class Checkpoint:
     path: Path
     iteration: int
 
-
+BasePolicy.register("actor-critic") 
 class ActorCriticPolicy(ActorPolicy):
     """
     Base Actor critic type policy.

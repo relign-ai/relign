@@ -13,8 +13,9 @@ from transformers.integrations import HfTrainerDeepSpeedConfig
 import deepspeed
 from deepspeed import DeepSpeedEngine
 from wandb.sdk.wandb_run import Run as WandbRun
-from relign.common.dataset import EpisodeDataset
 
+from relign.common.registry import RegistrableBase
+from relign.common.dataset import EpisodeDataset
 from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -32,7 +33,7 @@ class ActorForwardOutput(NamedTuple):
     all_logp: Optional[torch.Tensor] = None
 
 
-class BasePolicy:
+class BasePolicy(RegistrableBase):
     """
     A policy takes an observation and returns an action.
     """
