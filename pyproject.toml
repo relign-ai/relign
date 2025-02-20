@@ -26,7 +26,8 @@ dependencies = [
     "evaluate",
     "base58",
     "pylatexenc",
-    "typer", 
+    "typer",
+    "inquirer",
 ]
 
 
@@ -40,3 +41,7 @@ packages = ["relign"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"
+
+# add the main entry point
+[project.scripts]
+relign = "relign.main:app"

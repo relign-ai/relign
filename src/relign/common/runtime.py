@@ -5,10 +5,14 @@ class Runtime:
     def __init__(
         self, 
         config: Path, 
-        classes: Dict[str, Any]
+        experiment_name: str,
+        run_name: str,
+        wandb_project: str,
     ):
         self.config = config
-        self.classes = classes
+        self.experiment_name = experiment_name
+        self.run_name = run_name
+        self.wandb_project = wandb_project
 
     def setup(self):
         """ 
