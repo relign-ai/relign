@@ -33,6 +33,15 @@ class RegistrableBase:
             cls._registry[name] = subclass
             return subclass
         return decorator
+    
+    @classmethod
+    def from_config(cls: Type[T], config: Dict[str, Any]) -> Type[T]:
+        """
+        Construct an instance of a subclass from a configuration dictionary.
+        The configuration must have a "type" key corresponding to the subclass name.
+        """
+        name = config.pop("type")
+        return cls.by_name(name)(**config)
 
     @classmethod
     def by_name(cls: Type[T], name: str) -> Type[T]:
