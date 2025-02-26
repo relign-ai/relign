@@ -9,11 +9,12 @@ from datasets import (
 )
 
 from relign.utils import logging
+from relign.common.registry import RegistrableBase
 
 logger = logging.get_logger(__name__)
 
 
-class Task:
+class Task(RegistrableBase):
     def __init__(
         self,
         hf_dataset_args: Optional[List[str]] = None,

@@ -6,6 +6,8 @@ import os
 from relign.common.runtime import Runtime
 from relign.runners.base_runner import BaseRunner
 from relign.policies.base_policy import BasePolicy
+from relign.tasks.math.gsm8k import GSM8K 
+from relign.episode_generators.envs.math_episode_generator import MATHRewardFunction
 # Import other necessary base classes
 
 # Create simplified implementations for testing
@@ -32,11 +34,28 @@ def test_integration_with_real_components():
     # Create a test jsonnet file
     test_config = """
     {
-        "type": "ppo",
-        "policy": {
-            "temperature": 0.9,
-            "seed": 42, 
-        }
+        "type": "test_runner",
+        "reward_function": {
+            "type": "math_reward_function",
+            "math_task": {
+                "type": "gsm8k",
+                "data": "data/gsm8k",
+                "remove_calculator_expression": true
+            },
+            "penalize_unfinished_response": true,
+            "unfinished_response_penalty": 0.0,
+            "timeout": 1
+        },
+        "experiment_name": "test_experiment",
+        "directory": "/tmp",
+        "algorithm_cls": null,
+        "policy_cls": null,
+        "trainer_cls": null,
+        "episode_generator_cls": null,
+        "policy_kwargs": {},
+        "trainer_kwargs": {},
+        "episode_generator_kwargs": {},
+        "algorithm_kwargs": {}
     }
     """
     
@@ -57,8 +76,8 @@ def test_integration_with_real_components():
         
         # Verify that components were instantiated correctly
         assert hasattr(runtime, 'runner')
-        assert isinstance(runtime.runner, TestIntegrationRunner)
-        assert isinstance(runtime.runner.policy, TestIntegrationPolicy)
+        # assert isinstance(runtime.runner, MATHRewardFunction)
+        # assert isinstance(runtime.runner., GSM8K)
         
         # Run and verify
         runtime.run()

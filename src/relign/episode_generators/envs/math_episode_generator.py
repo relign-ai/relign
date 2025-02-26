@@ -19,7 +19,7 @@ from relign.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-RewardFunction.register("math_reward_function")
+@RewardFunction.register("math_reward_function")
 class MATHRewardFunction(RewardFunction):
     def __init__(
         self,

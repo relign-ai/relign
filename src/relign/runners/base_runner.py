@@ -19,6 +19,8 @@ class BaseRunner(ABC, RegistrableBase):
     def __init__(
         self,
         experiment_name: str,
+        run_name: str,
+        wandb_project: str,
         directory: str,
         algorithm_cls: Type[TrainLoop],
         policy_cls: Type[BasePolicy],
@@ -59,6 +61,8 @@ class BaseRunner(ABC, RegistrableBase):
         self.algorithm_kwargs: Dict[str, Any] = algorithm_kwargs
 
         self.experiment_name = experiment_name
+        self.run_name = run_name
+        self.wandb_project = wandb_project 
         self.directory = directory
 
         self.exp_root = self._init_experiment_dir()
@@ -139,10 +143,6 @@ class BaseRunner(ABC, RegistrableBase):
                 mode = None
 
             settings = wandb.Settings()
-            # settings.update(
-            #     _save_requirements=True,
-            #     _disable_meta=False,
-            # )
             wandb.init(
                 config={"seed": self.seed},
                 project="relign-02",
@@ -154,4 +154,37 @@ class BaseRunner(ABC, RegistrableBase):
 
         return wandb.run
 
-  
+
+@BaseRunner.register("test_runner")
+class TestIntegrationRunner(BaseRunner):
+    """ 
+    This is a simple tesst runner we can call in our integration test  
+    """
+    def __init__(self, reward_function=None, **kwargs):
+        super().__init__(**kwargs)
+        self.reward_function = reward_function
+        self.run_called = False
+    
+    def _init_policy(self):
+        # Minimal implementation for testing
+        self.policy = None
+        
+    def _init_trainer(self):
+        # Minimal implementation for testing
+        self.trainer = None
+        
+    def _init_episode_generator(self):
+        # For testing purposes, use the actual reward function if provided
+        self.episode_generator = self.reward_function
+        
+    def _init_algorithm(self):
+        # Minimal implementation for testing
+        self.algorithm = None
+        
+    def run(self):
+        self.run_called = True
+        # Access the GSM8K task through the reward function to verify it worked
+        if hasattr(self, 'episode_generator') and hasattr(self.episode_generator, 'math_task'):
+            self.math_task = self.episode_generator.math_task
+        return True
+    

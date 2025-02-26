@@ -39,31 +39,23 @@ class RegistrableBase:
         Construct an instance of a subclass from a configuration dictionary.
         The configuration must have a "type" key corresponding to the subclass name.
         """
-        name = config.pop("type")
-        return cls.by_name(name)(**config)
-
-    @classmethod
-    def from_config(cls: Type[T], config: Dict[str, Any]) -> Type[T]:
-        """
-        1. checking config type (subclass name)
-        2. looking upt he class in the registry
-        3. calling that subclasses own .from_params
-        """
         if 'type' not in config:
-            raise ValueError(
-                "Not 'type' field provided in config."  
-            )
-
-        subclass_type = config.get("type", None)
-        if subclass_type is None:
-            return cls(**config)
-        else : 
-            # get the class from the registry 
-            subclass = cls.by_name(subclass_type)
-
-            # let that subclass override from config
-            return subclass.from_config(config)
-
+            raise ValueError("No 'type' field provided in config.")
+        
+        # Get a copy of the config to avoid modifying the original
+        config_copy = config.copy()
+        subclass_type = config_copy.pop("type")  # Remove type to avoid recursion
+        
+        # Remove any internal metadata keys (those starting with _)
+        for key in list(config_copy.keys()):
+            if key.startswith("_"):
+                config_copy.pop(key)
+        
+        # Get the appropriate subclass
+        subclass = cls.by_name(subclass_type)
+        
+        # Instantiate using the config without the type key
+        return subclass(**config_copy)
 
     @classmethod
     def by_name(cls: Type[T], name: str) -> Type[T]:
