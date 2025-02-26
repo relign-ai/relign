@@ -1,7 +1,6 @@
 import pytest
 
-from relign.tasks import GSM8K
-
+from relign.tasks.math.gsm8k import GSM8K
 
 @pytest.fixture
 def gsm8k():

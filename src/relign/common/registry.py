@@ -1,5 +1,5 @@
 # myproject/registrable.py
-from typing import Type, Dict, TypeVar, List
+from typing import Type, Dict, TypeVar, List, Any
 
 T = TypeVar("T", bound="RegistrableBase")
 
@@ -8,7 +8,6 @@ class RegistrableBase:
     A lightweight base class offering a named registry for subclasses.
     Inherit from this base, then decorate your subclasses with @register("name").
     """
-
     _registry: Dict[str, Type["RegistrableBase"]] = {}
 
     @classmethod
@@ -35,6 +34,29 @@ class RegistrableBase:
         return decorator
 
     @classmethod
+    def from_config(cls: Type[T], config: Dict[str, Any]) -> Type[T]:
+        """
+        1. checking config type (subclass name)
+        2. looking upt he class in the registry
+        3. calling that subclasses own .from_params
+        """
+        if 'type' not in config:
+            raise ValueError(
+                "Not 'type' field provided in config."  
+            )
+
+        subclass_type = config.get("type", None)
+        if subclass_type is None:
+            return cls(**config)
+        else : 
+            # get the class from the registry 
+            subclass = cls.by_name(subclass_type)
+
+            # let that subclass override from config
+            return subclass.from_config(config)
+
+
+    @classmethod
     def by_name(cls: Type[T], name: str) -> Type[T]:
         """
         Return the subclass associated with `name`.
@@ -48,10 +70,11 @@ class RegistrableBase:
                 f"Available: {list(cls._registry.keys())}"
             )
         return cls._registry[name]
+    
 
     @classmethod
     def list_available(cls) -> List[str]:
         """
         List all registered names for this base class.
         """
-        return list(cls._registry.keys())C
+        return list(cls._registry.keys())

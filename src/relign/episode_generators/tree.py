@@ -16,9 +16,9 @@ from relign.episode_generators.base_episode_generator import (
     BaseEpisodeGenerator,
     EpisodeGeneratorStrategy
 )
-from relign.episode_generators.path_aggregators import PathAggregator
-from relign.episode_generators.path_filters import PathFilter, SuccessfulPathFilter
-from relign.episode_generators.path_post_processors import PathPostProcessor
+from relign.episode_generators.path_utils.path_aggregators import PathAggregator
+from relign.episode_generators.path_utils.path_filters import PathFilter, SuccessfulPathFilter
+from relign.episode_generators.path_utils.path_post_processors import PathPostProcessor
 from relign.inference import InferenceStrategy
 from relign.tasks import Task
 from relign.models.tokenization import Tokenizer

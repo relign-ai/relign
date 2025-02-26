@@ -14,7 +14,6 @@ from transformers.trainer_pt_utils import get_model_param_count
 
 from relign.common.deepspeed_utils import prepare_data_loader_for_inference
 from relign.common.dataset import EpisodeDataset
-from relign.common.registry import register 
 from relign.algorithms.base_trainer import BaseTrainer
 from relign.utils.trainer import (
     prepare_data_loader_for_training,

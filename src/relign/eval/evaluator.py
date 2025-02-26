@@ -6,14 +6,13 @@ from typing import Optional, Callable, Dict, Tuple, Dict, Any, Union, List
 
 import torch
 from datasets import Dataset, concatenate_datasets
-from transformers import PreTrainedTokenizer
 from accelerate import PartialState
 from accelerate.utils import release_memory
 from deepspeed import comm as dist
 
 from relign.inference.base_inference import InferenceStrategy
 from relign.tasks import Task
-from relign.eval.analyzer import Analyzer
+from relign.eval.analyzer import BaseAnalyzer
 from relign.common.vllm_server import VLLMServer
 from relign.utils.logging import get_logger
 from relign.utils.py_utils import find_n_free_ports
@@ -29,7 +28,7 @@ class Evaluator:
         tokenizer,
         inference_strategy_cls: InferenceStrategy,
         inference_strategy_kwargs: Optional[Dict],
-        analysers_cls: List[Analyzer],
+        analysers_cls: List[BaseAnalyzer],
         analysers_kwargs: List[Dict],
         vllm_server_cls: VLLMServer,
         wait_until_memory_release: bool,

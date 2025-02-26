@@ -1,6 +1,6 @@
 import pytest
 
-from relign.eval.analyzer import Analyzer, TaskPerformanceAnalyzer
+from relign.eval.analyzer import BaseAnalyzer, TaskPerformanceAnalyzer
 from relign.eval.evaluator import Evaluator
 
 
@@ -16,7 +16,7 @@ def task_performance_analyzer(
 
 @pytest.fixture
 def evaluator(
-    task_performance_analyzer: Analyzer,
+    task_performance_analyzer: BaseAnalyzer,
     experiment_dir,
     inference_pipeline,
     tokenizer,

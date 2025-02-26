@@ -40,6 +40,7 @@ def main(
                 choices=[str(f.relative_to(config_dir)) for f in config_files],
             )
         ])
+
         if answers is None:
             typer.echo("User cancelled, exiting.")
             raise typer.Exit()
@@ -71,6 +72,7 @@ def main(
                 message="Enter run name"
             )
         ])
+
         if answers is None:
             typer.echo("User cancelled, exiting.")
             raise typer.Exit()
@@ -84,6 +86,7 @@ def main(
                 message="Enter Weights & Biases project name"
             )
         ])
+
         if answers is None:
             typer.echo("User cancelled, exiting.")
             raise typer.Exit()

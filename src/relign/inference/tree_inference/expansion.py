@@ -9,7 +9,7 @@ from relign.utils import guidance as gu
 from relign.utils.py_utils import format_string
 from relign.inference.tree_inference import Node
 from relign.inference.tree_inference.branch_factor_strategy import (BranchFactorStrategy)
-from relign.tokenization import Tokenizer
+from relign.models.tokenization import Tokenizer
 
 logger = logging.get_logger(__name__)
 

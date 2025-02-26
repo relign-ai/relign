@@ -11,7 +11,7 @@ import sympy
 from pylatexenc import latex2text
 from sympy.parsing import sympy_parser
 
-from relign.tasks import math_normalize
+from relign.tasks.math import normalize 
 
 # sympy might hang -- we don't care about trying to be lenient in these cases
 BAD_SUBSTRINGS = ["^{", "^("]
@@ -299,8 +299,8 @@ def grade_answer(*, given_answer: str = None, ground_truth: str = None) -> bool:
     if given_answer is None:
         return False
 
-    ground_truth_normalized_mathd = math_normalize.normalize_answer(ground_truth)
-    given_answer_normalized_mathd = math_normalize.normalize_answer(given_answer)
+    ground_truth_normalized_mathd = normalize.normalize_answer(ground_truth)
+    given_answer_normalized_mathd = normalize.normalize_answer(given_answer)
 
     # be at least as lenient as mathd
     if ground_truth_normalized_mathd == given_answer_normalized_mathd:

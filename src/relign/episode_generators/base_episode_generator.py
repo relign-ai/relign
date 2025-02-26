@@ -22,7 +22,7 @@ Episodes can be either generated via the policy interacting with some environmen
 
 
 @dataclass
-class Episode(RegistrableBase):
+class Episode:
     """
     A single episode.
     """
@@ -63,7 +63,7 @@ class EpisodeGeneratorStrategy(ABC):
         raise NotImplementedError
 
 
-class BaseEpisodeGenerator:
+class BaseEpisodeGenerator(RegistrableBase):
     can_precompute_episodes: bool = False
     supports_distributed: bool = False
 

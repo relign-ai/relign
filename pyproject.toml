@@ -5,31 +5,34 @@ description = "post-training library for reasoning models"
 authors = [{ name = "algopapi" }]
 requires-python = ">=3.10"
 dependencies = [
+    "pytest",
+    "wandb",
     "vllm",
     "tqdm",
     "numpy",
     "openai",
     "pygtrie",
-    "pytest",
     "transformers",
     "tokenizers",
     "torch",
     "accelerate",
     "deepspeed",
     "datasets",
-    "nltk",
-    "hydra-core",
     "setuptools",
     "nest-asyncio",
-    "wandb",
     "diskcache",
     "evaluate",
     "base58",
-    "pylatexenc",
     "typer",
     "inquirer",
+    "jsonnet"
 ]
 
+[project.optional-dependencies]
+math = ["pylatexenc"]
+
+# All dependencies
+all = ["pylatexenc"]  
 
 [build-system]
 requires = ["setuptools", "wheel"]
