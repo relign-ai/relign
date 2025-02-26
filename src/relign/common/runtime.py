@@ -12,10 +12,17 @@ logger = get_logger(__name__)
 
 
 class Runtime:
+    """
+    A runtime manager that:
+    1. Reads in a 'config' (dict) which may include nested configuration blocks.
+    2. Dynamically instantiates (via the registry) the components specified by 'type'.
+    3. Allows for further runtime logic and orchestration (running experiments, etc.).
+    """
+
     def __init__(
-        self, 
-        config: Path, 
-        experiment_name: str,
+        self,
+        config: Dict[str, Any],     # The parsed config as a Python dict.
+        experiment_name: str, 
         run_name: str,
         wandb_project: str,
     ):
