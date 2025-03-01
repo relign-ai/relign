@@ -14,7 +14,7 @@ from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-class RewardFunction(RegistrableBase):
+class BaseRewardFunction(RegistrableBase):
     def get_unfinished_response_penalty(self) -> float:
         raise NotImplementedError
 
@@ -32,7 +32,7 @@ class RewardFunction(RegistrableBase):
 class EpisodeGeneratorWithRewardFunction(OnPolicyEpisodeGenerator, TreeEpisodeUtils):
     def __init__(
         self,
-        reward_function: RewardFunction,
+        reward_function: BaseRewardFunction,
         append_bos_to_query: Union[str, bool] = "auto",
         append_eos_to_response: Union[str, bool] = "auto",
         tokenization_check_query_reconstruction: bool = True,

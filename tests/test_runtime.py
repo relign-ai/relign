@@ -27,7 +27,7 @@ class TestIntegrationPolicy(BasePolicy):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-def test_integration_with_real_components():
+def test_integration():
     """
     Integration test using real components with a test jsonnet config.
     """
@@ -39,12 +39,16 @@ def test_integration_with_real_components():
             "type": "math_reward_function",
             "math_task": {
                 "type": "gsm8k",
-                "data": "data/gsm8k",
-                "remove_calculator_expression": true
+                "dataset_dict_path": "data/gsm8k",
+                "remove_calculator_expressions": true
             },
             "penalize_unfinished_response": true,
             "unfinished_response_penalty": 0.0,
-            "timeout": 1
+            "timeout": 1,
+            "tokenizer" : {
+                "type": "math_tokenizer",
+                "hf_model_name": "realtreetune/rho-1b-sft-GSM8K"
+            }, 
         },
         "experiment_name": "test_experiment",
         "directory": "/tmp",
@@ -71,13 +75,13 @@ def test_integration_with_real_components():
             run_name="test_run",
             wandb_project="test_project"
         )
-        
+
+        # 
         runtime.setup()
-        
-        # Verify that components were instantiated correctly
         assert hasattr(runtime, 'runner')
-        # assert isinstance(runtime.runner, MATHRewardFunction)
-        # assert isinstance(runtime.runner., GSM8K)
+
+        # Instantiate the reward_function
+        runtime.runner.reward_function.from_config()
         
         # Run and verify
         runtime.run()

@@ -10,7 +10,7 @@ Solution:';
             expansion+: {
                 iid: tree_expansion_iid,
             }
-        }
+        },
         quenstion_template: tree_question_template
     }
 }

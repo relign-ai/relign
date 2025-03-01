@@ -1,22 +1,23 @@
-from typing import Dict, Any, Type, Optional, Union, List
+from typing import Dict, Any, Type, List
 from pathlib import Path
-import importlib
 import json
-import os
 import _jsonnet
 
 from relign.utils.logging import get_logger
-from relign.common.registry import RegistrableBase
+from relign.common.registry import RegistrableBase, LazyConfig
 
 logger = get_logger(__name__)
+
 
 
 class Runtime:
     """
     A runtime manager that:
     1. Reads in a 'config' (dict) which may include nested configuration blocks.
-    2. Dynamically instantiates (via the registry) the components specified by 'type'.
-    3. Allows for further runtime logic and orchestration (running experiments, etc.).
+    2. Dynamically instantiates (via the registry) the *top-level* component (e.g., a runner).
+    3. For any nested components (marked by "type"), returns a lazy instantiator instead of
+       constructing them immediately. This allows passing additional runtime parameters before
+       instantiation.
     """
 
     def __init__(
@@ -48,125 +49,112 @@ class Runtime:
             return json.loads(json_str)
         except Exception as e:
             logger.error(f"Error loading jsonnet file {path}: {e}")
+            if "unterminated string" in str(e):
+                logger.error("Check for missing quotes or unclosed string literals in your jsonnet file")
             raise
 
     def _process_config_node(self, config_node: Dict[str, Any], parent_path: List[str] = None) -> Dict[str, Any]:
         """
-        Recursively process a configuration node, identifying class types and preparing
-        for instantiation through the RegistrableBase system.
+        Recursively process a configuration node, preparing it for lazy instantiation
+        if it has a 'type' key.
         """
         if parent_path is None:
             parent_path = []
         
-        # Handle primitive types
         if not isinstance(config_node, dict):
             return config_node
         
         processed_config = {}
         
-        # Check if this node defines a class type
-        if "type" in config_node:
-            processed_config["type"] = config_node["type"]
-            # Store the original type for reference
-            processed_config["_original_type"] = config_node["type"]
-        
-        # Process all other keys recursively
+        # Carry over keys, potentially processing nested dicts
         for key, value in config_node.items():
-            if key == "type" or key.startswith("_"):
-                continue
-                
             if isinstance(value, dict):
-                new_path = parent_path + [key]
-                processed_config[key] = self._process_config_node(value, new_path)
+                processed_config[key] = self._process_config_node(
+                    value,
+                    parent_path + [key]
+                )
             else:
                 processed_config[key] = value
                 
         return processed_config
 
-    def _instantiate_component(self, config: Dict[str, Any], base_class: Type[RegistrableBase], additional_kwargs: Dict[str, Any] = None) -> Any:
+    def _instantiate_component(
+        self,
+        config: Dict[str, Any],
+        base_class: Type[RegistrableBase],
+        additional_kwargs: Dict[str, Any] = None
+    ) -> Any:
         """
-        Instantiate a component using the RegistrableBase system.
-        
-        Args:
-            config: The configuration dict for this component
-            base_class: The base class to use for instantiation
-            additional_kwargs: Additional runtime parameters
-            
-        Returns:
-            An instantiated component
+        Instantiate the top-level component using the `RegistrableBase` system.
+        For nested components (sub-configs with a 'type'), store them as lazy instantiators
+        so we can pass additional runtime parameters before actually constructing them.
         """
         if additional_kwargs is None:
             additional_kwargs = {}
             
-        # Make a copy of the config to avoid modifying the original
+        # Make a copy to avoid modifying the original config
         config_copy = config.copy()
         
-        # Add runtime parameters
-        for key, value in additional_kwargs.items():
+        # Inject additional runtime parameters if they're not already present
+        for key, val in additional_kwargs.items():
             if key not in config_copy:
-                config_copy[key] = value
-                
-        # Handle nested components
-        for key, value in config_copy.items():
-            if isinstance(value, dict) and "_original_type" in value:
-                # This is a nested component, keep it as a config dict for lazy instantiation
-                continue
-                
-        # Use the RegistrableBase system to instantiate
+                config_copy[key] = val
+
+        # For any nested dict that has a "type", convert it into a lazy instantiator
+        for key, val in list(config_copy.items()):
+            if isinstance(val, dict) and "type" in val:
+                # Replace this nested dict with a lazy instantiator
+                config_copy[key] = self._create_lazy_instantiator(val)
+
+        # Now fully instantiate the top-level object
         try:
             instance = base_class.from_config(config_copy)
             return instance
         except Exception as e:
             logger.error(f"Error instantiating component with type '{config.get('type', 'unknown')}': {e}")
             raise
-            
-    def _create_lazy_instantiator(self, config: Dict[str, Any], base_class: Type[RegistrableBase]):
+
+    def _create_lazy_instantiator(self, config: Dict[str, Any]) -> "LazyConfig":
         """
-        Creates a function that will instantiate a component when called.
-        This enables lazy instantiation of nested components.
-        
-        Args:
-            config: The component configuration
-            base_class: The base class to use for instantiation
-            
-        Returns:
-            A function that when called will instantiate the component
+        Create a LazyConfig wrapper that can be used to instantiate a component
+        later, with optional extra parameters.
         """
-        def instantiate(**runtime_kwargs):
-            merged_kwargs = {**self.runtime_params, **runtime_kwargs}
-            return self._instantiate_component(config, base_class, merged_kwargs)
-            
-        return instantiate
+        # We can validate that config has a "type"
+        if "type" not in config:
+            logger.warning("Creating LazyConfig for a dict without 'type'?")
+        return LazyConfig(config)
 
     def setup(self):
         """ 
-        Takes a jsonnet experiment and builds out the jsonnet tree. We then 
-        pass the appropriate kwargs from the jsonnet to the right class instances/
-        objects
+        Load the config, process it, and instantiate the top-level runner.
+        Sub-components will remain lazily instantiated.
         """
-        # Load the config
         logger.info(f"Loading config from {self.config_path}")
         self.config_data = self._load_jsonnet(self.config_path)
         
-        # Process the config
+        # Process the config to prepare nested structures
         processed_config = self._process_config_node(self.config_data)
         
-        # For the top level, we know it's a runner
+        # For the top-level, we know it's a runner
         from relign.runners.base_runner import BaseRunner
         
-        # Store all configurations in the instances dict for potential reuse
+        # Store all processed configs in case we need them
         self.config_store = {"root": processed_config}
         
-        # Instantiate the top-level runner
-        logger.info("Instantiating components from config")
-        self.runner = self._instantiate_component(processed_config, BaseRunner, self.runtime_params)
+        # Instantiate the top-level runner. Nested components remain lazy.
+        logger.info("Instantiating top-level runner from config")
+        self.runner = self._instantiate_component(
+            processed_config,
+            BaseRunner,
+            self.runtime_params
+        )
         
         logger.info("Setup complete")
         return self
 
     def run(self):
         """ 
-        Runs the application
+        Execute the runner.
         """
         if not hasattr(self, 'runner'):
             logger.error("Cannot run before setup. Call setup() first.")
@@ -181,12 +169,11 @@ class Runtime:
             raise
 
     def teardown(self):
-        """ Tears down the class"""
+        """ Teardown the runner and any other resources. """
         if hasattr(self, 'runner') and hasattr(self.runner, 'teardown'):
             logger.info("Tearing down runner")
             self.runner.teardown()
         
-        # Clean up any other resources
         self.instances = {}
         self.config_store = {}
         logger.info("Teardown complete")

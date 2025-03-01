@@ -9,7 +9,7 @@ from datasets import Dataset
 from relign.episode_generators.base_episode_generator import Episode, BaseEpisodeGenerator
 from relign.episode_generators.with_reward_function import (
     EpisodeGeneratorWithRewardFunction,
-    RewardFunction,
+    BaseRewardFunction,
 )
 from relign.tasks import Task, GSM8K
 from relign.tasks import MATH
@@ -19,8 +19,8 @@ from relign.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-@RewardFunction.register("math_reward_function")
-class MATHRewardFunction(RewardFunction):
+@BaseRewardFunction.register("math_reward_function")
+class MATHRewardFunction(BaseRewardFunction):
     def __init__(
         self,
         tokenizer: Tokenizer,

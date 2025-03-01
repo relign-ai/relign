@@ -4,11 +4,12 @@ from typing import Type, Dict, Any, Optional
 from abc import ABC, abstractmethod
 from pathlib import Path  # Corrected import
 
-from relign.common.registry import RegistrableBase
+from relign.common.registry import RegistrableBase, Lazy
 from relign.algorithms.train_loop import TrainLoop
 from relign.policies.base_policy import BasePolicy
 from relign.episode_generators.base_episode_generator import BaseEpisodeGenerator
 from relign.algorithms.base_trainer import BaseTrainer
+from relign.episode_generators.with_reward_function import BaseRewardFunction
 
 from relign.utils.logging import get_logger
 
@@ -22,10 +23,12 @@ class BaseRunner(ABC, RegistrableBase):
         run_name: str,
         wandb_project: str,
         directory: str,
-        algorithm_cls: Type[TrainLoop],
-        policy_cls: Type[BasePolicy],
-        trainer_cls: Type[BaseTrainer],
-        episode_generator_cls: Type[BaseEpisodeGenerator],
+
+        algorithm_cls: Lazy[Type[TrainLoop]],
+        policy_cls: Lazy[Type[BasePolicy]],
+        trainer_cls: Lazy[Type[BaseTrainer]],
+        episode_generator_cls: Lazy[Type[BaseEpisodeGenerator]],
+
         policy_kwargs: Dict[str, Any],
         trainer_kwargs: Dict[str, Any],
         episode_generator_kwargs: Dict[str, Any],
@@ -160,7 +163,11 @@ class TestIntegrationRunner(BaseRunner):
     """ 
     This is a simple tesst runner we can call in our integration test  
     """
-    def __init__(self, reward_function=None, **kwargs):
+    def __init__(
+        self, 
+        reward_function=Lazy[BaseRewardFunction], 
+        **kwargs
+    ):
         super().__init__(**kwargs)
         self.reward_function = reward_function
         self.run_called = False

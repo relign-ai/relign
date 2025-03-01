@@ -1,8 +1,0 @@
-# configs/deepspeed/optimizer/adamw.yaml
-
-type: AdamW
-params:
-  lr: "auto" 
-  betas: "auto"
-  eps: "auto" 
-  weight_decay: "auto"
