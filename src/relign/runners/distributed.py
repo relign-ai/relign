@@ -6,6 +6,7 @@ from datetime import timedelta
 import torch
 from deepspeed import comm as dist
 
+from relign.common.registry import Lazy
 from relign.runners.base_runner import BaseRunner
 from relign.policies.base_policy import BasePolicy
 from relign.algorithms.base_trainer import BaseTrainer
@@ -40,14 +41,16 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
         experiment_name: str,  # These should be going to the base class
         directory: Path,  # This should be going to the base class
         use_deepspeed: bool,
-        policy_cls: Type[Pds],
-        trainer_cls: Type[T],
-        episode_generator_cls: Type[E],
-        algorithm_cls: Type[A],
-        policy_kwargs: Dict[str, Any],
-        trainer_kwargs: Dict[str, Any],
-        episode_generator_kwargs: Dict[str, Any],
-        algorithm_kwargs: Dict[str, Any],
+        policy_cls: Lazy[Type[Pds]],
+        trainer_cls: Lazy[Type[T]],
+        episode_generator_cls: Lazy[Type[E]],
+        algorithm_cls: Lazy[Type[A]],
+
+        # policy_kwargs: Dict[str, Any],
+        # trainer_kwargs: Dict[str, Any],
+        # episode_generator_kwargs: Dict[str, Any],
+        # algorithm_kwargs: Dict[str, Any],
+
         cloud_logger=None,
         mode: str ="train",
     ):
@@ -58,10 +61,10 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
             policy_cls=policy_cls,  # Type[Pds], acceptable as Pds is bound to DeepSpeedPolicy
             trainer_cls=trainer_cls,
             episode_generator_cls=episode_generator_cls,
-            policy_kwargs=policy_kwargs,
-            trainer_kwargs=trainer_kwargs,
-            episode_generator_kwargs=episode_generator_kwargs,
-            algorithm_kwargs=algorithm_kwargs,
+            # policy_kwargs=policy_kwargs,
+            # trainer_kwargs=trainer_kwargs,
+            # episode_generator_kwargs=episode_generator_kwargs,
+            # algorithm_kwargs=algorithm_kwargs,
         )
 
         self.use_deepspeed = use_deepspeed
@@ -110,36 +113,36 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
             self.distributed_state = PartialState(use_cpu, **kwargs)
 
     def _init_policy(self):
-        self.policy: Pds = self.policy_cls(
+        self.policy: Pds = self.policy_cls.from_config(
             seed=self.seed,
             project_root_dir=self.exp_root,
             distributed_state=self.distributed_state,
-            **self.policy_kwargs,
+            # **self.policy_kwargs,
         )
 
     def _init_trainer(self):
-        self.trainer: T = self.trainer_cls(
+        self.trainer: T = self.trainer_cls.from_config(
             seed=self.seed,
             project_root_dir=self.exp_root,
             distributed_state=self.distributed_state,
             policy=self.policy,
             cloud_log=self._cloud_log,
-            **self.trainer_kwargs,
+            # **self.trainer_kwargs,
         )
 
     def _init_episode_generator(self):
-        self.episode_generator: E = self.episode_generator_cls(
+        self.episode_generator: E = self.episode_generator_cls.from_config(
             seed=self.seed,
             project_root_dir=self.exp_root,
             distributed_state=self.distributed_state,
             cloud_log=self._cloud_log,
             cloud_save=self._cloud_save,
-            **self.episode_generator_kwargs,
+            # **self.episode_generator_kwargs,
         )
 
     def _init_algorithm(self):
         if self.mode == "train":
-            self.algorithm: A = self.algorithm_cls(
+            self.algorithm: A = self.algorithm_cls.from_config(
                 seed=self.seed,
                 project_root_dir=self.exp_root,
                 distributed_state=self.distributed_state,
@@ -148,19 +151,21 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
                 episode_generator=self.episode_generator,
                 cloud_logger=self._cloud_log,
                 cloud_updater=self._cloud_update,
-                **self.algorithm_kwargs,
+                # **self.algorithm_kwargs,
             )
         else: 
-            self.algorithm: A = self.algorithm_cls(
+            self.algorithm: A = self.algorithm_cls.from_config(
                 seed=self.seed,
                 project_root_dir=self.exp_root,
                 distributed_state=self.distributed_state,
                 episode_generator=self.episode_generator,
                 cloud_logger=self._cloud_log,
                 cloud_updater=self._cloud_update,
-                **self.algorithm_kwargs,
+                # **self.algorithm_kwargs,
             )
 
+
+    # Cloud logging etcetera 
     def _cloud_log(self, *args, **kwargs):
         if self.distributed_state.is_main_process and self.cloud_logger is not None:
             self.cloud_logger.log(*args, **kwargs)
