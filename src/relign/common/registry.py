@@ -61,7 +61,7 @@ class RegistrableBase:
     A lightweight base class offering a named registry for subclasses.
     Inherit from this base, then decorate your subclasses with @register("name").
     """
-    _registry: Dict[str, Type["RegistrableBase"]] = {}
+    # Don't define _registry here
 
     @classmethod
     def register(cls, name: str):
@@ -76,6 +76,10 @@ class RegistrableBase:
         Raises:
             ValueError if the name is already registered.
         """
+        # Create registry for this class if it doesn't exist yet
+        if not hasattr(cls, '_registry'):
+            cls._registry = {}
+            
         def decorator(subclass: Type[T]) -> Type[T]:
             if name in cls._registry:
                 raise ValueError(
@@ -206,6 +210,10 @@ class RegistrableBase:
         Raises:
             ValueError if no subclass is found under that name.
         """
+        # Make sure we have a registry
+        if not hasattr(cls, '_registry'):
+            cls._registry = {}
+            
         if name not in cls._registry:
             raise ValueError(
                 f"No '{cls.__name__}' registered under the name: '{name}'. "
@@ -218,4 +226,8 @@ class RegistrableBase:
         """
         List all registered names for this base class.
         """
+        # Make sure we have a registry
+        if not hasattr(cls, '_registry'):
+            cls._registry = {}
+            
         return list(cls._registry.keys())

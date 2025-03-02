@@ -30,12 +30,11 @@ A = TypeVar("A", bound=TrainLoop)
 # The episode gnerator does not nessecerrely have to be distributed
 # The is no distinguishment in Distirbuted/Undistirbued algorithms so this is good.
 
-BaseRunner.register("distributed")
+@BaseRunner.register("distributed_runner")
 class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
     """
     Base runner but with a distirbuted state.
     """
-
     def __init__(
         self,
         experiment_name: str,  # These should be going to the base class
