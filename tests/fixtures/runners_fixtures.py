@@ -1,6 +1,6 @@
 import pytest
 
-from relign.runners.distributed_runner import DistributedRunner
+from relign.runners.distributed import DistributedRunner
 
 @pytest.fixture
 def distributed_runner():

@@ -7,13 +7,13 @@ from datasets import Dataset, DatasetDict
 
 from relign.utils import logging
 from relign.tasks import Task
-from relign.tasks.math_answer_exctraction import (
+from relign.tasks.math.answer_exctraction import (
     extract_math_minerva_few_shot_cot_answer,
     extract_math_answer,
 )
-from relign.tasks.math_grader import grade_answer
-from relign.tasks.math_grader_minerva import eval_math
-from relign.tokenization import Tokenizer
+from relign.tasks.math.grader import grade_answer
+from relign.tasks.math.grader_minerva import eval_math
+from relign.models.tokenization import Tokenizer
 
 logger = logging.get_logger(__name__)
 

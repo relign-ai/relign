@@ -80,7 +80,7 @@ class GRPOParams:
     """
 
     adap_kl_ctrl: bool = True
-    init_kl_coef: Optional[float] = 0.2
+    init_kl_coef: Optional[float] = 0.1
     kl_penalty: Literal["kl", "abs", "mse", "full", "control_variate"] = "kl"
     kl_penalty_loss_type: Optional[Literal["kl", "abs", "mse", "control_variate"]] = (
         None
@@ -172,7 +172,7 @@ def get_model_hash(model):
     buffer.seek(0)
     return hashlib.sha256(buffer.read()).hexdigest()
 
-
+BaseTrainer.register("GRPO")
 class GRPOTrainer(BaseTrainer):
     """
     GRPO Trainer.

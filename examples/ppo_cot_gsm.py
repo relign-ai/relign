@@ -12,12 +12,12 @@ from relign.episode_generators.envs.math_episode_generator import (
     MATHRewardFunction,
 )
 
-from relign.inference.cot_inference_strategy import COTInferenceStrategy
+from relign.inference.cot import COTInferenceStrategy
 from relign.inference.tree_inference.expansion import EfficientIIDExpander
 from relign.inference.tree_inference.answer_extraction import IdentityAnswerExtractor
 
 # For actor critic methods, we need a Distributed Runner
-from relign.runners.distributed_runner import DistributedRunner
+from relign.runners.distributed import DistributedRunner
 from relign.common.vllm_server import VLLMServer
 from relign.guidance.llms import OpenAIVLLM
 from relign.inference.tree_inference.branch_factor_strategy import ListBranchFactor
@@ -120,8 +120,8 @@ def ppo_gsm(cfg, local_rank: int = -1):
     # ---------- Node Expanders---------- #
     answer_extractor = IdentityAnswerExtractor(node_key_name="text")
     program = """{{prefix}}{{gen "chain_of_thought" temperature={temperature} top_p={top_p} max_tokens={max_tokens} save_stop_text="stop_text" stop={stop} n={num_samples}}}"""
-
     branch_factors = [{"depth": 0, "branch_factor": 2}]
+
     node_expander = EfficientIIDExpander(
         branch_factor_strategy=ListBranchFactor(branch_factors=branch_factors),
         program=program,

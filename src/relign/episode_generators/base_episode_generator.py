@@ -10,8 +10,9 @@ from datasets import Dataset
 import wandb
 
 from relign.common.dataset import EpisodeDataset
+from relign.common.registry import RegistrableBase
 from relign.utils import logging
-from relign.tokenization.base_tokenizer import Tokenizer
+from relign.models.tokenization.base_tokenizer import Tokenizer
 
 logger = logging.get_logger(__name__)
 
@@ -62,7 +63,7 @@ class EpisodeGeneratorStrategy(ABC):
         raise NotImplementedError
 
 
-class BaseEpisodeGenerator:
+class BaseEpisodeGenerator(RegistrableBase):
     can_precompute_episodes: bool = False
     supports_distributed: bool = False
 

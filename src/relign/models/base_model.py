@@ -1,16 +1,18 @@
+from typing import Optional, Any, Union
+from pathlib import Path
 import torch
 import torch.nn as nn
 import numpy as np
-from typing import Optional, Any, Union
-from pathlib import Path
 from transformers import PreTrainedModel, AutoModel, AutoModelForCausalLM, AutoConfig, AutoTokenizer, PreTrainedTokenizerFast 
-from relign.common.types import JsonDict
 
+from relign.common.types import JsonDict
+from relign.common.registry import RegistrableBase
 from relign.utils.py_utils import is_flash_attention_available
 from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# TODO: move this to util 
 if is_flash_attention_available():
     from flash_attn.models.gpt import GPTLMHeadModel
     from flash_attn.models.llama import inv_remap_state_dict_hf_llama
@@ -32,6 +34,7 @@ if is_flash_attention_available():
 
             torch.save(hf_state_dict, output_dir / "pytorch_model.bin")
 
+#TODO move this to util 
 DROPOUT_CONFIG_KEYS = [
     "dropout",
     "attention_dropout",
@@ -43,6 +46,7 @@ DROPOUT_CONFIG_KEYS = [
     "attn_pdrop",
 ]
 
+# TODO: move this to util 
 def configure_dropout(hf_model_name: str, dropout_value: float):
     """
     Adjusts dropout settings in the model configuration based on specified keys.
@@ -62,7 +66,13 @@ def configure_dropout(hf_model_name: str, dropout_value: float):
     return kwargs
 
 
-class PreTrainedModelForCasualLM(PreTrainedModel):
+class BaseModel(RegistrableBase):
+    """ Registerable base for all models and tokenizer """
+    pass
+
+
+@BaseModel.register("pretrained_model_for_casual_lm")
+class PreTrainedModelForCasualLM(PreTrainedModel, BaseModel):
     @classmethod
     def from_di(
         cls,
@@ -176,7 +186,8 @@ class PreTrainedModelForCasualLM(PreTrainedModel):
 
         return model
 
-class DIPreTrainedTokenizer:
+@BaseModel.register("pretrained_tokenizer")
+class DIPreTrainedTokenizer(BaseModel):
     @classmethod
     def from_di(
         cls, hf_model_name: str, pretrained_args: Optional[JsonDict] = None, **kwargs
@@ -189,9 +200,8 @@ class DIPreTrainedTokenizer:
         )
         return tokenizer
 
-
-
-class PreTrainedModelForValueNetwork(nn.Module):
+@BaseModel.register("pretrained_model_for_value_network")
+class PreTrainedModelForValueNetwork(nn.Module, BaseModel):
     def __init__(
         self,
         pretrained_backbone_model: PreTrainedModel,

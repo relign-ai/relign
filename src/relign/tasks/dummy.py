@@ -1,6 +1,6 @@
 from typing import Dict, Any
 
-from relign.tasks.gsm8k import GSM8K
+from relign.tasks.math.gsm8k import GSM8K
 
 
 class DummyTask(GSM8K):

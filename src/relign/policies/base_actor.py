@@ -14,8 +14,7 @@ from transformers.integrations import HfTrainerDeepSpeedConfig
 from deepspeed import DeepSpeedEngine
 from deepspeed import comm as dist
 
-from relign.policies.base_policy import DeepSpeedPolicy
-from relign.policies.base_policy import ActorForwardOutput
+from relign.policies.base_policy import DeepSpeedPolicy, BasePolicy, ActorForwardOutput 
 from relign.utils.trainer import masked_mean, monitor_tensor_anomalies, masked_whiten
 from relign.utils.logging import get_logger
 
@@ -57,7 +56,9 @@ def print_deepspeed_config(ds_config: dict) -> None:
         print(json.dumps(legacy_info, indent=2))
 
 
-class ActorPolicy(DeepSpeedPolicy):
+
+BasePolicy.register("actor")
+class ActorPolicy(BasePolicy):
     def __init__(
         self,
         actor_model_fn,

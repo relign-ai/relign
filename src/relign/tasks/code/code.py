@@ -1,0 +1,3 @@
+"""
+Coding reasoning task template
+"""

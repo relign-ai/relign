@@ -20,6 +20,7 @@ def remove_text_between_symbols(text, start_symbol, end_symbol):
     return cleaned_text
 
 
+@Task.register("gsm8k")
 class GSM8K(Task):
     def __init__(
         self,

@@ -7,13 +7,15 @@ from accelerate import PartialState
 from datasets import Dataset
 from wandb.sdk.wandb_run import Run
 
+from relign.common.registry import RegistrableBase
 from relign.utils.logging import get_logger
 from relign.tasks import Task
 
 logger = get_logger(__name__)
 
 
-class Analyzer:
+
+class BaseAnalyzer(RegistrableBase):
     def __init__(
         self,
         task: Task,
@@ -118,7 +120,8 @@ class Analyzer:
             self.cloud_logger.save(str(log_file_copy.absolute()), policy="now")
 
 
-class TaskPerformanceAnalyzer(Analyzer):
+@BaseAnalyzer.register("task_performance")
+class TaskPerformanceAnalyzer(BaseAnalyzer):
     """Analyzer that compares evaluations of the model on the task."""
 
     def __init__(self, **kwargs):

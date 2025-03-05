@@ -4,25 +4,31 @@ from typing import Type, Dict, Any, Optional
 from abc import ABC, abstractmethod
 from pathlib import Path  # Corrected import
 
+from relign.common.registry import RegistrableBase, Lazy
 from relign.algorithms.train_loop import TrainLoop
 from relign.policies.base_policy import BasePolicy
 from relign.episode_generators.base_episode_generator import BaseEpisodeGenerator
 from relign.algorithms.base_trainer import BaseTrainer
+from relign.episode_generators.with_reward_function import BaseRewardFunction
 
 from relign.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-class BaseRunner(ABC):
+class BaseRunner(ABC, RegistrableBase):
     def __init__(
         self,
         experiment_name: str,
+        run_name: str,
+        wandb_project: str,
         directory: str,
-        algorithm_cls: Type[TrainLoop],
-        policy_cls: Type[BasePolicy],
-        trainer_cls: Type[BaseTrainer],
-        episode_generator_cls: Type[BaseEpisodeGenerator],
+
+        algorithm_cls: Lazy[Type[TrainLoop]],
+        policy_cls: Lazy[Type[BasePolicy]],
+        trainer_cls: Lazy[Type[BaseTrainer]],
+        episode_generator_cls: Lazy[Type[BaseEpisodeGenerator]],
+
         policy_kwargs: Dict[str, Any],
         trainer_kwargs: Dict[str, Any],
         episode_generator_kwargs: Dict[str, Any],
@@ -58,6 +64,8 @@ class BaseRunner(ABC):
         self.algorithm_kwargs: Dict[str, Any] = algorithm_kwargs
 
         self.experiment_name = experiment_name
+        self.run_name = run_name
+        self.wandb_project = wandb_project 
         self.directory = directory
 
         self.exp_root = self._init_experiment_dir()
@@ -114,6 +122,13 @@ class BaseRunner(ABC):
         """
         # Run the learn method of the algorithm
         self.algorithm.learn()
+    
+    def test(self):
+        """
+        Run the algorithm in test mode
+        """
+        # Run the test method of the algorithm
+        self.algorithm.test()
 
     def _create_cloud_logger(self):
         try:
@@ -131,10 +146,6 @@ class BaseRunner(ABC):
                 mode = None
 
             settings = wandb.Settings()
-            # settings.update(
-            #     _save_requirements=True,
-            #     _disable_meta=False,
-            # )
             wandb.init(
                 config={"seed": self.seed},
                 project="relign-02",
@@ -146,4 +157,41 @@ class BaseRunner(ABC):
 
         return wandb.run
 
-  
+
+@BaseRunner.register("test_runner")
+class TestIntegrationRunner(BaseRunner):
+    """ 
+    This is a simple tesst runner we can call in our integration test  
+    """
+    def __init__(
+        self, 
+        reward_function=Lazy[BaseRewardFunction], 
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.reward_function = reward_function
+        self.run_called = False
+    
+    def _init_policy(self):
+        # Minimal implementation for testing
+        self.policy = None
+        
+    def _init_trainer(self):
+        # Minimal implementation for testing
+        self.trainer = None
+        
+    def _init_episode_generator(self):
+        # For testing purposes, use the actual reward function if provided
+        self.episode_generator = self.reward_function
+        
+    def _init_algorithm(self):
+        # Minimal implementation for testing
+        self.algorithm = None
+        
+    def run(self):
+        self.run_called = True
+        # Access the GSM8K task through the reward function to verify it worked
+        if hasattr(self, 'episode_generator') and hasattr(self.episode_generator, 'math_task'):
+            self.math_task = self.episode_generator.math_task
+        return True
+    
