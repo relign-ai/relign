@@ -41,33 +41,29 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
         experiment_name: str,  # These should be going to the base class
         directory: Path,  # This should be going to the base class
         use_deepspeed: bool,
+        run_name: str,
+        wandb_project: str,
         policy_cls: Lazy[Type[Pds]],
         trainer_cls: Lazy[Type[T]],
         episode_generator_cls: Lazy[Type[E]],
         algorithm_cls: Lazy[Type[A]],
-
-        # policy_kwargs: Dict[str, Any],
-        # trainer_kwargs: Dict[str, Any],
-        # episode_generator_kwargs: Dict[str, Any],
-        # algorithm_kwargs: Dict[str, Any],
-
         cloud_logger=None,
         mode: str ="train",
     ):
         super().__init__(
             experiment_name=experiment_name,
+            run_name=run_name,
             directory=directory,
+            wandb_project=wandb_project,
             algorithm_cls=algorithm_cls,
             policy_cls=policy_cls,  # Type[Pds], acceptable as Pds is bound to DeepSpeedPolicy
             trainer_cls=trainer_cls,
             episode_generator_cls=episode_generator_cls,
-            # policy_kwargs=policy_kwargs,
-            # trainer_kwargs=trainer_kwargs,
-            # episode_generator_kwargs=episode_generator_kwargs,
-            # algorithm_kwargs=algorithm_kwargs,
         )
 
         self.use_deepspeed = use_deepspeed
+
+        logger.info(f"Initializing runner class")
 
         self._init_distributed_setup()
         self.exp_root = self._init_experiment_dir()  # Corrected method name
@@ -117,7 +113,6 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
             seed=self.seed,
             project_root_dir=self.exp_root,
             distributed_state=self.distributed_state,
-            # **self.policy_kwargs,
         )
 
     def _init_trainer(self):
@@ -127,7 +122,6 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
             distributed_state=self.distributed_state,
             policy=self.policy,
             cloud_log=self._cloud_log,
-            # **self.trainer_kwargs,
         )
 
     def _init_episode_generator(self):
@@ -137,7 +131,6 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
             distributed_state=self.distributed_state,
             cloud_log=self._cloud_log,
             cloud_save=self._cloud_save,
-            # **self.episode_generator_kwargs,
         )
 
     def _init_algorithm(self):
@@ -151,7 +144,6 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
                 episode_generator=self.episode_generator,
                 cloud_logger=self._cloud_log,
                 cloud_updater=self._cloud_update,
-                # **self.algorithm_kwargs,
             )
         else: 
             self.algorithm: A = self.algorithm_cls.from_config(
@@ -161,7 +153,6 @@ class DistributedRunner(BaseRunner, Generic[Pds, T, E, A]):
                 episode_generator=self.episode_generator,
                 cloud_logger=self._cloud_log,
                 cloud_updater=self._cloud_update,
-                # **self.algorithm_kwargs,
             )
 
 

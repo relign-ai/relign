@@ -29,10 +29,6 @@ class BaseRunner(ABC, RegistrableBase):
         trainer_cls: Lazy[Type[BaseTrainer]],
         episode_generator_cls: Lazy[Type[BaseEpisodeGenerator]],
 
-        policy_kwargs: Dict[str, Any],
-        trainer_kwargs: Dict[str, Any],
-        episode_generator_kwargs: Dict[str, Any],
-        algorithm_kwargs: Dict[str, Any],
         seed: Optional[int] = None,
         debug_mode: bool = False,
     ):
@@ -56,12 +52,6 @@ class BaseRunner(ABC, RegistrableBase):
         self.policy_cls: Type[BasePolicy] = policy_cls
         self.trainer_cls: Type[BaseTrainer] = trainer_cls
         self.episode_generator_cls: Type[BaseEpisodeGenerator] = episode_generator_cls
-
-        # Keyword arguments
-        self.policy_kwargs: Dict[str, Any] = policy_kwargs
-        self.trainer_kwargs: Dict[str, Any] = trainer_kwargs
-        self.episode_generator_kwargs: Dict[str, Any] = episode_generator_kwargs
-        self.algorithm_kwargs: Dict[str, Any] = algorithm_kwargs
 
         self.experiment_name = experiment_name
         self.run_name = run_name
